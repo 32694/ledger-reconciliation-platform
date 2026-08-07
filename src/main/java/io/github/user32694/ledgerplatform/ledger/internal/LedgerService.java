@@ -40,15 +40,21 @@ class LedgerService implements LedgerApi {
     public LedgerAccountView createPlatformCashAccount() {
         accountRepository.insertPlatformCashAccount(
                 UUID.randomUUID(), PLATFORM_CASH, Instant.now());
-        return accountRepository.findByOwnerReference(PLATFORM_CASH)
-                .map(this::toView)
+        var account = accountRepository.findByOwnerReference(PLATFORM_CASH)
                 .orElseThrow(() -> new IllegalStateException("Platform cash account was not created"));
+        if (account.accountType() != AccountType.ASSET) {
+            throw new IllegalStateException("Platform cash account must have account type ASSET");
+        }
+        return toView(account);
     }
 
     @Override
     @Transactional
     public LedgerAccountView createCustomerWallet(String customerAccountNumber) {
         requireOwnerReference(customerAccountNumber);
+        if (PLATFORM_CASH.equals(customerAccountNumber)) {
+            throw new IllegalArgumentException("Customer account number is reserved for platform cash");
+        }
         return toView(accountRepository.save(new LedgerAccountEntity(
                 UUID.randomUUID(), customerAccountNumber, AccountType.LIABILITY, Instant.now())));
     }

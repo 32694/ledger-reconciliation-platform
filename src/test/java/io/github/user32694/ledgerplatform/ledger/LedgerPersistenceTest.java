@@ -10,9 +10,12 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.context.jdbc.Sql.ExecutionPhase;
+import org.springframework.test.context.jdbc.SqlMergeMode;
+import org.springframework.test.context.jdbc.SqlMergeMode.MergeMode;
 
 @SpringBootTest
 @ActiveProfiles("test")
+@SqlMergeMode(MergeMode.MERGE)
 @Sql(statements = {
     "DELETE FROM ledger.ledger_entry",
     "DELETE FROM ledger.ledger_transaction",
@@ -41,6 +44,26 @@ class LedgerPersistenceTest {
         var second = ledgerApi.createPlatformCashAccount();
 
         assertThat(second.id()).isEqualTo(first.id());
+    }
+
+    @Test
+    void rejectsThePlatformCashOwnerReferenceForCustomerWallets() {
+        assertThatThrownBy(() -> ledgerApi.createCustomerWallet("PLATFORM_CASH"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("reserved");
+    }
+
+    @Test
+    @Sql(statements = """
+            INSERT INTO ledger.ledger_account
+                (id, owner_ref, account_type, currency, created_at)
+            VALUES
+                ('00000000-0000-0000-0000-000000000001', 'PLATFORM_CASH', 'LIABILITY', 'CNY', CURRENT_TIMESTAMP)
+            """)
+    void rejectsAnExistingNonAssetPlatformCashAccount() {
+        assertThatThrownBy(() -> ledgerApi.createPlatformCashAccount())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("ASSET");
     }
 
     @Test
