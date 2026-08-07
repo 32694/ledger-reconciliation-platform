@@ -1,10 +1,13 @@
 package io.github.user32694.ledgerplatform;
 
+import static org.hamcrest.Matchers.matchesPattern;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrlPattern;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.model;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.view;
 
@@ -93,16 +96,22 @@ class AdminWebTest {
     void rendersAdministrationPages() throws Exception {
         mockMvc.perform(get("/admin/accounts"))
                 .andExpect(status().isOk())
-                .andExpect(view().name("admin/accounts"));
+                .andExpect(view().name("admin/accounts"))
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*<a[^>]*id=\"refresh-accounts\"[^>]*href=\"/admin/accounts\"[^>]*>.*")));
         mockMvc.perform(get("/admin/accounts/new"))
                 .andExpect(status().isOk())
                 .andExpect(view().name("admin/account-form"));
         mockMvc.perform(get("/admin/payments/top-up"))
                 .andExpect(status().isOk())
-                .andExpect(view().name("admin/topup-form"));
+                .andExpect(view().name("admin/topup-form"))
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*<a[^>]*id=\"refresh-payments\"[^>]*href=\"/admin/payments/top-up\"[^>]*>.*")));
         mockMvc.perform(get("/admin/ledger"))
                 .andExpect(status().isOk())
-                .andExpect(view().name("admin/ledger"));
+                .andExpect(view().name("admin/ledger"))
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*<a[^>]*id=\"refresh-ledger\"[^>]*href=\"/admin/ledger\"[^>]*>.*")));
     }
 
     @Test
@@ -118,6 +127,20 @@ class AdminWebTest {
                         .param("amountCents", "200")
                         .param("idempotencyKey", idempotencyKey))
                 .andExpect(status().isOk())
-                .andExpect(view().name("admin/topup-form"));
+                .andExpect(view().name("admin/topup-form"))
+                .andExpect(model().attributeHasFieldErrors("topUpForm", "idempotencyKey"));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void returnsUnknownTopUpAccountToAccountField() throws Exception {
+        mockMvc.perform(post("/admin/payments/top-up")
+                        .with(csrf())
+                        .param("accountId", UUID.randomUUID().toString())
+                        .param("amountCents", "200")
+                        .param("idempotencyKey", "unknown-account-" + UUID.randomUUID()))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/topup-form"))
+                .andExpect(model().attributeHasFieldErrors("topUpForm", "accountId"));
     }
 }

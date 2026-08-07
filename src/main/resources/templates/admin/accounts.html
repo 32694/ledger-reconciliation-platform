@@ -5,7 +5,7 @@
     <div class="page-heading">
         <div><p class="eyebrow">Customer wallets</p><h1>Accounts</h1></div>
         <div class="actions">
-            <button class="button button-secondary" type="button" hx-get="/admin/accounts" hx-target="#account-table" hx-swap="outerHTML">Refresh</button>
+            <a id="refresh-accounts" class="button button-secondary" th:href="@{/admin/accounts}" hx-get="/admin/accounts" hx-target="#account-table" hx-swap="outerHTML">Refresh</a>
             <a class="button button-primary" th:href="@{/admin/accounts/new}">New account</a>
         </div>
     </div>

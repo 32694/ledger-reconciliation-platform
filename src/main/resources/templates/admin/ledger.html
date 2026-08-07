@@ -4,7 +4,7 @@
 <main class="content">
     <div class="page-heading">
         <div><p class="eyebrow">Posted journals</p><h1>Ledger</h1></div>
-        <button class="button button-secondary" type="button" hx-get="/admin/ledger" hx-target="#ledger-table" hx-swap="outerHTML">Refresh</button>
+        <a id="refresh-ledger" class="button button-secondary" th:href="@{/admin/ledger}" hx-get="/admin/ledger" hx-target="#ledger-table" hx-swap="outerHTML">Refresh</a>
     </div>
     <div id="ledger-table" class="table-section" th:fragment="ledgerTable">
         <div class="section-heading">

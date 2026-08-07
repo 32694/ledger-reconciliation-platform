@@ -31,7 +31,7 @@
         <section id="recent-payments-table" class="table-section compact-table" aria-labelledby="recent-topups-title" th:fragment="recentPaymentsTable">
             <div class="section-heading">
                 <div><h2 id="recent-topups-title">Recent top ups</h2><p>Latest 20 instructions</p></div>
-                <button class="button button-secondary" type="button" hx-get="/admin/payments/recent" hx-target="#recent-payments-table" hx-swap="outerHTML">Refresh</button>
+                <a id="refresh-payments" class="button button-secondary" th:href="@{/admin/payments/top-up}" hx-get="/admin/payments/recent" hx-target="#recent-payments-table" hx-swap="outerHTML">Refresh</a>
             </div>
             <div class="table-scroll">
                 <table><thead><tr><th>Reference</th><th class="numeric">Amount</th><th>Status</th></tr></thead>

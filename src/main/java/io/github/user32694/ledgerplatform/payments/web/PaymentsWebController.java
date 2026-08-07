@@ -56,12 +56,32 @@ public class PaymentsWebController {
         try {
             paymentsApi.topUp(new TopUpCommand(
                     form.getIdempotencyKey(), form.getAccountId(), form.getAmountCents()));
-        } catch (IllegalArgumentException | IdempotencyConflictException exception) {
-            bindingResult.reject("topUp.failed", exception.getMessage());
+        } catch (IdempotencyConflictException exception) {
+            bindingResult.rejectValue(
+                    "idempotencyKey", "topUp.idempotencyKey.conflict", exception.getMessage());
+            addReferenceData(model);
+            return "admin/topup-form";
+        } catch (IllegalArgumentException exception) {
+            rejectInvalidCommand(bindingResult, exception);
             addReferenceData(model);
             return "admin/topup-form";
         }
         return "redirect:/admin/payments/top-up";
+    }
+
+    private static void rejectInvalidCommand(
+            BindingResult bindingResult, IllegalArgumentException exception) {
+        String message = exception.getMessage();
+        if (message != null && (message.startsWith("Customer account does not exist:")
+                || message.equals("Payee account id is required"))) {
+            bindingResult.rejectValue("accountId", "topUp.accountId.invalid", message);
+        } else if (message != null && message.startsWith("Idempotency key ")) {
+            bindingResult.rejectValue("idempotencyKey", "topUp.idempotencyKey.invalid", message);
+        } else if (message != null && message.startsWith("Amount ")) {
+            bindingResult.rejectValue("amountCents", "topUp.amountCents.invalid", message);
+        } else {
+            bindingResult.reject("topUp.failed", message);
+        }
     }
 
     private void addReferenceData(Model model) {
