@@ -23,15 +23,16 @@ Transfers, channel-statement import, reconciliation, discrepancy resolution, and
 
 ```sh
 cp .env.example .env
-# Replace every change-this-* placeholder in .env before continuing.
-docker compose up -d
+# In .env, replace both password placeholders with single-quoted values.
+# Keep each password on one line and do not include a single quote in the password itself.
 set -a
 source .env
 set +a
+docker compose up -d
 ./mvnw spring-boot:run
 ```
 
-Open <http://localhost:8080/login>. The application does not load `.env` automatically; the `source` commands export it to the application process. Creating the test database and running tests are covered in the [User Guide](docs/USER_GUIDE.md).
+Open <http://localhost:8080/login>. The application does not load `.env` automatically; sourcing it before Compose replaces stale `DB_*` values in the current shell so PostgreSQL and the application use the same credentials. Creating the test database and running tests are covered in the [User Guide](docs/USER_GUIDE.md).
 
 See the [User Guide](docs/USER_GUIDE.md) for complete setup and operation instructions and the [Migration Guide](docs/MIGRATION.md) for moving the project and optional local data to another computer.
 

@@ -9,6 +9,27 @@ This guide runs the simulated Ledger Reconciliation Platform on macOS with JDK 1
 - Either Homebrew PostgreSQL 17 or Docker Desktop with Docker Compose
 - Port 5432 available for PostgreSQL and port 8080 available for the application
 
+## Configure the Environment
+
+Create the local, untracked configuration and replace both `change-this-*` password placeholders with secrets used only on this computer:
+
+```sh
+cp .env.example .env
+chmod 600 .env
+```
+
+In `.env`, wrap each password value in single quotes. Keep each password on one line and do not include a single quote in the password itself. This format is interpreted consistently by the shell and Docker Compose.
+
+The application does not read `.env` itself. Export its values before starting either database setup:
+
+```sh
+set -a
+source .env
+set +a
+```
+
+These assignments replace any stale `DB_*` or `APP_ADMIN_*` values in the current shell. Compose gives exported variables precedence over `.env`, so sourcing first ensures PostgreSQL and the Java application receive the same credentials. Do not commit `.env`; repeat the export commands in each new terminal.
+
 Choose exactly one database setup below.
 
 ## Option A: Homebrew PostgreSQL
@@ -21,17 +42,17 @@ brew services start postgresql@17
 export PATH="$(brew --prefix postgresql@17)/bin:$PATH"
 ```
 
-On a fresh Homebrew installation, create the application role and databases. Replace the example passwords when you create `.env` in the next section, and use the same database password here.
+On a fresh Homebrew installation, create the application role and databases with the exported database password:
 
 ```sh
-psql postgres -c "CREATE ROLE ledger_app WITH LOGIN PASSWORD 'change-this-database-password' CREATEDB;"
-createdb --owner=ledger_app ledger_platform
-PGPASSWORD=change-this-database-password createdb -h localhost -U ledger_app --owner=ledger_app ledger_platform_test
+psql postgres -c "CREATE ROLE ledger_app WITH LOGIN PASSWORD '$DB_PASSWORD' CREATEDB;"
+PGPASSWORD="$DB_PASSWORD" createdb -h localhost -U "$DB_USERNAME" --owner="$DB_USERNAME" ledger_platform
+PGPASSWORD="$DB_PASSWORD" createdb -h localhost -U "$DB_USERNAME" --owner="$DB_USERNAME" ledger_platform_test
 ```
 
 ## Option B: Docker Compose
 
-Create `.env` as described in the next section and replace its password placeholders first. Then start PostgreSQL:
+With the environment exported as described above, start PostgreSQL:
 
 ```sh
 docker compose up -d
@@ -45,25 +66,6 @@ docker compose exec db psql -U ledger_app -d ledger_platform -c 'CREATE DATABASE
 ```
 
 Compose starts PostgreSQL only. The Java application continues to run on the host.
-
-## Configure the Environment
-
-Create the local, untracked configuration and replace both `change-this-*` values with secrets used only on this computer:
-
-```sh
-cp .env.example .env
-chmod 600 .env
-```
-
-The application does not read `.env` itself. Export its values safely into the current shell before Maven commands:
-
-```sh
-set -a
-source .env
-set +a
-```
-
-Do not commit `.env`. Repeat the export commands in each new terminal.
 
 ## Test, Package, and Run
 

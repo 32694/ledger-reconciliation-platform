@@ -34,9 +34,11 @@ On the source computer, create a PostgreSQL custom-format dump from the reposito
 mkdir -p ../migration-artifacts
 PGPASSWORD="$DB_PASSWORD" pg_dump \
   -h localhost -p 5432 -U "$DB_USERNAME" -d ledger_platform \
-  --format=custom --no-owner \
+  --format=custom --no-owner --exclude-table-data=identity.admin_user \
   --file=../migration-artifacts/ledger-platform.dump
 ```
+
+The dump retains the `identity.admin_user` table schema but excludes its rows, including old password hashes. Administrator credentials are not migrated. After restore, the first application start creates the destination administrator from the new `APP_ADMIN_USERNAME` and `APP_ADMIN_PASSWORD`.
 
 On the destination computer, complete the source-code setup with new local secrets:
 
@@ -47,7 +49,7 @@ cp .env.example .env
 chmod 600 .env
 ```
 
-Replace both password placeholders in `.env`; do not copy secrets from the source computer. Then export the destination values:
+Replace both password placeholders in `.env`; do not copy secrets from the source computer. Use the User Guide's compatible password format: single-line, single-quoted values whose passwords do not contain a single quote. Then export the destination values:
 
 ```sh
 set -a
@@ -98,10 +100,14 @@ PGPASSWORD="$DB_PASSWORD" pg_restore \
 If GitHub is unavailable, create a bundle containing all local refs on the source computer from the repository root:
 
 ```sh
+git status --short
+git stash list
 mkdir -p ../migration-artifacts
 git bundle create ../migration-artifacts/ledger-reconciliation-platform.bundle --all
 git bundle verify ../migration-artifacts/ledger-reconciliation-platform.bundle
 ```
+
+Continue only when both inspection commands produce no output. Commit every working-tree or index change that must migrate before creating the bundle. Because `--all` can include `refs/stash`, restore and commit any needed stashed work and require an empty stash list. With both checks empty, the bundle contains committed refs, not uncommitted working-tree, index, or stash state.
 
 Transfer the bundle to the destination computer and recover it:
 
@@ -145,4 +151,4 @@ SPRING_DATASOURCE_PASSWORD="$DB_PASSWORD" \
 ./mvnw spring-boot:run
 ```
 
-Confirm `git remote -v` shows `https://github.com/32694/ledger-reconciliation-platform.git`, the build succeeds, <http://localhost:8080/actuator/health> returns `UP`, login works with the new administrator secret, and expected records are present only when a database dump was restored.
+Confirm `git remote -v` shows `https://github.com/32694/ledger-reconciliation-platform.git`, the build succeeds, <http://localhost:8080/actuator/health> returns `UP`, login works with the newly created destination administrator, and expected non-administrator records are present only when a database dump was restored.
