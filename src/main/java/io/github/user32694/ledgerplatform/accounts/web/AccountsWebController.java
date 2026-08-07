@@ -3,6 +3,7 @@ package io.github.user32694.ledgerplatform.accounts.web;
 import io.github.user32694.ledgerplatform.accounts.AccountsApi;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
@@ -54,7 +55,8 @@ public class AccountsWebController {
         try {
             accountsApi.create(form.getOwnerName());
         } catch (IllegalArgumentException exception) {
-            bindingResult.rejectValue("ownerName", "account.ownerName", exception.getMessage());
+            bindingResult.rejectValue(
+                    "ownerName", "account.ownerName", "账户名称需为2到100个字符");
             model.addAttribute("activeNav", "accounts");
             return "admin/account-form";
         }
@@ -68,16 +70,32 @@ public class AccountsWebController {
                         account.accountNumber(),
                         account.ownerName(),
                         account.status(),
+                        accountStatusLabel(account.status()),
                         BigDecimal.valueOf(accountsApi.balance(account.id()).cents(), 2)))
                 .toList();
         model.addAttribute("accounts", accountRows);
     }
 
+    private static String accountStatusLabel(String status) {
+        return switch (status) {
+            case "ACTIVE" -> "正常";
+            case "FROZEN" -> "已冻结";
+            case "CLOSED" -> "已关闭";
+            default -> status;
+        };
+    }
+
     public record AccountRow(
-            UUID id, String accountNumber, String ownerName, String status, BigDecimal balance) {}
+            UUID id,
+            String accountNumber,
+            String ownerName,
+            String status,
+            String statusLabel,
+            BigDecimal balance) {}
 
     public static class AccountForm {
-        @NotBlank(message = "Owner name is required")
+        @NotBlank(message = "请输入账户名称")
+        @Size(min = 2, max = 100, message = "账户名称需为2到100个字符")
         private String ownerName;
 
         public String getOwnerName() {

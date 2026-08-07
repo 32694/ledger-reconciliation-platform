@@ -59,7 +59,9 @@ public class PaymentsWebController {
                     form.getIdempotencyKey(), form.getAccountId(), form.getAmountCents()));
         } catch (IdempotencyConflictException exception) {
             bindingResult.rejectValue(
-                    "idempotencyKey", "topUp.idempotencyKey.conflict", exception.getMessage());
+                    "idempotencyKey",
+                    "topUp.idempotencyKey.conflict",
+                    "该幂等键已被其他请求使用，请更换后重试");
             addReferenceData(model);
             return "admin/topup-form";
         } catch (IllegalArgumentException exception) {
@@ -75,13 +77,16 @@ public class PaymentsWebController {
         String message = exception.getMessage();
         if (message != null && (message.startsWith("Customer account does not exist:")
                 || message.equals("Payee account id is required"))) {
-            bindingResult.rejectValue("accountId", "topUp.accountId.invalid", message);
+            bindingResult.rejectValue(
+                    "accountId", "topUp.accountId.invalid", "请选择有效的客户账户");
         } else if (message != null && message.startsWith("Idempotency key ")) {
-            bindingResult.rejectValue("idempotencyKey", "topUp.idempotencyKey.invalid", message);
+            bindingResult.rejectValue(
+                    "idempotencyKey", "topUp.idempotencyKey.invalid", "幂等键格式无效");
         } else if (message != null && message.startsWith("Amount ")) {
-            bindingResult.rejectValue("amountCents", "topUp.amountCents.invalid", message);
+            bindingResult.rejectValue(
+                    "amountCents", "topUp.amountCents.invalid", "充值金额必须大于0");
         } else {
-            bindingResult.reject("topUp.failed", message);
+            bindingResult.reject("topUp.failed", "充值失败，请检查输入后重试");
         }
     }
 
@@ -96,22 +101,33 @@ public class PaymentsWebController {
                 .map(payment -> new PaymentRow(
                         payment.channelReference(),
                         BigDecimal.valueOf(payment.amountCents(), 2),
-                        payment.status()))
+                        payment.status(),
+                        paymentStatusLabel(payment.status())))
                 .toList());
     }
 
-    public record PaymentRow(String channelReference, BigDecimal amount, String status) {}
+    private static String paymentStatusLabel(String status) {
+        return switch (status) {
+            case "PENDING" -> "处理中";
+            case "SUCCEEDED" -> "成功";
+            case "FAILED" -> "失败";
+            default -> status;
+        };
+    }
+
+    public record PaymentRow(
+            String channelReference, BigDecimal amount, String status, String statusLabel) {}
 
     public static class TopUpForm {
-        @NotNull(message = "Account is required")
+        @NotNull(message = "请选择客户账户")
         private UUID accountId;
 
-        @NotNull(message = "Amount is required")
-        @Positive(message = "Amount must be greater than zero")
+        @NotNull(message = "请输入充值金额")
+        @Positive(message = "充值金额必须大于0")
         private Long amountCents;
 
-        @NotBlank(message = "Idempotency key is required")
-        @Size(max = 128, message = "Idempotency key must not exceed 128 characters")
+        @NotBlank(message = "请输入幂等键")
+        @Size(max = 128, message = "幂等键不能超过128个字符")
         private String idempotencyKey;
 
         public UUID getAccountId() {

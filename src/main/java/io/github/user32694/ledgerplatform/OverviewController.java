@@ -37,13 +37,37 @@ public class OverviewController {
                 .map(payment -> new PaymentRow(
                         payment.channelReference(),
                         payment.type(),
+                        paymentTypeLabel(payment.type()),
                         BigDecimal.valueOf(payment.amountCents(), 2),
-                        payment.status()))
+                        payment.status(),
+                        paymentStatusLabel(payment.status())))
                 .toList());
         model.addAttribute("activeNav", "overview");
         return "admin/overview";
     }
 
+    private static String paymentTypeLabel(String type) {
+        return switch (type) {
+            case "TOP_UP" -> "充值";
+            case "TRANSFER" -> "转账";
+            default -> type;
+        };
+    }
+
+    private static String paymentStatusLabel(String status) {
+        return switch (status) {
+            case "PENDING" -> "处理中";
+            case "SUCCEEDED" -> "成功";
+            case "FAILED" -> "失败";
+            default -> status;
+        };
+    }
+
     public record PaymentRow(
-            String channelReference, String type, BigDecimal amount, String status) {}
+            String channelReference,
+            String type,
+            String typeLabel,
+            BigDecimal amount,
+            String status,
+            String statusLabel) {}
 }

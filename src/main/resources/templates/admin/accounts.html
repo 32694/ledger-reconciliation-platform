@@ -1,30 +1,30 @@
 <!doctype html>
-<html lang="en" xmlns:th="http://www.thymeleaf.org"
-      th:replace="~{admin/layout :: shell('Accounts', ${activeNav}, ~{::main})}">
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{admin/layout :: shell('客户账户', ${activeNav}, ~{::main})}">
 <main class="content">
     <div class="page-heading">
-        <div><p class="eyebrow">Customer wallets</p><h1>Accounts</h1></div>
+        <div><p class="eyebrow">客户资金账户</p><h1>客户账户</h1></div>
         <div class="actions">
-            <a id="refresh-accounts" class="button button-secondary" th:href="@{/admin/accounts}" hx-get="/admin/accounts" hx-target="#account-table" hx-swap="outerHTML">Refresh</a>
-            <a class="button button-primary" th:href="@{/admin/accounts/new}">New account</a>
+            <a id="refresh-accounts" class="button button-secondary" th:href="@{/admin/accounts}" hx-get="/admin/accounts" hx-target="#account-table" hx-swap="outerHTML">刷新</a>
+            <a class="button button-primary" th:href="@{/admin/accounts/new}">新建账户</a>
         </div>
     </div>
     <div id="account-table" class="table-section" th:fragment="accountTable">
         <div class="section-heading">
-            <div><h2>Customer accounts</h2><p>Sorted by account number</p></div>
-            <span class="result-count"><strong th:text="${#lists.size(accounts)}">0</strong> results</span>
+            <div><h2>客户账户</h2><p>按账户编号排序</p></div>
+            <span class="result-count"><strong th:text="${#lists.size(accounts)}">0</strong> 条记录</span>
         </div>
         <div class="table-scroll">
             <table>
-                <thead><tr><th>Account number</th><th>Owner</th><th>Status</th><th class="numeric">Available balance</th></tr></thead>
+                <thead><tr><th>账户编号</th><th>账户名称</th><th>状态</th><th class="numeric">可用余额</th></tr></thead>
                 <tbody>
                 <tr th:each="account : ${accounts}">
                     <td class="mono" th:text="${account.accountNumber}">ACC-001</td>
-                    <td th:text="${account.ownerName}">Customer</td>
-                    <td><span class="status status-success" th:text="${account.status}">ACTIVE</span></td>
-                    <td class="numeric">CNY <span th:text="${account.balance}">0.00</span></td>
+                    <td th:text="${account.ownerName}">客户</td>
+                    <td><span class="status status-success" th:text="${account.statusLabel}">正常</span></td>
+                    <td class="numeric">人民币 <span th:text="${account.balance}">0.00</span></td>
                 </tr>
-                <tr th:if="${#lists.isEmpty(accounts)}"><td colspan="4" class="empty-state">No customer accounts.</td></tr>
+                <tr th:if="${#lists.isEmpty(accounts)}"><td colspan="4" class="empty-state">暂无客户账户</td></tr>
                 </tbody>
             </table>
         </div>

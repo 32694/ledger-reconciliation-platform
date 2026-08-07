@@ -1,47 +1,47 @@
 <!doctype html>
-<html lang="en" xmlns:th="http://www.thymeleaf.org"
-      th:replace="~{admin/layout :: shell('Payments', ${activeNav}, ~{::main})}">
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{admin/layout :: shell('资金操作', ${activeNav}, ~{::main})}">
 <main class="content">
-    <div class="page-heading"><div><p class="eyebrow">Payment operations</p><h1>Record top up</h1></div></div>
+    <div class="page-heading"><div><p class="eyebrow">资金操作</p><h1>账户充值</h1></div></div>
     <div class="split-workspace">
         <form class="form-surface" method="post" th:action="@{/admin/payments/top-up}" th:object="${topUpForm}">
-            <div class="alert alert-error" th:if="${#fields.hasGlobalErrors()}" th:each="error : ${#fields.globalErrors()}" th:text="${error}">Top up failed</div>
+            <div class="alert alert-error" th:if="${#fields.hasGlobalErrors()}" th:each="error : ${#fields.globalErrors()}" th:text="${error}">充值失败，请检查输入后重试</div>
             <div class="field" th:classappend="${#fields.hasErrors('accountId')} ? ' field-invalid'">
-                <label for="accountId">Customer account</label>
+                <label for="accountId">客户账户</label>
                 <select id="accountId" th:field="*{accountId}" aria-describedby="accountId-error" required>
-                    <option value="">Select an account</option>
-                    <option th:each="account : ${accounts}" th:value="${account.id}" th:text="${account.accountNumber + ' - ' + account.ownerName}">Account</option>
+                    <option value="">请选择客户账户</option>
+                    <option th:each="account : ${accounts}" th:value="${account.id}" th:text="${account.accountNumber + ' - ' + account.ownerName}">客户账户</option>
                 </select>
-                <p id="accountId-error" class="field-error" th:if="${#fields.hasErrors('accountId')}" th:errors="*{accountId}">Invalid account</p>
+                <p id="accountId-error" class="field-error" th:if="${#fields.hasErrors('accountId')}" th:errors="*{accountId}">客户账户无效</p>
             </div>
             <div class="field" th:classappend="${#fields.hasErrors('amountCents')} ? ' field-invalid'">
-                <label for="amountCents">Amount (cents)</label>
+                <label for="amountCents">充值金额（分）</label>
                 <input id="amountCents" type="number" min="1" step="1" th:field="*{amountCents}" aria-describedby="amountCents-help amountCents-error" required>
-                <small id="amountCents-help">Enter the exact amount in CNY cents.</small>
-                <p id="amountCents-error" class="field-error" th:if="${#fields.hasErrors('amountCents')}" th:errors="*{amountCents}">Invalid amount</p>
+                <small id="amountCents-help">请输入以人民币分为单位的整数金额</small>
+                <p id="amountCents-error" class="field-error" th:if="${#fields.hasErrors('amountCents')}" th:errors="*{amountCents}">充值金额无效</p>
             </div>
             <div class="field" th:classappend="${#fields.hasErrors('idempotencyKey')} ? ' field-invalid'">
-                <label for="idempotencyKey">Idempotency key</label>
+                <label for="idempotencyKey">幂等键</label>
                 <input id="idempotencyKey" type="text" maxlength="128" th:field="*{idempotencyKey}" aria-describedby="idempotencyKey-help idempotencyKey-error" required>
-                <small id="idempotencyKey-help">Unique operator or upstream request reference.</small>
-                <p id="idempotencyKey-error" class="field-error" th:if="${#fields.hasErrors('idempotencyKey')}" th:errors="*{idempotencyKey}">Invalid key</p>
+                <small id="idempotencyKey-help">用于标识本次操作的唯一请求编号</small>
+                <p id="idempotencyKey-error" class="field-error" th:if="${#fields.hasErrors('idempotencyKey')}" th:errors="*{idempotencyKey}">幂等键无效</p>
             </div>
-            <div class="form-actions"><button class="button button-primary" type="submit">Post top up</button></div>
+            <div class="form-actions"><button class="button button-primary" type="submit">提交充值</button></div>
         </form>
         <section id="recent-payments-table" class="table-section compact-table" aria-labelledby="recent-topups-title" th:fragment="recentPaymentsTable">
             <div class="section-heading">
-                <div><h2 id="recent-topups-title">Recent top ups</h2><p>Latest 20 instructions</p></div>
-                <a id="refresh-payments" class="button button-secondary" th:href="@{/admin/payments/top-up}" hx-get="/admin/payments/recent" hx-target="#recent-payments-table" hx-swap="outerHTML">Refresh</a>
+                <div><h2 id="recent-topups-title">近期充值</h2><p>最近20条充值指令</p></div>
+                <a id="refresh-payments" class="button button-secondary" th:href="@{/admin/payments/top-up}" hx-get="/admin/payments/recent" hx-target="#recent-payments-table" hx-swap="outerHTML">刷新</a>
             </div>
             <div class="table-scroll">
-                <table><thead><tr><th>Reference</th><th class="numeric">Amount</th><th>Status</th></tr></thead>
+                <table><thead><tr><th>业务流水号</th><th class="numeric">金额</th><th>状态</th></tr></thead>
                     <tbody>
                     <tr th:each="payment : ${recentPayments}">
                         <td class="mono" th:text="${payment.channelReference}">PAY-001</td>
-                        <td class="numeric">CNY <span th:text="${payment.amount}">0.00</span></td>
-                        <td><span class="status" th:classappend="${payment.status == 'SUCCEEDED'} ? ' status-success' : ' status-danger'" th:text="${payment.status}">SUCCEEDED</span></td>
+                        <td class="numeric">人民币 <span th:text="${payment.amount}">0.00</span></td>
+                        <td><span class="status" th:classappend="${payment.status == 'SUCCEEDED'} ? ' status-success' : ' status-danger'" th:text="${payment.statusLabel}">成功</span></td>
                     </tr>
-                    <tr th:if="${#lists.isEmpty(recentPayments)}"><td colspan="3" class="empty-state">No top ups recorded.</td></tr>
+                    <tr th:if="${#lists.isEmpty(recentPayments)}"><td colspan="3" class="empty-state">暂无充值记录</td></tr>
                     </tbody>
                 </table>
             </div>

@@ -27,6 +27,7 @@ public class LedgerWebController {
                         transaction.id(),
                         transaction.businessReference(),
                         transaction.transactionType(),
+                        transactionTypeLabel(transaction.transactionType()),
                         transaction.occurredAt(),
                         BigDecimal.valueOf(transaction.amountCents(), 2)))
                 .toList());
@@ -37,10 +38,19 @@ public class LedgerWebController {
         return "admin/ledger";
     }
 
+    private static String transactionTypeLabel(String transactionType) {
+        return switch (transactionType) {
+            case "TOP_UP" -> "充值";
+            case "TRANSFER" -> "转账";
+            default -> transactionType;
+        };
+    }
+
     public record LedgerRow(
             UUID id,
             String businessReference,
             String transactionType,
+            String transactionTypeLabel,
             Instant occurredAt,
             BigDecimal amount) {}
 }

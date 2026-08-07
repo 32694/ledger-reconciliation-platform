@@ -56,6 +56,14 @@ class AdminWebTest {
         mockMvc.perform(get("/admin"))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedUrlPattern("**/login"));
+
+        mockMvc.perform(get("/login"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("<html lang=\"zh-CN\"")))
+                .andExpect(content().string(containsString("管理员登录")))
+                .andExpect(content().string(containsString("用户名")))
+                .andExpect(content().string(containsString("密码")))
+                .andExpect(content().string(containsString(">登录</button>")));
     }
 
     @Test
@@ -73,7 +81,19 @@ class AdminWebTest {
     void rendersOverviewForAdministrator() throws Exception {
         mockMvc.perform(get("/admin"))
                 .andExpect(status().isOk())
-                .andExpect(view().name("admin/overview"));
+                .andExpect(view().name("admin/overview"))
+                .andExpect(content().string(containsString("<html lang=\"zh-CN\"")))
+                .andExpect(content().string(containsString("交易账本管理平台")))
+                .andExpect(content().string(containsString("经营概览")))
+                .andExpect(content().string(containsString("客户账户")))
+                .andExpect(content().string(containsString("资金操作")))
+                .andExpect(content().string(containsString("账本流水")))
+                .andExpect(content().string(containsString("自动对账")))
+                .andExpect(content().string(containsString("审计日志")))
+                .andExpect(content().string(containsString("后续开放")))
+                .andExpect(content().string(containsString("管理后台")))
+                .andExpect(content().string(containsString("退出登录")))
+                .andExpect(content().string(containsString("新建账户")));
     }
 
     @Test
@@ -98,21 +118,140 @@ class AdminWebTest {
         mockMvc.perform(get("/admin/accounts"))
                 .andExpect(status().isOk())
                 .andExpect(view().name("admin/accounts"))
+                .andExpect(content().string(containsString("<html lang=\"zh-CN\"")))
+                .andExpect(content().string(containsString("客户账户")))
+                .andExpect(content().string(containsString("刷新")))
+                .andExpect(content().string(containsString("新建账户")))
                 .andExpect(content().string(matchesPattern(
                         "(?s).*<a[^>]*id=\"refresh-accounts\"[^>]*href=\"/admin/accounts\"[^>]*>.*")));
         mockMvc.perform(get("/admin/accounts/new"))
                 .andExpect(status().isOk())
-                .andExpect(view().name("admin/account-form"));
+                .andExpect(view().name("admin/account-form"))
+                .andExpect(content().string(containsString("<html lang=\"zh-CN\"")))
+                .andExpect(content().string(containsString("新建账户")))
+                .andExpect(content().string(containsString("账户名称")))
+                .andExpect(content().string(containsString("创建账户")));
         mockMvc.perform(get("/admin/payments/top-up"))
                 .andExpect(status().isOk())
                 .andExpect(view().name("admin/topup-form"))
+                .andExpect(content().string(containsString("<html lang=\"zh-CN\"")))
+                .andExpect(content().string(containsString("资金操作")))
+                .andExpect(content().string(containsString("客户账户")))
+                .andExpect(content().string(containsString("充值金额")))
+                .andExpect(content().string(containsString("幂等键")))
+                .andExpect(content().string(containsString("提交充值")))
+                .andExpect(content().string(containsString("刷新")))
                 .andExpect(content().string(matchesPattern(
                         "(?s).*<a[^>]*id=\"refresh-payments\"[^>]*href=\"/admin/payments/top-up\"[^>]*>.*")));
         mockMvc.perform(get("/admin/ledger"))
                 .andExpect(status().isOk())
                 .andExpect(view().name("admin/ledger"))
+                .andExpect(content().string(containsString("<html lang=\"zh-CN\"")))
+                .andExpect(content().string(containsString("账本流水")))
+                .andExpect(content().string(containsString("业务流水号")))
+                .andExpect(content().string(containsString("刷新")))
                 .andExpect(content().string(matchesPattern(
                         "(?s).*<a[^>]*id=\"refresh-ledger\"[^>]*href=\"/admin/ledger\"[^>]*>.*")));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void rendersChineseLabelsForAccountTopUpAndLedgerRows() throws Exception {
+        var account = accountsApi.create("动态客户");
+        paymentsApi.topUp(new TopUpCommand(
+                "chinese-labels-" + UUID.randomUUID(), account.id(), 100));
+
+        mockMvc.perform(get("/admin/accounts"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("动态客户")))
+                .andExpect(content().string(containsString("正常")))
+                .andExpect(content().string(containsString("人民币 <span>1.00</span>")));
+        mockMvc.perform(get("/admin"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("充值")))
+                .andExpect(content().string(containsString("成功")))
+                .andExpect(content().string(containsString("人民币 <span>1.00</span>")));
+        mockMvc.perform(get("/admin/payments/top-up"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("成功")))
+                .andExpect(content().string(containsString("人民币 <span>1.00</span>")));
+        mockMvc.perform(get("/admin/ledger"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("充值")))
+                .andExpect(content().string(containsString("人民币 <span>1.00</span>")));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void rejectsBlankAccountOwnerWithChineseMessage() throws Exception {
+        mockMvc.perform(post("/admin/accounts")
+                        .with(csrf())
+                        .param("ownerName", " "))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/account-form"))
+                .andExpect(model().attributeHasFieldErrors("accountForm", "ownerName"))
+                .andExpect(content().string(containsString("请输入账户名称")));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void rejectsInvalidAccountOwnerLengthWithChineseMessage() throws Exception {
+        mockMvc.perform(post("/admin/accounts")
+                        .with(csrf())
+                        .param("ownerName", "甲"))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/account-form"))
+                .andExpect(model().attributeHasFieldErrors("accountForm", "ownerName"))
+                .andExpect(content().string(containsString("账户名称需为2到100个字符")));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void rejectsBlankTopUpFieldsWithChineseMessages() throws Exception {
+        mockMvc.perform(post("/admin/payments/top-up")
+                        .with(csrf())
+                        .param("accountId", "")
+                        .param("amountCents", "")
+                        .param("idempotencyKey", ""))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/topup-form"))
+                .andExpect(model().attributeHasFieldErrors(
+                        "topUpForm", "accountId", "amountCents", "idempotencyKey"))
+                .andExpect(content().string(containsString("请选择客户账户")))
+                .andExpect(content().string(containsString("请输入充值金额")))
+                .andExpect(content().string(containsString("请输入幂等键")));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void rejectsZeroTopUpAmountWithChineseMessage() throws Exception {
+        var account = accountsApi.create("零金额客户");
+
+        mockMvc.perform(post("/admin/payments/top-up")
+                        .with(csrf())
+                        .param("accountId", account.id().toString())
+                        .param("amountCents", "0")
+                        .param("idempotencyKey", "zero-amount-" + UUID.randomUUID()))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/topup-form"))
+                .andExpect(model().attributeHasFieldErrors("topUpForm", "amountCents"))
+                .andExpect(content().string(containsString("充值金额必须大于0")));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void rejectsLongIdempotencyKeyWithChineseMessage() throws Exception {
+        var account = accountsApi.create("长幂等键客户");
+
+        mockMvc.perform(post("/admin/payments/top-up")
+                        .with(csrf())
+                        .param("accountId", account.id().toString())
+                        .param("amountCents", "100")
+                        .param("idempotencyKey", "x".repeat(129)))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/topup-form"))
+                .andExpect(model().attributeHasFieldErrors("topUpForm", "idempotencyKey"))
+                .andExpect(content().string(containsString("幂等键不能超过128个字符")));
     }
 
     @Test
@@ -129,7 +268,9 @@ class AdminWebTest {
                         .param("idempotencyKey", idempotencyKey))
                 .andExpect(status().isOk())
                 .andExpect(view().name("admin/topup-form"))
-                .andExpect(model().attributeHasFieldErrors("topUpForm", "idempotencyKey"));
+                .andExpect(model().attributeHasFieldErrors("topUpForm", "idempotencyKey"))
+                .andExpect(content().string(containsString(
+                        "该幂等键已被其他请求使用，请更换后重试")));
     }
 
     @Test
@@ -142,7 +283,8 @@ class AdminWebTest {
                         .param("idempotencyKey", "unknown-account-" + UUID.randomUUID()))
                 .andExpect(status().isOk())
                 .andExpect(view().name("admin/topup-form"))
-                .andExpect(model().attributeHasFieldErrors("topUpForm", "accountId"));
+                .andExpect(model().attributeHasFieldErrors("topUpForm", "accountId"))
+                .andExpect(content().string(containsString("请选择有效的客户账户")));
     }
 
     @Test
@@ -158,6 +300,7 @@ class AdminWebTest {
         }) {
             mockMvc.perform(get(path))
                     .andExpect(status().isOk())
+                    .andExpect(content().string(containsString("人民币")))
                     .andExpect(content().string(containsString(exactAmount)));
         }
     }
