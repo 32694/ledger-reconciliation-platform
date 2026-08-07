@@ -2,6 +2,8 @@
 
 Use this guide to move the project to a personal computer without carrying machine-specific configuration. Decide first whether application records must move with the source code.
 
+Flyway versioned migrations are immutable after they have been applied. Schema changes must use a new numbered migration instead of editing an existing script. V6 renames the legacy PostgreSQL-generated business-reference constraint; databases that already applied V2 receive that change automatically during their normal Flyway upgrade.
+
 ## Choice 1: Source Code Only
 
 Use this option when local records are disposable. On the destination computer:
