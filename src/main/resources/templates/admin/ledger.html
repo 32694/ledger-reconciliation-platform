@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{admin/layout :: shell('Ledger', ${activeNav}, ~{::main})}">
+<main class="content">
+    <div class="page-heading">
+        <div><p class="eyebrow">Posted journals</p><h1>Ledger</h1></div>
+        <button class="button button-secondary" type="button" hx-get="/admin/ledger" hx-target="#ledger-table" hx-swap="outerHTML">Refresh</button>
+    </div>
+    <div id="ledger-table" class="table-section" th:fragment="ledgerTable">
+        <div class="section-heading">
+            <div><h2>Recent transactions</h2><p>Newest 100 posted journals</p></div>
+            <span class="result-count"><strong th:text="${#lists.size(transactions)}">0</strong> results</span>
+        </div>
+        <div class="table-scroll">
+            <table>
+                <thead><tr><th>Occurred</th><th>Business reference</th><th>Type</th><th class="numeric">Journal amount</th></tr></thead>
+                <tbody>
+                <tr th:each="transaction : ${transactions}">
+                    <td th:text="${#temporals.format(transaction.occurredAt, 'yyyy-MM-dd HH:mm:ss')}">2026-01-01 12:00:00</td>
+                    <td class="mono" th:text="${transaction.businessReference}">REF-001</td>
+                    <td th:text="${transaction.transactionType}">TOP_UP</td>
+                    <td class="numeric">CNY <span th:text="${#numbers.formatDecimal(transaction.amountCents / 100.0, 1, 2)}">0.00</span></td>
+                </tr>
+                <tr th:if="${#lists.isEmpty(transactions)}"><td colspan="4" class="empty-state">No journals have been posted.</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</main>
+</html>

@@ -7,6 +7,7 @@ import io.github.user32694.ledgerplatform.ledger.Journal;
 import io.github.user32694.ledgerplatform.ledger.LedgerAccountView;
 import io.github.user32694.ledgerplatform.ledger.LedgerApi;
 import io.github.user32694.ledgerplatform.ledger.LedgerBalanceLimitExceededException;
+import io.github.user32694.ledgerplatform.ledger.LedgerTransactionView;
 import io.github.user32694.ledgerplatform.ledger.PostedJournal;
 import java.math.BigDecimal;
 import java.sql.SQLException;
@@ -17,6 +18,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -131,6 +133,27 @@ class LedgerService implements LedgerApi {
             throw new IllegalArgumentException("Ledger account is not a customer wallet");
         }
         return currentBalance(account);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<LedgerTransactionView> findRecentTransactions(int limit) {
+        if (limit < 1 || limit > 100) {
+            throw new IllegalArgumentException("Limit must be between 1 and 100");
+        }
+        return transactionRepository
+                .findAllByOrderByOccurredAtDescIdDesc(PageRequest.of(0, limit))
+                .stream()
+                .map(transaction -> new LedgerTransactionView(
+                        transaction.id(),
+                        transaction.businessReference(),
+                        transaction.transactionType(),
+                        transaction.occurredAt(),
+                        transaction.entries().stream()
+                                .filter(entry -> entry.side() == EntrySide.DEBIT)
+                                .mapToLong(LedgerEntryEntity::amountCents)
+                                .sum()))
+                .toList();
     }
 
     private LedgerAccountView toView(LedgerAccountEntity account) {

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{admin/layout :: shell('New account', ${activeNav}, ~{::main})}">
+<main class="content content-narrow">
+    <div class="page-heading">
+        <div><p class="eyebrow">Accounts</p><h1>Create customer account</h1></div>
+        <a class="button button-secondary" th:href="@{/admin/accounts}">Cancel</a>
+    </div>
+    <form class="form-surface" method="post" th:action="@{/admin/accounts}" th:object="${accountForm}">
+        <div class="field" th:classappend="${#fields.hasErrors('ownerName')} ? ' field-invalid'">
+            <label for="ownerName">Owner name</label>
+            <input id="ownerName" type="text" th:field="*{ownerName}" maxlength="100" aria-describedby="ownerName-help ownerName-error" required>
+            <small id="ownerName-help">Legal or operational display name, 2 to 100 characters.</small>
+            <p id="ownerName-error" class="field-error" th:if="${#fields.hasErrors('ownerName')}" th:errors="*{ownerName}">Invalid owner name</p>
+        </div>
+        <div class="form-actions">
+            <a class="button button-secondary" th:href="@{/admin/accounts}">Cancel</a>
+            <button class="button button-primary" type="submit">Create account</button>
+        </div>
+    </form>
+</main>
+</html>

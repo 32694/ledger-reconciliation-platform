@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{admin/layout :: shell('Payments', ${activeNav}, ~{::main})}">
+<main class="content">
+    <div class="page-heading"><div><p class="eyebrow">Payment operations</p><h1>Record top up</h1></div></div>
+    <div class="split-workspace">
+        <form class="form-surface" method="post" th:action="@{/admin/payments/top-up}" th:object="${topUpForm}">
+            <div class="alert alert-error" th:if="${#fields.hasGlobalErrors()}" th:each="error : ${#fields.globalErrors()}" th:text="${error}">Top up failed</div>
+            <div class="field" th:classappend="${#fields.hasErrors('accountId')} ? ' field-invalid'">
+                <label for="accountId">Customer account</label>
+                <select id="accountId" th:field="*{accountId}" aria-describedby="accountId-error" required>
+                    <option value="">Select an account</option>
+                    <option th:each="account : ${accounts}" th:value="${account.id}" th:text="${account.accountNumber + ' - ' + account.ownerName}">Account</option>
+                </select>
+                <p id="accountId-error" class="field-error" th:if="${#fields.hasErrors('accountId')}" th:errors="*{accountId}">Invalid account</p>
+            </div>
+            <div class="field" th:classappend="${#fields.hasErrors('amountCents')} ? ' field-invalid'">
+                <label for="amountCents">Amount (cents)</label>
+                <input id="amountCents" type="number" min="1" step="1" th:field="*{amountCents}" aria-describedby="amountCents-help amountCents-error" required>
+                <small id="amountCents-help">Enter the exact amount in CNY cents.</small>
+                <p id="amountCents-error" class="field-error" th:if="${#fields.hasErrors('amountCents')}" th:errors="*{amountCents}">Invalid amount</p>
+            </div>
+            <div class="field" th:classappend="${#fields.hasErrors('idempotencyKey')} ? ' field-invalid'">
+                <label for="idempotencyKey">Idempotency key</label>
+                <input id="idempotencyKey" type="text" maxlength="128" th:field="*{idempotencyKey}" aria-describedby="idempotencyKey-help idempotencyKey-error" required>
+                <small id="idempotencyKey-help">Unique operator or upstream request reference.</small>
+                <p id="idempotencyKey-error" class="field-error" th:if="${#fields.hasErrors('idempotencyKey')}" th:errors="*{idempotencyKey}">Invalid key</p>
+            </div>
+            <div class="form-actions"><button class="button button-primary" type="submit">Post top up</button></div>
+        </form>
+        <section id="recent-payments-table" class="table-section compact-table" aria-labelledby="recent-topups-title" th:fragment="recentPaymentsTable">
+            <div class="section-heading">
+                <div><h2 id="recent-topups-title">Recent top ups</h2><p>Latest 20 instructions</p></div>
+                <button class="button button-secondary" type="button" hx-get="/admin/payments/recent" hx-target="#recent-payments-table" hx-swap="outerHTML">Refresh</button>
+            </div>
+            <div class="table-scroll">
+                <table><thead><tr><th>Reference</th><th class="numeric">Amount</th><th>Status</th></tr></thead>
+                    <tbody>
+                    <tr th:each="payment : ${recentPayments}">
+                        <td class="mono" th:text="${payment.channelReference}">PAY-001</td>
+                        <td class="numeric" th:text="${payment.amountCents}">0</td>
+                        <td><span class="status" th:classappend="${payment.status == 'SUCCEEDED'} ? ' status-success' : ' status-danger'" th:text="${payment.status}">SUCCEEDED</span></td>
+                    </tr>
+                    <tr th:if="${#lists.isEmpty(recentPayments)}"><td colspan="3" class="empty-state">No top ups recorded.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </div>
+</main>
+</html>

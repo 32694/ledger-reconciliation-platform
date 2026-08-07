@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org" xmlns:sec="http://www.thymeleaf.org/extras/spring-security"
+      th:fragment="shell(pageTitle, activeNav, content)">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title th:text="${pageTitle + ' | Ledger Operations'}">Ledger Operations</title>
+    <link rel="stylesheet" th:href="@{/css/admin.css}">
+    <script defer th:src="@{/webjars/htmx.org/dist/htmx.min.js}"></script>
+</head>
+<body>
+<div class="admin-shell">
+    <aside class="sidebar">
+        <div class="brand">
+            <span class="brand-kicker">Ledger</span>
+            <strong>Operations</strong>
+        </div>
+        <nav aria-label="Administration">
+            <a th:href="@{/admin}" th:classappend="${activeNav == 'overview'} ? ' active'">Overview</a>
+            <a th:href="@{/admin/accounts}" th:classappend="${activeNav == 'accounts'} ? ' active'">Accounts</a>
+            <a th:href="@{/admin/payments/top-up}" th:classappend="${activeNav == 'payments'} ? ' active'">Payments</a>
+            <a th:href="@{/admin/ledger}" th:classappend="${activeNav == 'ledger'} ? ' active'">Ledger</a>
+            <span class="nav-disabled" aria-disabled="true">Reconciliation <small>Future</small></span>
+            <span class="nav-disabled" aria-disabled="true">Audit Log <small>Future</small></span>
+        </nav>
+        <form class="logout-form" method="post" th:action="@{/logout}">
+            <span sec:authentication="name">administrator</span>
+            <button class="button button-quiet" type="submit">Sign out</button>
+        </form>
+    </aside>
+    <div class="workspace">
+        <header class="topbar">
+            <span>Administration</span>
+            <strong th:text="${pageTitle}">Page</strong>
+        </header>
+        <th:block th:replace="${content}"></th:block>
+    </div>
+</div>
+</body>
+</html>

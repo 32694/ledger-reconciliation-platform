@@ -49,4 +49,16 @@ class LedgerTransactionEntity {
     String businessReference() {
         return businessReference;
     }
+
+    String transactionType() {
+        return transactionType;
+    }
+
+    Instant occurredAt() {
+        return occurredAt;
+    }
+
+    List<LedgerEntryEntity> entries() {
+        return List.copyOf(entries);
+    }
 }

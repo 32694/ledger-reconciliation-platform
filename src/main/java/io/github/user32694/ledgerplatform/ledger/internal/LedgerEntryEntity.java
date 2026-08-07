@@ -53,4 +53,12 @@ class LedgerEntryEntity {
         this.amountCents = amountCents;
         this.createdAt = createdAt;
     }
+
+    EntrySide side() {
+        return side;
+    }
+
+    long amountCents() {
+        return amountCents;
+    }
 }

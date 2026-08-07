@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{admin/layout :: shell('Overview', ${activeNav}, ~{::main})}">
+<main class="content">
+    <div class="page-heading">
+        <div>
+            <p class="eyebrow">Current position</p>
+            <h1>Overview</h1>
+        </div>
+        <div class="actions">
+            <a class="button button-secondary" th:href="@{/admin/accounts/new}">New account</a>
+            <a class="button button-primary" th:href="@{/admin/payments/top-up}">Record top up</a>
+        </div>
+    </div>
+
+    <section class="metrics" aria-label="Platform summary">
+        <article>
+            <span>Customer accounts</span>
+            <strong th:text="${accountCount}">0</strong>
+        </article>
+        <article>
+            <span>Total customer balance</span>
+            <strong>CNY <span th:text="${#numbers.formatDecimal(customerBalanceCents / 100.0, 1, 2)}">0.00</span></strong>
+        </article>
+        <article>
+            <span>Recent top ups</span>
+            <strong th:text="${#lists.size(recentPayments)}">0</strong>
+        </article>
+    </section>
+
+    <section class="table-section">
+        <div class="section-heading">
+            <div>
+                <h2>Recent payments</h2>
+                <p>Latest processed top-up instructions</p>
+            </div>
+            <a class="text-link" th:href="@{/admin/payments/top-up}">Payment operations</a>
+        </div>
+        <div class="table-scroll">
+            <table>
+                <thead><tr><th>Reference</th><th>Type</th><th class="numeric">Amount</th><th>Status</th></tr></thead>
+                <tbody>
+                <tr th:each="payment : ${recentPayments}">
+                    <td class="mono" th:text="${payment.channelReference}">PAY-001</td>
+                    <td th:text="${payment.type}">TOP_UP</td>
+                    <td class="numeric">CNY <span th:text="${#numbers.formatDecimal(payment.amountCents / 100.0, 1, 2)}">0.00</span></td>
+                    <td><span class="status" th:classappend="${payment.status == 'SUCCEEDED'} ? ' status-success' : ' status-danger'" th:text="${payment.status}">SUCCEEDED</span></td>
+                </tr>
+                <tr th:if="${#lists.isEmpty(recentPayments)}"><td colspan="4" class="empty-state">No payment activity yet.</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+</main>
+</html>

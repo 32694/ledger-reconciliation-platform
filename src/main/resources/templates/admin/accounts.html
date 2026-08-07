@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{admin/layout :: shell('Accounts', ${activeNav}, ~{::main})}">
+<main class="content">
+    <div class="page-heading">
+        <div><p class="eyebrow">Customer wallets</p><h1>Accounts</h1></div>
+        <div class="actions">
+            <button class="button button-secondary" type="button" hx-get="/admin/accounts" hx-target="#account-table" hx-swap="outerHTML">Refresh</button>
+            <a class="button button-primary" th:href="@{/admin/accounts/new}">New account</a>
+        </div>
+    </div>
+    <div id="account-table" class="table-section" th:fragment="accountTable">
+        <div class="section-heading">
+            <div><h2>Customer accounts</h2><p>Sorted by account number</p></div>
+            <span class="result-count"><strong th:text="${#lists.size(accounts)}">0</strong> results</span>
+        </div>
+        <div class="table-scroll">
+            <table>
+                <thead><tr><th>Account number</th><th>Owner</th><th>Status</th><th class="numeric">Available balance</th></tr></thead>
+                <tbody>
+                <tr th:each="account : ${accounts}">
+                    <td class="mono" th:text="${account.accountNumber}">ACC-001</td>
+                    <td th:text="${account.ownerName}">Customer</td>
+                    <td><span class="status status-success" th:text="${account.status}">ACTIVE</span></td>
+                    <td class="numeric">CNY <span th:text="${#numbers.formatDecimal(account.balanceCents / 100.0, 1, 2)}">0.00</span></td>
+                </tr>
+                <tr th:if="${#lists.isEmpty(accounts)}"><td colspan="4" class="empty-state">No customer accounts.</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</main>
+</html>
