@@ -3,7 +3,6 @@ package io.github.user32694.ledgerplatform.accounts.web;
 import io.github.user32694.ledgerplatform.accounts.AccountsApi;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
@@ -95,7 +94,6 @@ public class AccountsWebController {
 
     public static class AccountForm {
         @NotBlank(message = "请输入账户名称")
-        @Size(min = 2, max = 100, message = "账户名称需为2到100个字符")
         private String ownerName;
 
         public String getOwnerName() {

@@ -85,6 +85,7 @@ class AdminWebTest {
                 .andExpect(content().string(containsString("<html lang=\"zh-CN\"")))
                 .andExpect(content().string(containsString("交易账本管理平台")))
                 .andExpect(content().string(containsString("经营概览")))
+                .andExpect(content().string(containsString("客户账户总数")))
                 .andExpect(content().string(containsString("客户账户")))
                 .andExpect(content().string(containsString("资金操作")))
                 .andExpect(content().string(containsString("账本流水")))
@@ -120,6 +121,7 @@ class AdminWebTest {
                 .andExpect(view().name("admin/accounts"))
                 .andExpect(content().string(containsString("<html lang=\"zh-CN\"")))
                 .andExpect(content().string(containsString("客户账户")))
+                .andExpect(content().string(containsString("可用余额")))
                 .andExpect(content().string(containsString("刷新")))
                 .andExpect(content().string(containsString("新建账户")))
                 .andExpect(content().string(matchesPattern(
@@ -128,6 +130,7 @@ class AdminWebTest {
                 .andExpect(status().isOk())
                 .andExpect(view().name("admin/account-form"))
                 .andExpect(content().string(containsString("<html lang=\"zh-CN\"")))
+                .andExpect(content().string(containsString("新建客户账户")))
                 .andExpect(content().string(containsString("新建账户")))
                 .andExpect(content().string(containsString("账户名称")))
                 .andExpect(content().string(containsString("创建账户")));
@@ -135,6 +138,7 @@ class AdminWebTest {
                 .andExpect(status().isOk())
                 .andExpect(view().name("admin/topup-form"))
                 .andExpect(content().string(containsString("<html lang=\"zh-CN\"")))
+                .andExpect(content().string(containsString("账户充值")))
                 .andExpect(content().string(containsString("资金操作")))
                 .andExpect(content().string(containsString("客户账户")))
                 .andExpect(content().string(containsString("充值金额")))
