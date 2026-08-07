@@ -106,5 +106,5 @@ tbody tr:hover { background: #f8fbfa; }
     .content { padding: 20px 16px; }
     .page-heading { align-items: flex-start; }
     .actions { flex-wrap: wrap; justify-content: flex-end; }
-    .metrics, .split-workspace { grid-template-columns: 1fr; }
+    .metrics, .split-workspace { grid-template-columns: minmax(0, 1fr); }
 }
