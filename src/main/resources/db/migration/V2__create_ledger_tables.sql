@@ -8,9 +8,10 @@ CREATE TABLE ledger.ledger_account (
 
 CREATE TABLE ledger.ledger_transaction (
     id UUID PRIMARY KEY,
-    business_reference VARCHAR(128) NOT NULL UNIQUE,
+    business_reference VARCHAR(128) NOT NULL,
     transaction_type VARCHAR(32) NOT NULL CHECK (transaction_type IN ('TOP_UP', 'TRANSFER')),
-    occurred_at TIMESTAMPTZ NOT NULL
+    occurred_at TIMESTAMPTZ NOT NULL,
+    CONSTRAINT uk_ledger_transaction_business_reference UNIQUE (business_reference)
 );
 
 CREATE TABLE ledger.ledger_entry (

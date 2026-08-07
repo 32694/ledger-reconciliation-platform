@@ -1,5 +1,6 @@
 package io.github.user32694.ledgerplatform.ledger.internal;
 
+import java.math.BigDecimal;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -13,5 +14,5 @@ interface LedgerTransactionRepository extends JpaRepository<LedgerTransactionEnt
             FROM ledger.ledger_entry
             WHERE ledger_account_id = :ledgerAccountId
             """, nativeQuery = true)
-    long liabilityBalance(@Param("ledgerAccountId") UUID ledgerAccountId);
+    BigDecimal liabilityBalance(@Param("ledgerAccountId") UUID ledgerAccountId);
 }
