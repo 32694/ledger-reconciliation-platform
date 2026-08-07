@@ -3,6 +3,7 @@ package io.github.user32694.ledgerplatform;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
@@ -21,11 +22,14 @@ class MigrationImmutabilityTest {
 
     @Test
     void v6NamesTheBusinessReferenceConstraint() throws IOException {
-        var migration = new String(readMigration("V6__name_ledger_business_reference_constraint.sql"));
+        var migration = new String(
+                readMigration("V6__name_ledger_business_reference_constraint.sql"), StandardCharsets.UTF_8);
 
         assertThat(migration)
                 .contains("ledger_transaction_business_reference_key")
-                .contains("uk_ledger_transaction_business_reference");
+                .contains("uk_ledger_transaction_business_reference")
+                .contains("contype = 'u'")
+                .contains("RAISE EXCEPTION");
     }
 
     private byte[] readMigration(String name) throws IOException {
