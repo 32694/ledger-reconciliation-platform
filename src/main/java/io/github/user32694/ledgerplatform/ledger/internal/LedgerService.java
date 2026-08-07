@@ -6,6 +6,7 @@ import io.github.user32694.ledgerplatform.ledger.EntrySide;
 import io.github.user32694.ledgerplatform.ledger.Journal;
 import io.github.user32694.ledgerplatform.ledger.LedgerAccountView;
 import io.github.user32694.ledgerplatform.ledger.LedgerApi;
+import io.github.user32694.ledgerplatform.ledger.LedgerBalanceLimitExceededException;
 import io.github.user32694.ledgerplatform.ledger.PostedJournal;
 import java.math.BigDecimal;
 import java.sql.SQLException;
@@ -88,18 +89,14 @@ class LedgerService implements LedgerApi {
             try {
                 deltas.put(account.id(), Math.addExact(deltas.getOrDefault(account.id(), 0L), delta));
             } catch (ArithmeticException exception) {
-                throw new IllegalArgumentException(
-                        "Journal balance change exceeds supported range for account: " + account.id(),
-                        exception);
+                throw new LedgerBalanceLimitExceededException(exception);
             }
         }
         for (var account : lockedAccounts) {
             try {
                 Math.addExact(currentBalance(account), deltas.getOrDefault(account.id(), 0L));
             } catch (ArithmeticException exception) {
-                throw new IllegalArgumentException(
-                        "Ledger balance exceeds supported range for account: " + account.id(),
-                        exception);
+                throw new LedgerBalanceLimitExceededException(exception);
             }
         }
 
@@ -148,9 +145,7 @@ class LedgerService implements LedgerApi {
         try {
             return balance.longValueExact();
         } catch (ArithmeticException exception) {
-            throw new IllegalArgumentException(
-                    "Ledger balance exceeds supported range for account: " + account.id(),
-                    exception);
+            throw new LedgerBalanceLimitExceededException(exception);
         }
     }
 

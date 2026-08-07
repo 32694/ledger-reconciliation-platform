@@ -13,6 +13,12 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 interface PaymentInstructionRepository extends JpaRepository<PaymentInstructionEntity, UUID> {
+    @Query(value = """
+            SELECT 1
+            FROM pg_advisory_xact_lock(hashtextextended(CAST(:idempotencyKey AS text), 0))
+            """, nativeQuery = true)
+    int acquireIdempotencyLock(@Param("idempotencyKey") String idempotencyKey);
+
     @Modifying
     @Query(value = """
             INSERT INTO payments.payment_instruction

@@ -26,8 +26,14 @@ class PaymentSubmissionService {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     UUID submit(TopUpCommand command) {
         validate(command);
-        accountsApi.get(command.payeeAccountId());
         String fingerprint = fingerprint(command);
+        repository.acquireIdempotencyLock(command.idempotencyKey());
+        var existing = repository.findByIdempotencyKey(command.idempotencyKey());
+        if (existing.isPresent()) {
+            return resolve(existing.orElseThrow(), fingerprint);
+        }
+
+        accountsApi.get(command.payeeAccountId());
         UUID paymentId = UUID.randomUUID();
         repository.insertPending(
                 paymentId,
@@ -40,6 +46,10 @@ class PaymentSubmissionService {
 
         var payment = repository.findByIdempotencyKey(command.idempotencyKey())
                 .orElseThrow(() -> new IllegalStateException("Payment instruction was not created"));
+        return resolve(payment, fingerprint);
+    }
+
+    private static UUID resolve(PaymentInstructionEntity payment, String fingerprint) {
         if (!fingerprint.equals(payment.requestFingerprint())) {
             throw new IdempotencyConflictException();
         }
@@ -53,8 +63,12 @@ class PaymentSubmissionService {
         if (command.idempotencyKey() == null || command.idempotencyKey().isBlank()) {
             throw new IllegalArgumentException("Idempotency key is required");
         }
-        if (command.idempotencyKey().length() > 128) {
+        if (command.idempotencyKey().codePointCount(0, command.idempotencyKey().length()) > 128) {
             throw new IllegalArgumentException("Idempotency key must not exceed 128 characters");
+        }
+        if (command.idempotencyKey().codePoints().anyMatch(
+                codePoint -> codePoint == 0 || Character.isISOControl(codePoint))) {
+            throw new IllegalArgumentException("Idempotency key must not contain control characters");
         }
         if (command.payeeAccountId() == null) {
             throw new IllegalArgumentException("Payee account id is required");

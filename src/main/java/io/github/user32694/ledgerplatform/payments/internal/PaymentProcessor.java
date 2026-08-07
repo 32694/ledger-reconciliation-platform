@@ -1,11 +1,11 @@
 package io.github.user32694.ledgerplatform.payments.internal;
 
 import io.github.user32694.ledgerplatform.accounts.AccountsApi;
-import io.github.user32694.ledgerplatform.ledger.DuplicateBusinessReferenceException;
 import io.github.user32694.ledgerplatform.ledger.EntrySide;
 import io.github.user32694.ledgerplatform.ledger.Journal;
 import io.github.user32694.ledgerplatform.ledger.JournalEntry;
 import io.github.user32694.ledgerplatform.ledger.LedgerApi;
+import io.github.user32694.ledgerplatform.ledger.LedgerBalanceLimitExceededException;
 import io.github.user32694.ledgerplatform.ledger.Money;
 import java.time.Instant;
 import java.util.List;
@@ -16,6 +16,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 class PaymentProcessor {
+    private static final String BALANCE_LIMIT_EXCEEDED = "BALANCE_LIMIT_EXCEEDED";
+
     private final PaymentInstructionRepository repository;
     private final AccountsApi accountsApi;
     private final LedgerApi ledgerApi;
@@ -51,8 +53,8 @@ class PaymentProcessor {
                             EntrySide.CREDIT,
                             Money.cny(payment.amountCents())))));
             payment.succeed(Instant.now());
-        } catch (IllegalArgumentException | DuplicateBusinessReferenceException exception) {
-            throw new PaymentRejectedException(payment.id(), failureReason(exception));
+        } catch (LedgerBalanceLimitExceededException exception) {
+            throw new PaymentRejectedException(payment.id(), BALANCE_LIMIT_EXCEEDED);
         }
         return payment;
     }
@@ -66,14 +68,6 @@ class PaymentProcessor {
             payment.fail(reason, Instant.now());
         }
         return payment;
-    }
-
-    private static String failureReason(RuntimeException exception) {
-        String message = exception.getMessage();
-        if (message == null || message.isBlank()) {
-            return "Payment was rejected";
-        }
-        return message.length() <= 64 ? message : message.substring(0, 64);
     }
 
     static final class PaymentRejectedException extends RuntimeException {

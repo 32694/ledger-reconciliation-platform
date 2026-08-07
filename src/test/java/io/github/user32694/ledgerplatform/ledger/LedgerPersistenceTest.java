@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.List;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -78,8 +79,8 @@ class LedgerPersistenceTest {
                 new JournalEntry(wallet.id(), EntrySide.CREDIT, Money.cny(1))));
 
         assertThatThrownBy(() -> ledgerApi.post(overflow))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("supported range");
+                .isInstanceOf(LedgerBalanceLimitExceededException.class)
+                .hasMessage("Ledger balance exceeds supported range");
         assertThat(ledgerApi.walletBalance(wallet.id())).isEqualTo(Long.MAX_VALUE);
 
         var source = ledgerApi.createCustomerWallet("ACC-SOURCE");
@@ -89,5 +90,31 @@ class LedgerPersistenceTest {
                 new JournalEntry(destination.id(), EntrySide.CREDIT, Money.cny(1)))));
 
         assertThat(retried.businessReference()).isEqualTo("TOPUP-OVERFLOW");
+    }
+
+    @Test
+    @Sql(statements = """
+            INSERT INTO ledger.ledger_account
+                (id, owner_ref, account_type, currency, created_at)
+            VALUES
+                ('00000000-0000-0000-0000-000000000010', 'ACC-SQL-OVERFLOW', 'LIABILITY', 'CNY', CURRENT_TIMESTAMP);
+            INSERT INTO ledger.ledger_transaction
+                (id, business_reference, transaction_type, occurred_at)
+            VALUES
+                ('00000000-0000-0000-0000-000000000011', 'SQL-OVERFLOW-1', 'TOP_UP', CURRENT_TIMESTAMP),
+                ('00000000-0000-0000-0000-000000000012', 'SQL-OVERFLOW-2', 'TOP_UP', CURRENT_TIMESTAMP);
+            INSERT INTO ledger.ledger_entry
+                (id, transaction_id, ledger_account_id, side, amount_cents, created_at)
+            VALUES
+                ('00000000-0000-0000-0000-000000000013', '00000000-0000-0000-0000-000000000011',
+                 '00000000-0000-0000-0000-000000000010', 'CREDIT', 9223372036854775807, CURRENT_TIMESTAMP),
+                ('00000000-0000-0000-0000-000000000014', '00000000-0000-0000-0000-000000000012',
+                 '00000000-0000-0000-0000-000000000010', 'CREDIT', 1, CURRENT_TIMESTAMP);
+            """)
+    void rejectsPersistedBalanceOutsideLongRangeWithoutExposingAccountId() {
+        assertThatThrownBy(() -> ledgerApi.walletBalance(
+                UUID.fromString("00000000-0000-0000-0000-000000000010")))
+                .isInstanceOf(LedgerBalanceLimitExceededException.class)
+                .hasMessage("Ledger balance exceeds supported range");
     }
 }
