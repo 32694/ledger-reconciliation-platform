@@ -58,7 +58,7 @@ class LedgerPersistenceTest {
             INSERT INTO ledger.ledger_account
                 (id, owner_ref, account_type, currency, created_at)
             VALUES
-                ('00000000-0000-0000-0000-000000000001', 'PLATFORM_CASH', 'LIABILITY', 'CNY', CURRENT_TIMESTAMP)
+                ('00000000-0000-0000-0000-000000000001', 'PLATFORM_CASH', 'LIABILITY', 'CNY', CURRENT_TIMESTAMP);
             """)
     void rejectsAnExistingNonAssetPlatformCashAccount() {
         assertThatThrownBy(() -> ledgerApi.createPlatformCashAccount())
