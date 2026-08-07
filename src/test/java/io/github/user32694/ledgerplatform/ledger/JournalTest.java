@@ -37,4 +37,47 @@ class JournalTest {
                 new JournalEntry(cash, EntrySide.DEBIT, Money.cny(5000)))))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void rejectsAmountsThatOverflowTheSupportedRange() {
+        assertThatThrownBy(() -> Journal.create("TOPUP-4", "TOP_UP", List.of(
+                new JournalEntry(cash, EntrySide.DEBIT, Money.cny(Long.MAX_VALUE)),
+                new JournalEntry(wallet, EntrySide.DEBIT, Money.cny(Long.MAX_VALUE)),
+                new JournalEntry(UUID.randomUUID(), EntrySide.DEBIT, Money.cny(2)))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("supported range");
+    }
+
+    @Test
+    void rejectsInvalidTypes() {
+        List<JournalEntry> entries = List.of(
+                new JournalEntry(cash, EntrySide.DEBIT, Money.cny(5000)),
+                new JournalEntry(wallet, EntrySide.CREDIT, Money.cny(5000)));
+
+        assertThatThrownBy(() -> Journal.create("TOPUP-5", null, entries))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> Journal.create("TOPUP-5", " ", entries))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> Journal.create("TOPUP-5", "REFUND", entries))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void rejectsBusinessReferenceLongerThan128Characters() {
+        assertThatThrownBy(() -> Journal.create("R".repeat(129), "TOP_UP", List.of(
+                new JournalEntry(cash, EntrySide.DEBIT, Money.cny(5000)),
+                new JournalEntry(wallet, EntrySide.CREDIT, Money.cny(5000)))))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void acceptsBusinessReferenceAt128Characters() {
+        String businessReference = "R".repeat(128);
+
+        Journal journal = Journal.create(businessReference, "TOP_UP", List.of(
+                new JournalEntry(cash, EntrySide.DEBIT, Money.cny(5000)),
+                new JournalEntry(wallet, EntrySide.CREDIT, Money.cny(5000))));
+
+        assertThat(journal.businessReference()).isEqualTo(businessReference);
+    }
 }

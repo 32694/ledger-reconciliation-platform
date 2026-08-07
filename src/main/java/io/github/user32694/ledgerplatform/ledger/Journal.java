@@ -7,18 +7,18 @@ public record Journal(String businessReference, String type, List<JournalEntry> 
         if (businessReference == null || businessReference.isBlank()) {
             throw new IllegalArgumentException("Business reference is required");
         }
+        if (businessReference.length() > 128) {
+            throw new IllegalArgumentException("Business reference must not exceed 128 characters");
+        }
+        if (!"TOP_UP".equals(type) && !"TRANSFER".equals(type)) {
+            throw new IllegalArgumentException("Unsupported journal type");
+        }
         if (entries == null || entries.size() < 2) {
             throw new IllegalArgumentException("A journal requires at least two entries");
         }
         entries = List.copyOf(entries);
-        long debits = entries.stream()
-                .filter(entry -> entry.side() == EntrySide.DEBIT)
-                .mapToLong(entry -> entry.money().cents())
-                .sum();
-        long credits = entries.stream()
-                .filter(entry -> entry.side() == EntrySide.CREDIT)
-                .mapToLong(entry -> entry.money().cents())
-                .sum();
+        long debits = total(entries, EntrySide.DEBIT);
+        long credits = total(entries, EntrySide.CREDIT);
         if (debits != credits) throw new IllegalArgumentException("Journal must be balanced");
     }
 
@@ -27,12 +27,24 @@ public record Journal(String businessReference, String type, List<JournalEntry> 
     }
 
     public long totalDebits() {
-        return entries.stream().filter(e -> e.side() == EntrySide.DEBIT)
-                .mapToLong(e -> e.money().cents()).sum();
+        return total(entries, EntrySide.DEBIT);
     }
 
     public long totalCredits() {
-        return entries.stream().filter(e -> e.side() == EntrySide.CREDIT)
-                .mapToLong(e -> e.money().cents()).sum();
+        return total(entries, EntrySide.CREDIT);
+    }
+
+    private static long total(List<JournalEntry> entries, EntrySide side) {
+        long total = 0;
+        try {
+            for (JournalEntry entry : entries) {
+                if (entry.side() == side) {
+                    total = Math.addExact(total, entry.money().cents());
+                }
+            }
+            return total;
+        } catch (ArithmeticException exception) {
+            throw new IllegalArgumentException("Journal amount exceeds supported range", exception);
+        }
     }
 }
