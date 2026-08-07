@@ -17,6 +17,17 @@ Replace both password placeholders in `.env`, install JDK 17 and PostgreSQL 17 o
 
 ## Choice 2: Source Code and Database
 
+Both the source and destination need PostgreSQL 17 command-line client tools. On each macOS computer, install the same PostgreSQL 17 package used in the User Guide, add its tools to the current shell, and confirm both utilities report version 17:
+
+```sh
+brew install postgresql@17
+export PATH="$(brew --prefix postgresql@17)/bin:$PATH"
+pg_dump --version
+pg_restore --version
+```
+
+When PostgreSQL runs in Docker Compose, do not start the Homebrew PostgreSQL service because both would use port 5432. The host `pg_dump` and `pg_restore` commands below connect to the container through its published `localhost:5432` port.
+
 On the source computer, create a PostgreSQL custom-format dump from the repository root after exporting `.env`:
 
 ```sh
