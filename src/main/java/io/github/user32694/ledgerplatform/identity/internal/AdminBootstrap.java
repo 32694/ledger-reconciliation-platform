@@ -41,13 +41,10 @@ public class AdminBootstrap implements ApplicationRunner {
         if (username.length() > 80) {
             throw new IllegalStateException("app.admin.username must not exceed 80 characters");
         }
-        if (repository.findByUsername(username).isEmpty()) {
-            repository.save(new AdminUserEntity(
-                    UUID.randomUUID(),
-                    username,
-                    passwordEncoder.encode(configuredPassword),
-                    true,
-                    Instant.now()));
-        }
+        repository.insertIfAbsent(
+                UUID.randomUUID(),
+                username,
+                passwordEncoder.encode(configuredPassword),
+                Instant.now());
     }
 }

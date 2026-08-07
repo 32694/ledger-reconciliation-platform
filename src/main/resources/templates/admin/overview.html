@@ -20,7 +20,7 @@
         </article>
         <article>
             <span>Total customer balance</span>
-            <strong>CNY <span th:text="${#numbers.formatDecimal(customerBalanceCents / 100.0, 1, 2)}">0.00</span></strong>
+            <strong>CNY <span th:text="${customerBalance}">0.00</span></strong>
         </article>
         <article>
             <span>Recent top ups</span>
@@ -43,7 +43,7 @@
                 <tr th:each="payment : ${recentPayments}">
                     <td class="mono" th:text="${payment.channelReference}">PAY-001</td>
                     <td th:text="${payment.type}">TOP_UP</td>
-                    <td class="numeric">CNY <span th:text="${#numbers.formatDecimal(payment.amountCents / 100.0, 1, 2)}">0.00</span></td>
+                    <td class="numeric">CNY <span th:text="${payment.amount}">0.00</span></td>
                     <td><span class="status" th:classappend="${payment.status == 'SUCCEEDED'} ? ' status-success' : ' status-danger'" th:text="${payment.status}">SUCCEEDED</span></td>
                 </tr>
                 <tr th:if="${#lists.isEmpty(recentPayments)}"><td colspan="4" class="empty-state">No payment activity yet.</td></tr>

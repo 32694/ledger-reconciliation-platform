@@ -2,6 +2,7 @@ package io.github.user32694.ledgerplatform;
 
 import io.github.user32694.ledgerplatform.accounts.AccountsApi;
 import io.github.user32694.ledgerplatform.payments.PaymentsApi;
+import java.math.BigDecimal;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -26,13 +27,23 @@ public class OverviewController {
     @GetMapping("/admin")
     String overview(Model model) {
         var accounts = accountsApi.findAll();
-        long customerBalanceCents = accounts.stream()
-                .mapToLong(account -> accountsApi.balance(account.id()).cents())
-                .sum();
+        BigDecimal customerBalance = accounts.stream()
+                .map(account -> BigDecimal.valueOf(
+                        accountsApi.balance(account.id()).cents(), 2))
+                .reduce(BigDecimal.ZERO.setScale(2), BigDecimal::add);
         model.addAttribute("accountCount", accounts.size());
-        model.addAttribute("customerBalanceCents", customerBalanceCents);
-        model.addAttribute("recentPayments", paymentsApi.findRecent(8));
+        model.addAttribute("customerBalance", customerBalance);
+        model.addAttribute("recentPayments", paymentsApi.findRecent(8).stream()
+                .map(payment -> new PaymentRow(
+                        payment.channelReference(),
+                        payment.type(),
+                        BigDecimal.valueOf(payment.amountCents(), 2),
+                        payment.status()))
+                .toList());
         model.addAttribute("activeNav", "overview");
         return "admin/overview";
     }
+
+    public record PaymentRow(
+            String channelReference, String type, BigDecimal amount, String status) {}
 }

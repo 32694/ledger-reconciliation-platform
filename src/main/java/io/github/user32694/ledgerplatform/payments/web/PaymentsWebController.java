@@ -9,6 +9,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
+import java.math.BigDecimal;
 import java.util.UUID;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -40,7 +41,7 @@ public class PaymentsWebController {
 
     @GetMapping("/recent")
     String recentPayments(Model model) {
-        model.addAttribute("recentPayments", paymentsApi.findRecent(20));
+        addRecentPayments(model);
         return "admin/topup-form :: recentPaymentsTable";
     }
 
@@ -86,9 +87,20 @@ public class PaymentsWebController {
 
     private void addReferenceData(Model model) {
         model.addAttribute("accounts", accountsApi.findAll());
-        model.addAttribute("recentPayments", paymentsApi.findRecent(20));
+        addRecentPayments(model);
         model.addAttribute("activeNav", "payments");
     }
+
+    private void addRecentPayments(Model model) {
+        model.addAttribute("recentPayments", paymentsApi.findRecent(20).stream()
+                .map(payment -> new PaymentRow(
+                        payment.channelReference(),
+                        BigDecimal.valueOf(payment.amountCents(), 2),
+                        payment.status()))
+                .toList());
+    }
+
+    public record PaymentRow(String channelReference, BigDecimal amount, String status) {}
 
     public static class TopUpForm {
         @NotNull(message = "Account is required")

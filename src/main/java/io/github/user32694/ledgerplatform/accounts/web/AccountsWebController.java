@@ -3,6 +3,7 @@ package io.github.user32694.ledgerplatform.accounts.web;
 import io.github.user32694.ledgerplatform.accounts.AccountsApi;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.stereotype.Controller;
@@ -67,13 +68,13 @@ public class AccountsWebController {
                         account.accountNumber(),
                         account.ownerName(),
                         account.status(),
-                        accountsApi.balance(account.id()).cents()))
+                        BigDecimal.valueOf(accountsApi.balance(account.id()).cents(), 2)))
                 .toList();
         model.addAttribute("accounts", accountRows);
     }
 
     public record AccountRow(
-            UUID id, String accountNumber, String ownerName, String status, long balanceCents) {}
+            UUID id, String accountNumber, String ownerName, String status, BigDecimal balance) {}
 
     public static class AccountForm {
         @NotBlank(message = "Owner name is required")

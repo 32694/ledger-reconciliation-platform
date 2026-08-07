@@ -22,7 +22,7 @@
                     <td class="mono" th:text="${account.accountNumber}">ACC-001</td>
                     <td th:text="${account.ownerName}">Customer</td>
                     <td><span class="status status-success" th:text="${account.status}">ACTIVE</span></td>
-                    <td class="numeric">CNY <span th:text="${#numbers.formatDecimal(account.balanceCents / 100.0, 1, 2)}">0.00</span></td>
+                    <td class="numeric">CNY <span th:text="${account.balance}">0.00</span></td>
                 </tr>
                 <tr th:if="${#lists.isEmpty(accounts)}"><td colspan="4" class="empty-state">No customer accounts.</td></tr>
                 </tbody>

@@ -19,7 +19,7 @@
                     <td th:text="${#temporals.format(transaction.occurredAt, 'yyyy-MM-dd HH:mm:ss')}">2026-01-01 12:00:00</td>
                     <td class="mono" th:text="${transaction.businessReference}">REF-001</td>
                     <td th:text="${transaction.transactionType}">TOP_UP</td>
-                    <td class="numeric">CNY <span th:text="${#numbers.formatDecimal(transaction.amountCents / 100.0, 1, 2)}">0.00</span></td>
+                    <td class="numeric">CNY <span th:text="${transaction.amount}">0.00</span></td>
                 </tr>
                 <tr th:if="${#lists.isEmpty(transactions)}"><td colspan="4" class="empty-state">No journals have been posted.</td></tr>
                 </tbody>

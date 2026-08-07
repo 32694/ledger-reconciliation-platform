@@ -1,5 +1,6 @@
 package io.github.user32694.ledgerplatform;
 
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.matchesPattern;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -142,5 +143,22 @@ class AdminWebTest {
                 .andExpect(status().isOk())
                 .andExpect(view().name("admin/topup-form"))
                 .andExpect(model().attributeHasFieldErrors("topUpForm", "accountId"));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void rendersLargeAmountsWithoutLosingPrecision() throws Exception {
+        var account = accountsApi.create("Precision Customer");
+        paymentsApi.topUp(new TopUpCommand(
+                "precision-" + UUID.randomUUID(), account.id(), Long.MAX_VALUE));
+        String exactAmount = "92233720368547758.07";
+
+        for (String path : new String[] {
+            "/admin", "/admin/accounts", "/admin/payments/top-up", "/admin/ledger"
+        }) {
+            mockMvc.perform(get(path))
+                    .andExpect(status().isOk())
+                    .andExpect(content().string(containsString(exactAmount)));
+        }
     }
 }

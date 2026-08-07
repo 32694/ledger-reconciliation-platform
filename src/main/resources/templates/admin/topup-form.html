@@ -38,7 +38,7 @@
                     <tbody>
                     <tr th:each="payment : ${recentPayments}">
                         <td class="mono" th:text="${payment.channelReference}">PAY-001</td>
-                        <td class="numeric" th:text="${payment.amountCents}">0</td>
+                        <td class="numeric">CNY <span th:text="${payment.amount}">0.00</span></td>
                         <td><span class="status" th:classappend="${payment.status == 'SUCCEEDED'} ? ' status-success' : ' status-danger'" th:text="${payment.status}">SUCCEEDED</span></td>
                     </tr>
                     <tr th:if="${#lists.isEmpty(recentPayments)}"><td colspan="3" class="empty-state">No top ups recorded.</td></tr>
