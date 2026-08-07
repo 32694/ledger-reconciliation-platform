@@ -17,7 +17,7 @@ Replace both password placeholders in `.env`, install JDK 17 and PostgreSQL 17 o
 
 ## Choice 2: Source Code and Database
 
-First create a PostgreSQL custom-format dump on the source computer. Run this from the repository root after exporting `.env`:
+On the source computer, create a PostgreSQL custom-format dump from the repository root after exporting `.env`:
 
 ```sh
 mkdir -p ../migration-artifacts
@@ -27,17 +27,60 @@ PGPASSWORD="$DB_PASSWORD" pg_dump \
   --file=../migration-artifacts/ledger-platform.dump
 ```
 
-Transfer `ledger-platform.dump` through a trusted encrypted channel. On the destination, create a new empty `ledger_platform` database owned by the newly created local role, then restore:
+On the destination computer, complete the source-code setup with new local secrets:
 
 ```sh
-PGPASSWORD="$DB_PASSWORD" createdb \
-  -h localhost -p 5432 -U "$DB_USERNAME" --owner="$DB_USERNAME" ledger_platform
-PGPASSWORD="$DB_PASSWORD" pg_restore \
-  -h localhost -p 5432 -U "$DB_USERNAME" -d ledger_platform \
-  --no-owner --exit-on-error ledger-platform.dump
+git clone https://github.com/32694/ledger-reconciliation-platform.git
+cd ledger-reconciliation-platform
+cp .env.example .env
+chmod 600 .env
 ```
 
-The destination database must be empty. If Docker Compose already initialized `ledger_platform`, drop and recreate only that confirmed local database before restoring; follow the destructive reset checks in the User Guide.
+Replace both password placeholders in `.env`; do not copy secrets from the source computer. Then export the destination values:
+
+```sh
+set -a
+source .env
+set +a
+```
+
+From the destination repository root, create `../migration-artifacts` and transfer the dump through a trusted encrypted channel to `../migration-artifacts/ledger-platform.dump`.
+
+Before restoring, complete either the Homebrew PostgreSQL or Docker Compose setup in the [User Guide](USER_GUIDE.md). Do not skip these steps: create the destination-only `ledger_app` role with the new `DB_PASSWORD`, start PostgreSQL 17, and create both `ledger_platform` and `ledger_platform_test`. Keep `ledger_platform_test`; the verification command needs it.
+
+The restore target must be an empty `ledger_platform`. The database setup above creates that database, so confirm the local server and the two exact database names before rebuilding only `ledger_platform`.
+
+For Homebrew PostgreSQL:
+
+```sh
+PGPASSWORD="$DB_PASSWORD" psql -h localhost -p 5432 -U "$DB_USERNAME" -d postgres \
+  -c "SELECT current_database(), inet_server_addr(), inet_server_port();" \
+  -c "SELECT datname FROM pg_database WHERE datname IN ('ledger_platform', 'ledger_platform_test') ORDER BY datname;"
+PGPASSWORD="$DB_PASSWORD" dropdb -h localhost -p 5432 -U "$DB_USERNAME" ledger_platform
+PGPASSWORD="$DB_PASSWORD" createdb -h localhost -p 5432 -U "$DB_USERNAME" \
+  --owner="$DB_USERNAME" ledger_platform
+```
+
+For Docker Compose:
+
+```sh
+docker compose ps
+docker compose exec db psql -U "$DB_USERNAME" -d postgres \
+  -c "SELECT current_database(), inet_server_addr(), inet_server_port();" \
+  -c "SELECT datname FROM pg_database WHERE datname IN ('ledger_platform', 'ledger_platform_test') ORDER BY datname;"
+docker compose exec db dropdb -U "$DB_USERNAME" ledger_platform
+docker compose exec db createdb -U "$DB_USERNAME" --owner="$DB_USERNAME" ledger_platform
+```
+
+The `dropdb` command is destructive. Run one option only after its read-only checks identify your local PostgreSQL instance and show exactly `ledger_platform` and `ledger_platform_test`. The commands remove only `ledger_platform`; they deliberately retain `ledger_platform_test`.
+
+Restore the transferred dump into the newly empty primary database:
+
+```sh
+PGPASSWORD="$DB_PASSWORD" pg_restore \
+  -h localhost -p 5432 -U "$DB_USERNAME" -d ledger_platform \
+  --no-owner --exit-on-error ../migration-artifacts/ledger-platform.dump
+```
 
 ## Git Bundle Fallback
 
