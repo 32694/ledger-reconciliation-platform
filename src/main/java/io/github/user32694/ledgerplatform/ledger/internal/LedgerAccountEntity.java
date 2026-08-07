@@ -23,7 +23,7 @@ class LedgerAccountEntity {
     @Column(name = "account_type", nullable = false, length = 16)
     private AccountType accountType;
 
-    @Column(nullable = false, length = 3)
+    @Column(nullable = false, length = 3, columnDefinition = "char(3)")
     private String currency;
 
     @Column(name = "created_at", nullable = false)
