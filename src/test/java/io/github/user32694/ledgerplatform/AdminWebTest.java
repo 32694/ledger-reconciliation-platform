@@ -172,7 +172,7 @@ class AdminWebTest {
                 .andExpect(content().string(containsString("人民币 <span>1.00</span>")));
         mockMvc.perform(get("/admin"))
                 .andExpect(status().isOk())
-                .andExpect(content().string(containsString("充值")))
+                .andExpect(content().string(containsString("<td>充值</td>")))
                 .andExpect(content().string(containsString("成功")))
                 .andExpect(content().string(containsString("人民币 <span>1.00</span>")));
         mockMvc.perform(get("/admin/payments/top-up"))
@@ -221,9 +221,45 @@ class AdminWebTest {
                 .andExpect(view().name("admin/topup-form"))
                 .andExpect(model().attributeHasFieldErrors(
                         "topUpForm", "accountId", "amountCents", "idempotencyKey"))
-                .andExpect(content().string(containsString("请选择客户账户")))
+                .andExpect(content().string(containsString(
+                        "<p id=\"accountId-error\" class=\"field-error\">"
+                                + "请选择客户账户</p>")))
                 .andExpect(content().string(containsString("请输入充值金额")))
                 .andExpect(content().string(containsString("请输入幂等键")));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void rejectsMalformedTopUpAccountIdWithChineseMessage() throws Exception {
+        mockMvc.perform(post("/admin/payments/top-up")
+                        .with(csrf())
+                        .param("accountId", "not-a-uuid")
+                        .param("amountCents", "100")
+                        .param("idempotencyKey", "malformed-account-" + UUID.randomUUID()))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/topup-form"))
+                .andExpect(model().attributeHasFieldErrors("topUpForm", "accountId"))
+                .andExpect(content().string(containsString(
+                        "<p id=\"accountId-error\" class=\"field-error\">"
+                                + "请选择有效的客户账户</p>")));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void rejectsOverflowingTopUpAmountWithChineseMessage() throws Exception {
+        var account = accountsApi.create("溢出金额客户");
+
+        mockMvc.perform(post("/admin/payments/top-up")
+                        .with(csrf())
+                        .param("accountId", account.id().toString())
+                        .param("amountCents", "9223372036854775808")
+                        .param("idempotencyKey", "overflowing-amount-" + UUID.randomUUID()))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/topup-form"))
+                .andExpect(model().attributeHasFieldErrors("topUpForm", "amountCents"))
+                .andExpect(content().string(containsString(
+                        "<p id=\"amountCents-error\" class=\"field-error\">"
+                                + "请输入充值金额</p>")));
     }
 
     @Test

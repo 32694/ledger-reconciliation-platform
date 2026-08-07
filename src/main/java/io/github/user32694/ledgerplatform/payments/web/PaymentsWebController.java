@@ -11,10 +11,15 @@ import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.util.UUID;
+import org.springframework.beans.PropertyAccessException;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.validation.BindingResult;
+import org.springframework.validation.DefaultBindingErrorProcessor;
+import org.springframework.validation.FieldError;
+import org.springframework.web.bind.WebDataBinder;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.InitBinder;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -28,6 +33,11 @@ public class PaymentsWebController {
     public PaymentsWebController(PaymentsApi paymentsApi, AccountsApi accountsApi) {
         this.paymentsApi = paymentsApi;
         this.accountsApi = accountsApi;
+    }
+
+    @InitBinder("topUpForm")
+    void bindTopUpForm(WebDataBinder binder) {
+        binder.setBindingErrorProcessor(new TopUpBindingErrorProcessor());
     }
 
     @GetMapping("/top-up")
@@ -117,6 +127,33 @@ public class PaymentsWebController {
 
     public record PaymentRow(
             String channelReference, BigDecimal amount, String status, String statusLabel) {}
+
+    private static final class TopUpBindingErrorProcessor extends DefaultBindingErrorProcessor {
+        @Override
+        public void processPropertyAccessException(
+                PropertyAccessException exception, BindingResult bindingResult) {
+            String field = exception.getPropertyName();
+            String message;
+            if ("accountId".equals(field)) {
+                message = "请选择有效的客户账户";
+            } else if ("amountCents".equals(field)) {
+                message = "请输入充值金额";
+            } else {
+                super.processPropertyAccessException(exception, bindingResult);
+                return;
+            }
+            FieldError error = new FieldError(
+                    bindingResult.getObjectName(),
+                    field,
+                    exception.getValue(),
+                    true,
+                    bindingResult.resolveMessageCodes(exception.getErrorCode(), field),
+                    getArgumentsForBindError(bindingResult.getObjectName(), field),
+                    message);
+            error.wrap(exception);
+            bindingResult.addError(error);
+        }
+    }
 
     public static class TopUpForm {
         @NotNull(message = "请选择客户账户")
