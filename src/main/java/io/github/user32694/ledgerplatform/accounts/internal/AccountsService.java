@@ -79,8 +79,12 @@ class AccountsService implements AccountsApi {
         if (ownerName == null) {
             throw new IllegalArgumentException("Owner name is required");
         }
-        String normalizedOwnerName = ownerName.trim();
-        if (normalizedOwnerName.length() < 2 || normalizedOwnerName.length() > 100) {
+        String normalizedOwnerName = ownerName.strip();
+        if (normalizedOwnerName.isBlank()) {
+            throw new IllegalArgumentException("Owner name is required");
+        }
+        int ownerNameLength = normalizedOwnerName.codePointCount(0, normalizedOwnerName.length());
+        if (ownerNameLength < 2 || ownerNameLength > 100) {
             throw new IllegalArgumentException("Owner name must be between 2 and 100 characters");
         }
         return normalizedOwnerName;
