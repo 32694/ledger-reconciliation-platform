@@ -84,6 +84,122 @@ class MigrationIntegrationTest {
     }
 
     @Test
+    void appliesReversePaymentMigrationBeforeAuditMigration() {
+        assertThat(jdbcTemplate.queryForList("""
+                SELECT version
+                FROM flyway_schema_history
+                WHERE version IN ('9', '10') AND success
+                ORDER BY installed_rank
+                """, String.class)).containsExactly("9", "10");
+    }
+
+    @Test
+    void widensPaymentTypeToTwentyFourCharacters() {
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT character_maximum_length
+                FROM information_schema.columns
+                WHERE table_schema = 'payments'
+                  AND table_name = 'payment_instruction'
+                  AND column_name = 'payment_type'
+                """, Integer.class)).isEqualTo(24);
+    }
+
+    @Test
+    void createsThePartialUniqueIndexForActiveReversePayments() {
+        var index = jdbcTemplate.queryForMap("""
+                SELECT index_definition.indisunique AS is_unique,
+                       pg_get_expr(index_definition.indpred, index_definition.indrelid) AS predicate
+                FROM pg_index index_definition
+                JOIN pg_class index_name ON index_name.oid = index_definition.indexrelid
+                WHERE index_name.relname = 'uk_payment_instruction_active_reverse'
+                """);
+
+        assertThat(index.get("is_unique")).isEqualTo(true);
+        assertThat((String) index.get("predicate"))
+                .contains("original_payment_id IS NOT NULL")
+                .contains("PENDING")
+                .contains("SUCCEEDED");
+    }
+
+    @Test
+    void createsTheAuditEventTable() {
+        assertThat(jdbcTemplate.queryForList("""
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'audit' AND table_name = 'audit_event'
+                ORDER BY ordinal_position
+                """, String.class)).containsExactly(
+                        "id",
+                        "actor",
+                        "action",
+                        "aggregate_type",
+                        "aggregate_id",
+                        "outcome",
+                        "summary",
+                        "correlation_reference",
+                        "occurred_at");
+    }
+
+    @Test
+    @Transactional
+    void acceptsFailedReverseRetriesButRejectsAfterSucceededReverse() {
+        var payeeId = insertCustomerAccount();
+        var originalId = insertPayment("TOP_UP", null, payeeId, "SUCCEEDED", null, null);
+        insertPayment("REFUND", null, payeeId, "FAILED", originalId, "first attempt");
+        insertPayment("REFUND", null, payeeId, "FAILED", originalId, "second attempt");
+        insertPayment("REFUND", null, payeeId, "SUCCEEDED", originalId, "completed refund");
+
+        assertThatThrownBy(() -> insertPayment(
+                        "REFUND", null, payeeId, "PENDING", originalId, "duplicate refund"))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    @Transactional
+    void rejectsAnotherActiveReverseWhileOneIsPending() {
+        var payeeId = insertCustomerAccount();
+        var originalId = insertPayment("TOP_UP", null, payeeId, "SUCCEEDED", null, null);
+        insertPayment("REFUND", null, payeeId, "PENDING", originalId, "pending refund");
+
+        assertThatThrownBy(() -> insertPayment(
+                        "REFUND", null, payeeId, "SUCCEEDED", originalId, "duplicate refund"))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    @Transactional
+    void rejectsReversePaymentsWithoutAValidOriginalAndReason() {
+        var payeeId = insertCustomerAccount();
+        var originalId = insertPayment("TOP_UP", null, payeeId, "SUCCEEDED", null, null);
+
+        assertThatThrownBy(() -> insertPayment(
+                        "REFUND", null, payeeId, "FAILED", originalId, "   "))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    @Transactional
+    void rejectsOriginalPaymentTypesWithReverseFields() {
+        var payeeId = insertCustomerAccount();
+        var originalId = insertPayment("TOP_UP", null, payeeId, "SUCCEEDED", null, null);
+
+        assertThatThrownBy(() -> insertPayment(
+                        "TOP_UP", null, payeeId, "SUCCEEDED", originalId, "not a reverse"))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    @Transactional
+    void rejectsAReversePaymentThatReferencesItself() {
+        var payeeId = insertCustomerAccount();
+        var reverseId = UUID.randomUUID();
+
+        assertThatThrownBy(() -> insertPayment(
+                        reverseId, "REFUND", null, payeeId, "FAILED", reverseId, "self reference"))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
     @Transactional
     void upgradesTheLegacyConstraintWithoutRewritingExistingTransactions() throws IOException {
         jdbcTemplate.execute("ALTER TABLE ledger.ledger_transaction RENAME CONSTRAINT "
@@ -156,5 +272,72 @@ class MigrationIntegrationTest {
             assertThat(input).as("V6 migration").isNotNull();
             return new String(input.readAllBytes(), StandardCharsets.UTF_8);
         }
+    }
+
+    private UUID insertCustomerAccount() {
+        var ledgerAccountId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO ledger.ledger_account
+                    (id, owner_ref, account_type, currency, created_at)
+                VALUES (?, ?, 'LIABILITY', 'CNY', CURRENT_TIMESTAMP)
+                """, ledgerAccountId, "MIGRATION-" + UUID.randomUUID());
+        var accountId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO accounts.customer_account
+                    (id, account_number, owner_name, status, currency, ledger_account_id,
+                     created_at, updated_at)
+                VALUES (?, ?, 'Migration Account', 'ACTIVE', 'CNY', ?,
+                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                accountId,
+                "ACC-" + accountId.toString().replace("-", "").substring(0, 28),
+                ledgerAccountId);
+        return accountId;
+    }
+
+    private UUID insertPayment(
+            String type,
+            UUID payerId,
+            UUID payeeId,
+            String status,
+            UUID originalPaymentId,
+            String operationReason) {
+        return insertPayment(
+                UUID.randomUUID(),
+                type,
+                payerId,
+                payeeId,
+                status,
+                originalPaymentId,
+                operationReason);
+    }
+
+    private UUID insertPayment(
+            UUID paymentId,
+            String type,
+            UUID payerId,
+            UUID payeeId,
+            String status,
+            UUID originalPaymentId,
+            String operationReason) {
+        jdbcTemplate.update("""
+                INSERT INTO payments.payment_instruction
+                    (id, idempotency_key, request_fingerprint, channel_reference, payment_type,
+                     payer_account_id, payee_account_id, amount_cents, currency, status,
+                     original_payment_id, operation_reason, created_at, completed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 100, 'CNY', ?, ?, ?,
+                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                paymentId,
+                UUID.randomUUID().toString(),
+                "0".repeat(64),
+                "MIGRATION-" + UUID.randomUUID(),
+                type,
+                payerId,
+                payeeId,
+                status,
+                originalPaymentId,
+                operationReason);
+        return paymentId;
     }
 }

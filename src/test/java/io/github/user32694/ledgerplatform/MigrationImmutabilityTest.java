@@ -32,6 +32,28 @@ class MigrationImmutabilityTest {
                 .contains("RAISE EXCEPTION");
     }
 
+    @Test
+    void v9MatchesThePublishedReversePaymentMigration()
+            throws IOException, NoSuchAlgorithmException {
+        assertMigrationDigest(
+                "V9__add_payment_refunds_and_reversals.sql",
+                "0b80a6282f7210794e57640b9bd0c8a8d946a9c73b03ecd0530d3a886d35ddfa");
+    }
+
+    @Test
+    void v10MatchesThePublishedAuditMigration()
+            throws IOException, NoSuchAlgorithmException {
+        assertMigrationDigest(
+                "V10__create_audit_events.sql",
+                "dcf99cb7f678f65ca7e7780c76b2c84cd4223339dc71f6fa2ea6b8d6662b0f51");
+    }
+
+    private void assertMigrationDigest(String name, String expected)
+            throws IOException, NoSuchAlgorithmException {
+        var digest = MessageDigest.getInstance("SHA-256").digest(readMigration(name));
+        assertThat(HexFormat.of().formatHex(digest)).isEqualTo(expected);
+    }
+
     private byte[] readMigration(String name) throws IOException {
         try (var input = getClass().getClassLoader().getResourceAsStream(MIGRATION_ROOT + name)) {
             assertThat(input).as("migration %s", name).isNotNull();
