@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{admin/layout :: shell('新建账户', ${activeNav}, ~{::main})}">
+<main class="content content-narrow">
+    <div class="page-heading">
+        <div><p class="eyebrow">客户账户</p><h1>新建客户账户</h1></div>
+        <a class="button button-secondary" th:href="@{/admin/accounts}">取消</a>
+    </div>
+    <form class="form-surface" method="post" th:action="@{/admin/accounts}" th:object="${accountForm}">
+        <div class="field" th:classappend="${#fields.hasErrors('ownerName')} ? ' field-invalid'">
+            <label for="ownerName">账户名称</label>
+            <input id="ownerName" type="text" th:field="*{ownerName}" maxlength="100" aria-describedby="ownerName-help ownerName-error" required>
+            <small id="ownerName-help">请输入2到100个字符的客户名称</small>
+            <p id="ownerName-error" class="field-error" th:if="${#fields.hasErrors('ownerName')}" th:errors="*{ownerName}">账户名称无效</p>
+        </div>
+        <div class="form-actions">
+            <a class="button button-secondary" th:href="@{/admin/accounts}">取消</a>
+            <button class="button button-primary" type="submit">创建账户</button>
+        </div>
+    </form>
+</main>
+</html>

@@ -1,0 +1,4 @@
+CREATE SCHEMA identity;
+CREATE SCHEMA accounts;
+CREATE SCHEMA ledger;
+CREATE SCHEMA payments;

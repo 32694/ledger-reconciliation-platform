@@ -1,2 +1,10 @@
 .worktrees/
-
+.env
+target/
+.idea/
+.vscode/
+*.iml
+data/
+*.dump
+*.log
+.superpowers/

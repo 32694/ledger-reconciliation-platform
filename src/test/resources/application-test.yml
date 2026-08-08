@@ -1,0 +1,16 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/ledger_platform_test
+    username: ledger_app
+    password: ledger_app
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+
+app:
+  admin:
+    username: test-admin
+    password: test-password
