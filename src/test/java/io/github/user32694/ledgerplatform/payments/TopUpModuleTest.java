@@ -7,6 +7,7 @@ import io.github.user32694.ledgerplatform.audit.AuditAction;
 import io.github.user32694.ledgerplatform.audit.AuditApi;
 import io.github.user32694.ledgerplatform.audit.AuditEventView;
 import io.github.user32694.ledgerplatform.audit.AuditOutcome;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Callable;
@@ -49,6 +50,35 @@ class TopUpModuleTest {
     @Autowired JdbcTemplate jdbcTemplate;
 
     @Test
+    void exposesLinkedReversePaymentFields() {
+        var originalId = UUID.randomUUID();
+        var view = new PaymentView(
+                UUID.randomUUID(), "REFUND-1", "REFUND", null, UUID.randomUUID(),
+                500, "PENDING", null, originalId, "Customer refund", null);
+
+        assertThat(view.originalPaymentId()).isEqualTo(originalId);
+        assertThat(view.operationReason()).isEqualTo("Customer refund");
+    }
+
+    @Test
+    void preservesLegacyPaymentViewConstructors() {
+        var id = UUID.randomUUID();
+        var payeeAccountId = UUID.randomUUID();
+        var occurredAt = Instant.now();
+
+        var legacyFull = new PaymentView(
+                id, "TOPUP-1", "TOP_UP", null, payeeAccountId,
+                500, "SUCCEEDED", null, occurredAt);
+        var legacyShort = new PaymentView(
+                id, "TOPUP-1", "TOP_UP", 500, "SUCCEEDED", null, occurredAt);
+
+        assertThat(legacyFull.originalPaymentId()).isNull();
+        assertThat(legacyFull.operationReason()).isNull();
+        assertThat(legacyShort.originalPaymentId()).isNull();
+        assertThat(legacyShort.operationReason()).isNull();
+    }
+
+    @Test
     void postsTopUpOnceForRepeatedRequest() {
         var account = accountsApi.create("Top Up Customer");
         var command = new TopUpCommand("idem-topup-1", account.id(), 5000);
@@ -60,6 +90,8 @@ class TopUpModuleTest {
         assertThat(first.status()).isEqualTo("SUCCEEDED");
         assertThat(first.payerAccountId()).isNull();
         assertThat(first.payeeAccountId()).isEqualTo(account.id());
+        assertThat(first.originalPaymentId()).isNull();
+        assertThat(first.operationReason()).isNull();
         assertThat(accountsApi.balance(account.id()).cents()).isEqualTo(5000);
         assertThat(auditApi.findRecent(AuditAction.PAYMENT_TOP_UP, null, 100))
                 .singleElement()
@@ -388,6 +420,38 @@ class TopUpModuleTest {
         assertThat(paymentsApi.findRecent(100)).isEmpty();
     }
 
+    @Test
+    void readsLinkedActiveReversePayment() {
+        var account = accountsApi.create("Linked Refund Customer");
+        var original = paymentsApi.topUp(
+                new TopUpCommand("linked-refund-source", account.id(), 500));
+        var refundId = UUID.randomUUID();
+        insertReverseFixture(
+                refundId, "linked-refund", original.id(), account.id(), "PENDING", null);
+
+        assertThat(paymentsApi.get(refundId))
+                .extracting(
+                        PaymentView::type,
+                        PaymentView::originalPaymentId,
+                        PaymentView::operationReason)
+                .containsExactly("REFUND", original.id(), "Customer refund");
+        assertThat(paymentsApi.findActiveReverse(original.id()))
+                .map(PaymentView::id)
+                .contains(refundId);
+    }
+
+    @Test
+    void doesNotFindFailedReverseAsActive() {
+        var account = accountsApi.create("Failed Refund Customer");
+        var original = paymentsApi.topUp(
+                new TopUpCommand("failed-refund-source", account.id(), 500));
+        insertReverseFixture(
+                UUID.randomUUID(), "failed-refund", original.id(), account.id(),
+                "FAILED", "PROCESSING_REJECTED");
+
+        assertThat(paymentsApi.findActiveReverse(original.id())).isEmpty();
+    }
+
     private List<Attempt> topUpConcurrently(TopUpCommand first, TopUpCommand second)
             throws Exception {
         var executor = Executors.newFixedThreadPool(2);
@@ -454,6 +518,35 @@ class TopUpModuleTest {
 
     private long count(String sql, Object argument) {
         return jdbcTemplate.queryForObject(sql, Long.class, argument);
+    }
+
+    private void insertReverseFixture(
+            UUID id,
+            String idempotencyKey,
+            UUID originalPaymentId,
+            UUID payeeAccountId,
+            String status,
+            String failureReason) {
+        var now = Instant.now();
+        jdbcTemplate.update("""
+                INSERT INTO payments.payment_instruction
+                    (id, idempotency_key, request_fingerprint, channel_reference, payment_type,
+                     payer_account_id, payee_account_id, amount_cents, currency, status,
+                     failure_reason, version, created_at, completed_at,
+                     original_payment_id, operation_reason)
+                VALUES (?, ?, ?, ?, 'REFUND', NULL, ?, 500, 'CNY', ?, ?, 0, ?, ?, ?, ?)
+                """,
+                id,
+                idempotencyKey,
+                "f".repeat(64),
+                "REFUND-" + id,
+                payeeAccountId,
+                status,
+                failureReason,
+                now,
+                "FAILED".equals(status) ? now : null,
+                originalPaymentId,
+                "Customer refund");
     }
 
     private record Attempt(PaymentView payment, RuntimeException error) {}
