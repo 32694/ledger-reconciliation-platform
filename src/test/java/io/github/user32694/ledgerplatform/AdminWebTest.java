@@ -915,6 +915,28 @@ class AdminWebTest {
 
     @Test
     @WithMockUser(roles = "ADMIN")
+    void preservesCanonicalLookingSuccessSummaryWithFailureToken() throws Exception {
+        String marker = "audit-manual-success-with-reason-" + UUID.randomUUID();
+        String summary = "REFUND CNY 500 SUCCEEDED INSUFFICIENT_FUNDS";
+        auditApi.record(new AuditCommand(
+                null,
+                AuditAction.PAYMENT_REFUND,
+                "PAYMENT",
+                marker,
+                AuditOutcome.SUCCEEDED,
+                summary,
+                null));
+
+        mockMvc.perform(get("/admin/audit")
+                        .param("action", "PAYMENT_REFUND")
+                        .param("outcome", "SUCCEEDED"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString(summary)))
+                .andExpect(content().string(not(containsString("余额不足"))));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
     void rendersRefundAndReversalLabelsInOverviewAndRecentHistory() throws Exception {
         var customer = accountsApi.create("中文反向客户");
         var recipient = accountsApi.create("中文反向收款人");

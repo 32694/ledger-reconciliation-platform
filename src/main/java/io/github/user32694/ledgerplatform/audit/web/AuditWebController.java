@@ -96,6 +96,9 @@ public class AuditWebController {
                 || !outcome.name().equals(matcher.group(3))) {
             return displaySummary;
         }
+        if (matcher.group(4) != null && outcome != AuditOutcome.FAILED) {
+            return displaySummary;
+        }
 
         String amount = new BigDecimal(matcher.group(2))
                 .movePointLeft(2)
