@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{admin/layout :: shell('交易详情', ${activeNav}, ~{::main})}">
+<main class="content content-narrow">
+    <div class="page-heading">
+        <div>
+            <p class="eyebrow">不可变交易事实</p>
+            <h1>交易详情</h1>
+        </div>
+        <a class="button button-secondary" th:href="@{/admin/payments/top-up}">返回资金操作</a>
+    </div>
+
+    <p class="alert alert-error" th:if="${operationError}" th:text="${operationError}">该交易不可退款或冲正</p>
+    <div class="alert alert-success" th:if="${reversePayment}">
+        <strong th:text="${'已完成' + reverseCompletionLabel}">已完成全额退款</strong>
+        <span th:text="${'：' + reversePayment.operationReason}">：操作原因</span>
+        <a class="text-link" th:href="@{/admin/payments/{id}(id=${reversePayment.id})}">查看关联交易</a>
+    </div>
+    <div class="alert alert-success"
+         th:if="${completionLabel != null and payment.status == 'SUCCEEDED'}">
+        <strong th:text="${completionLabel}">全额退款</strong>
+        <span th:if="${payment.operationReason}" th:text="${'：' + payment.operationReason}">：操作原因</span>
+    </div>
+
+    <dl class="definition-grid">
+        <div><dt>业务流水号</dt><dd class="mono" th:text="${payment.channelReference}">PAY-001</dd></div>
+        <div><dt>交易类型</dt><dd th:text="${paymentTypeLabel}">充值</dd></div>
+        <div><dt>交易状态</dt><dd><span class="status"
+            th:classappend="${payment.status == 'SUCCEEDED'} ? ' status-success' : ' status-danger'"
+            th:text="${paymentStatusLabel}">成功</span></dd></div>
+        <div><dt>交易金额</dt><dd th:text="${'人民币 ' + paymentAmount}">人民币 0.00</dd></div>
+        <div><dt>付款账户</dt><dd class="mono" th:text="${payment.payerAccountId ?: '无'}">无</dd></div>
+        <div><dt>收款账户</dt><dd class="mono" th:text="${payment.payeeAccountId ?: '无'}">无</dd></div>
+        <div><dt>发生时间</dt><dd th:text="${payment.occurredAt}">2026-01-01T00:00:00Z</dd></div>
+        <div th:if="${paymentFailureLabel}"><dt>失败原因</dt><dd th:text="${paymentFailureLabel}">余额不足</dd></div>
+        <div th:if="${payment.operationReason}"><dt>操作原因</dt><dd th:text="${payment.operationReason}">客户申请</dd></div>
+        <div th:if="${payment.originalPaymentId}"><dt>原交易</dt><dd><a class="text-link mono"
+            th:href="@{/admin/payments/{id}(id=${payment.originalPaymentId})}"
+            th:text="${payment.originalPaymentId}">原交易编号</a></dd></div>
+        <div th:if="${reversePayment}"><dt>关联反向交易</dt><dd><a class="text-link mono"
+            th:href="@{/admin/payments/{id}(id=${reversePayment.id})}"
+            th:text="${reversePayment.id}">反向交易编号</a></dd></div>
+    </dl>
+
+    <div class="form-actions" th:if="${eligible}">
+        <a id="reverse-payment-action" class="button button-primary"
+           th:href="@{/admin/payments/{id}/reverse(id=${payment.id})}"
+           th:text="${reverseActionLabel}">发起全额退款</a>
+    </div>
+</main>
+</html>

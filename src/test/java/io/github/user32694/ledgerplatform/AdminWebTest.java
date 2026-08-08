@@ -15,7 +15,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import io.github.user32694.ledgerplatform.accounts.AccountsApi;
 import io.github.user32694.ledgerplatform.payments.PaymentsApi;
+import io.github.user32694.ledgerplatform.payments.ReversePaymentCommand;
 import io.github.user32694.ledgerplatform.payments.TopUpCommand;
+import io.github.user32694.ledgerplatform.payments.TransferCommand;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -454,5 +456,226 @@ class AdminWebTest {
                     .andExpect(content().string(containsString("人民币")))
                     .andExpect(content().string(containsString(exactAmount)));
         }
+    }
+
+    @Test
+    void protectsPaymentDetailsAndReverseRoutes() throws Exception {
+        UUID paymentId = UUID.randomUUID();
+
+        for (String path : new String[] {
+            "/admin/payments/" + paymentId,
+            "/admin/payments/" + paymentId + "/reverse"
+        }) {
+            mockMvc.perform(get(path))
+                    .andExpect(status().is3xxRedirection())
+                    .andExpect(redirectedUrlPattern("**/login"));
+            mockMvc.perform(post(path))
+                    .andExpect(status().isForbidden());
+        }
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void rendersChineseNotFoundPageForUnknownPayment() throws Exception {
+        UUID paymentId = UUID.randomUUID();
+
+        for (String path : new String[] {
+            "/admin/payments/" + paymentId,
+            "/admin/payments/" + paymentId + "/reverse"
+        }) {
+            mockMvc.perform(get(path))
+                    .andExpect(status().isNotFound())
+                    .andExpect(content().string(containsString("交易不存在")))
+                    .andExpect(content().string(matchesPattern(
+                            "(?s).*<a[^>]*href=\"/admin/payments/top-up\"[^>]*>资金操作</a>.*")));
+        }
+
+        mockMvc.perform(post("/admin/payments/" + paymentId + "/reverse").with(csrf())
+                        .param("reason", "客户申请退款")
+                        .param("idempotencyKey", "unknown-payment"))
+                .andExpect(status().isNotFound())
+                .andExpect(content().string(containsString("交易不存在")));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void rendersEligiblePaymentDetailsAndLinksRecentReferences() throws Exception {
+        var account = accountsApi.create("详情页客户");
+        var payment = paymentsApi.topUp(new TopUpCommand(
+                "web-detail-top-up-" + UUID.randomUUID(), account.id(), 500));
+        String detailPath = "/admin/payments/" + payment.id();
+
+        mockMvc.perform(get(detailPath))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/payment-detail"))
+                .andExpect(content().string(containsString("交易详情")))
+                .andExpect(content().string(containsString("充值")))
+                .andExpect(content().string(containsString("成功")))
+                .andExpect(content().string(containsString("人民币 5.00")))
+                .andExpect(content().string(containsString(account.id().toString())))
+                .andExpect(content().string(containsString(payment.channelReference())))
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*<a[^>]*id=\"reverse-payment-action\"[^>]*"
+                                + "href=\"" + detailPath + "/reverse\"[^>]*>发起全额退款</a>.*")));
+
+        mockMvc.perform(get("/admin/payments/top-up"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*<a[^>]*href=\"" + detailPath + "\"[^>]*>"
+                                + payment.channelReference() + "</a>.*")));
+        mockMvc.perform(get("/admin"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*<a[^>]*href=\"" + detailPath + "\"[^>]*>"
+                                + payment.channelReference() + "</a>.*")));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void rejectsReverseFormForIneligibleAndAlreadyReversedPayments() throws Exception {
+        var account = accountsApi.create("不可反向客户");
+        var recipient = accountsApi.create("不可反向收款人");
+        var failed = paymentsApi.transfer(new TransferCommand(
+                "web-failed-transfer-" + UUID.randomUUID(), account.id(), recipient.id(), 100));
+        var original = paymentsApi.topUp(new TopUpCommand(
+                "web-already-refunded-" + UUID.randomUUID(), account.id(), 500));
+        var refund = paymentsApi.reverse(new ReversePaymentCommand(
+                "web-existing-refund-" + UUID.randomUUID(), original.id(), "已完成退款"));
+
+        for (var payment : new Object[] {failed, original, refund}) {
+            var paymentView = (io.github.user32694.ledgerplatform.payments.PaymentView) payment;
+            String detailPath = "/admin/payments/" + paymentView.id();
+            mockMvc.perform(get(detailPath))
+                    .andExpect(status().isOk())
+                    .andExpect(content().string(org.hamcrest.Matchers.not(
+                            containsString("id=\"reverse-payment-action\""))));
+            mockMvc.perform(get(detailPath + "/reverse"))
+                    .andExpect(status().isConflict())
+                    .andExpect(view().name("admin/payment-detail"))
+                    .andExpect(content().string(containsString("该交易不可退款或冲正")));
+        }
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void validatesReverseFormWithChineseMessages() throws Exception {
+        var account = accountsApi.create("退款校验客户");
+        var payment = paymentsApi.topUp(new TopUpCommand(
+                "web-validation-source-" + UUID.randomUUID(), account.id(), 500));
+        String path = "/admin/payments/" + payment.id() + "/reverse";
+
+        mockMvc.perform(post(path).with(csrf())
+                        .param("reason", "")
+                        .param("idempotencyKey", ""))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/payment-reverse-form"))
+                .andExpect(model().attributeHasFieldErrors(
+                        "reverseForm", "reason", "idempotencyKey"))
+                .andExpect(content().string(containsString("请输入退款或冲正原因")))
+                .andExpect(content().string(containsString("请输入幂等键")));
+
+        mockMvc.perform(post(path).with(csrf())
+                        .param("reason", "理".repeat(501))
+                        .param("idempotencyKey", "k".repeat(129)))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/payment-reverse-form"))
+                .andExpect(model().attributeHasFieldErrors(
+                        "reverseForm", "reason", "idempotencyKey"))
+                .andExpect(content().string(containsString("退款或冲正原因不能超过500个字符")))
+                .andExpect(content().string(containsString("幂等键不能超过128个字符")));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void refundsSuccessfulTopUpAndShowsLinkedDetails() throws Exception {
+        var account = accountsApi.create("网页退款客户");
+        var original = paymentsApi.topUp(new TopUpCommand(
+                "web-refund-source-" + UUID.randomUUID(), account.id(), 500));
+
+        var result = mockMvc.perform(post("/admin/payments/" + original.id() + "/reverse")
+                        .with(csrf())
+                        .param("reason", "客户申请全额退款")
+                        .param("idempotencyKey", "web-refund-command"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrlPattern("/admin/payments/*"))
+                .andReturn();
+        String refundPath = result.getResponse().getRedirectedUrl();
+
+        mockMvc.perform(get(refundPath))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("全额退款")))
+                .andExpect(content().string(containsString("客户申请全额退款")))
+                .andExpect(content().string(containsString("退款")))
+                .andExpect(content().string(containsString(original.id().toString())));
+        mockMvc.perform(get("/admin/payments/" + original.id()))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("已完成全额退款")))
+                .andExpect(content().string(containsString("客户申请全额退款")))
+                .andExpect(content().string(containsString(refundPath)));
+
+        mockMvc.perform(post("/admin/payments/" + original.id() + "/reverse")
+                        .with(csrf())
+                        .param("reason", "不会再次执行")
+                        .param("idempotencyKey", "web-refund-command-replay"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl(refundPath));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void reversesSuccessfulTransferAndShowsChineseCompletion() throws Exception {
+        var payer = accountsApi.create("网页冲正付款人");
+        var payee = accountsApi.create("网页冲正收款人");
+        paymentsApi.topUp(new TopUpCommand(
+                "web-reversal-funding-" + UUID.randomUUID(), payer.id(), 1000));
+        var transfer = paymentsApi.transfer(new TransferCommand(
+                "web-reversal-source-" + UUID.randomUUID(), payer.id(), payee.id(), 400));
+
+        var result = mockMvc.perform(post("/admin/payments/" + transfer.id() + "/reverse")
+                        .with(csrf())
+                        .param("reason", "重复转账全额冲正")
+                        .param("idempotencyKey", "web-reversal-command"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrlPattern("/admin/payments/*"))
+                .andReturn();
+
+        mockMvc.perform(get("/admin/payments/" + transfer.id()))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("已完成全额冲正")))
+                .andExpect(content().string(containsString("重复转账全额冲正")))
+                .andExpect(content().string(containsString(result.getResponse().getRedirectedUrl())));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void returnsFailedRefundAndIdempotencyConflictToReverseForm() throws Exception {
+        var customer = accountsApi.create("余额不足退款客户");
+        var recipient = accountsApi.create("余额不足退款收款人");
+        var original = paymentsApi.topUp(new TopUpCommand(
+                "web-insufficient-refund-source-" + UUID.randomUUID(), customer.id(), 500));
+        paymentsApi.transfer(new TransferCommand(
+                "web-spend-refund-balance-" + UUID.randomUUID(), customer.id(), recipient.id(), 500));
+        String path = "/admin/payments/" + original.id() + "/reverse";
+
+        mockMvc.perform(post(path).with(csrf())
+                        .param("reason", "客户退款")
+                        .param("idempotencyKey", "web-insufficient-refund"))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/payment-reverse-form"))
+                .andExpect(model().attributeHasErrors("reverseForm"))
+                .andExpect(content().string(containsString(
+                        "可退回余额不足，请补足资金后使用新幂等键重试")));
+
+        var conflictSource = paymentsApi.topUp(new TopUpCommand(
+                "web-reverse-conflict", recipient.id(), 100));
+        mockMvc.perform(post("/admin/payments/" + conflictSource.id() + "/reverse")
+                        .with(csrf())
+                        .param("reason", "客户退款")
+                        .param("idempotencyKey", "web-reverse-conflict"))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/payment-reverse-form"))
+                .andExpect(model().attributeHasFieldErrors("reverseForm", "idempotencyKey"))
+                .andExpect(content().string(containsString(
+                        "该幂等键已被其他请求使用，请更换后重试")));
     }
 }

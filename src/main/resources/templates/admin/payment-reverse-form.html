@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{admin/layout :: shell(${reverseActionLabel}, ${activeNav}, ~{::main})}">
+<main class="content content-narrow">
+    <div class="page-heading">
+        <div>
+            <p class="eyebrow">不可撤销资金命令</p>
+            <h1 th:text="${reverseActionLabel}">发起全额退款</h1>
+        </div>
+        <a class="button button-secondary" th:href="@{/admin/payments/{id}(id=${payment.id})}">返回交易详情</a>
+    </div>
+
+    <dl class="definition-grid">
+        <div><dt>原交易类型</dt><dd th:text="${paymentTypeLabel}">充值</dd></div>
+        <div><dt>原交易金额</dt><dd>人民币 <span th:text="${paymentAmount}">0.00</span></dd></div>
+        <div><dt>付款账户</dt><dd class="mono" th:text="${payment.payerAccountId ?: '无'}">无</dd></div>
+        <div><dt>收款账户</dt><dd class="mono" th:text="${payment.payeeAccountId ?: '无'}">无</dd></div>
+        <div><dt>业务流水号</dt><dd class="mono" th:text="${payment.channelReference}">PAY-001</dd></div>
+    </dl>
+
+    <form class="form-surface" method="post"
+          th:action="@{/admin/payments/{id}/reverse(id=${payment.id})}" th:object="${reverseForm}">
+        <input type="hidden" th:name="${_csrf.parameterName}" th:value="${_csrf.token}">
+        <div class="alert alert-error" th:if="${#fields.hasGlobalErrors()}"
+             th:each="error : ${#fields.globalErrors()}" th:text="${error}">操作失败</div>
+        <div class="field" th:classappend="${#fields.hasErrors('reason')} ? ' field-invalid'">
+            <label for="reason">退款或冲正原因</label>
+            <textarea id="reason" rows="4" maxlength="500" th:field="*{reason}"></textarea>
+            <p id="reason-error" class="field-error" th:if="${#fields.hasErrors('reason')}"
+               th:errors="*{reason}">原因无效</p>
+            <small>请记录可审计的业务原因，最多500个字符</small>
+        </div>
+        <div class="field" th:classappend="${#fields.hasErrors('idempotencyKey')} ? ' field-invalid'">
+            <label for="idempotencyKey">幂等键</label>
+            <input id="idempotencyKey" type="text" maxlength="128" autocomplete="off"
+                   th:field="*{idempotencyKey}">
+            <p id="idempotencyKey-error" class="field-error"
+               th:if="${#fields.hasErrors('idempotencyKey')}" th:errors="*{idempotencyKey}">幂等键无效</p>
+            <small>一次操作使用一个唯一键，失败重试时请更换</small>
+        </div>
+        <div class="form-actions">
+            <a class="button button-secondary" th:href="@{/admin/payments/{id}(id=${payment.id})}">取消</a>
+            <button class="button button-primary" type="submit" th:text="${reverseActionLabel}">发起全额退款</button>
+        </div>
+    </form>
+</main>
+</html>

@@ -193,6 +193,7 @@ public class PaymentsWebController {
     private void addRecentPayments(Model model) {
         model.addAttribute("recentPayments", paymentsApi.findRecent(20).stream()
                 .map(payment -> new PaymentRow(
+                        payment.id(),
                         payment.channelReference(),
                         payment.type(),
                         paymentTypeLabel(payment.type()),
@@ -215,11 +216,14 @@ public class PaymentsWebController {
         return switch (type) {
             case "TOP_UP" -> "充值";
             case "TRANSFER" -> "转账";
+            case "REFUND" -> "退款";
+            case "REVERSAL" -> "冲正";
             default -> type;
         };
     }
 
     public record PaymentRow(
+            UUID id,
             String channelReference,
             String type,
             String typeLabel,

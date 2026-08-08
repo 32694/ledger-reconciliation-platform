@@ -42,7 +42,8 @@
                 <thead><tr><th>业务流水号</th><th>类型</th><th class="numeric">金额</th><th>状态</th></tr></thead>
                 <tbody>
                 <tr th:each="payment : ${recentPayments}">
-                    <td class="mono" th:text="${payment.channelReference}">PAY-001</td>
+                    <td><a class="text-link mono" th:href="@{/admin/payments/{id}(id=${payment.id})}"
+                           th:text="${payment.channelReference}">PAY-001</a></td>
                     <td th:text="${payment.typeLabel}">充值</td>
                     <td class="numeric">人民币 <span th:text="${payment.amount}">0.00</span></td>
                     <td><span class="status" th:classappend="${payment.status == 'SUCCEEDED'} ? ' status-success' : ' status-danger'" th:text="${payment.statusLabel}">成功</span></td>
