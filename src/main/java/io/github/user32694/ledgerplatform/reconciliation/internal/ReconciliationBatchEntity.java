@@ -110,6 +110,53 @@ class ReconciliationBatchEntity {
         return id;
     }
 
+    BatchStatus status() {
+        return status;
+    }
+
+    Instant periodStart() {
+        return periodStart;
+    }
+
+    Instant periodEnd() {
+        return periodEnd;
+    }
+
+    int totalRows() {
+        return totalRows;
+    }
+
+    void start(Instant now) {
+        if (status != BatchStatus.IMPORTED && status != BatchStatus.RECONCILIATION_FAILED) {
+            throw new IllegalStateException("Batch cannot start from " + status);
+        }
+        status = BatchStatus.RUNNING;
+        startedAt = now;
+        completedAt = null;
+        errorMessage = null;
+    }
+
+    void complete(int matchedRows, int differenceRows, Instant now) {
+        requireRunning();
+        status = BatchStatus.COMPLETED;
+        this.matchedRows = matchedRows;
+        this.differenceRows = differenceRows;
+        completedAt = now;
+    }
+
+    void failReconciliation(String message, Instant now) {
+        requireRunning();
+        status = BatchStatus.RECONCILIATION_FAILED;
+        errorMessage = message;
+        completedAt = now;
+    }
+
+    private void requireRunning() {
+        if (status != BatchStatus.RUNNING) {
+            throw new IllegalStateException("Batch is not running");
+        }
+    }
+
     ReconciliationBatchView toView() {
         return new ReconciliationBatchView(
                 id,

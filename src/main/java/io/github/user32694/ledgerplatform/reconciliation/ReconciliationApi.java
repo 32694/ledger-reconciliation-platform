@@ -9,4 +9,9 @@ public interface ReconciliationApi {
     List<ReconciliationBatchView> findBatches();
 
     ReconciliationBatchView getBatch(UUID batchId);
+
+    ReconciliationBatchView run(UUID batchId);
+
+    List<ReconciliationResultView> findResults(
+            UUID batchId, ResultType resultType, ResolutionStatus resolutionStatus);
 }

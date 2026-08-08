@@ -1,6 +1,7 @@
 package io.github.user32694.ledgerplatform.reconciliation.internal;
 
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationBatchView;
+import io.github.user32694.ledgerplatform.reconciliation.BatchStatus;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -13,12 +14,15 @@ import org.springframework.transaction.annotation.Transactional;
 class ReconciliationStore {
     private final ReconciliationBatchRepository batchRepository;
     private final ChannelStatementEntryRepository entryRepository;
+    private final ReconciliationResultRepository resultRepository;
 
     ReconciliationStore(
             ReconciliationBatchRepository batchRepository,
-            ChannelStatementEntryRepository entryRepository) {
+            ChannelStatementEntryRepository entryRepository,
+            ReconciliationResultRepository resultRepository) {
         this.batchRepository = batchRepository;
         this.entryRepository = entryRepository;
+        this.resultRepository = resultRepository;
     }
 
     @Transactional(readOnly = true)
@@ -69,6 +73,65 @@ class ReconciliationStore {
     ReconciliationBatchView getBatch(UUID batchId) {
         return batchRepository.findById(batchId)
                 .map(ReconciliationBatchEntity::toView)
+                .orElseThrow(() -> new IllegalArgumentException("Batch does not exist: " + batchId));
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    ReconciliationBatchView markRunningOrReturnCompleted(UUID batchId) {
+        var batch = findEntity(batchId);
+        if (batch.status() == BatchStatus.COMPLETED) {
+            return batch.toView();
+        }
+        if (batch.status() == BatchStatus.RUNNING) {
+            throw new IllegalStateException("Batch is already running");
+        }
+        batch.start(Instant.now());
+        return batch.toView();
+    }
+
+    @Transactional(readOnly = true)
+    List<ReconciliationMatcher.StatementEntrySnapshot> findStatementEntries(UUID batchId) {
+        return entryRepository.findAllByBatchIdOrderByLineNumber(batchId).stream()
+                .map(entry -> new ReconciliationMatcher.StatementEntrySnapshot(
+                        entry.id(),
+                        entry.lineNumber(),
+                        entry.channelTransactionId(),
+                        entry.amountCents(),
+                        entry.occurredAt()))
+                .toList();
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    ReconciliationBatchView replaceResultsAndComplete(
+            UUID batchId, List<ReconciliationMatcher.ResultDraft> drafts) {
+        var batch = findEntity(batchId);
+        resultRepository.deleteAllByBatchId(batchId);
+        resultRepository.flush();
+        resultRepository.saveAll(drafts.stream()
+                .map(draft -> ReconciliationResultEntity.from(batchId, draft, Instant.now()))
+                .toList());
+        int matchedRows = (int) drafts.stream()
+                .filter(draft -> draft.resultType().name().equals("MATCHED"))
+                .count();
+        batch.complete(matchedRows, drafts.size() - matchedRows, Instant.now());
+        return batch.toView();
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    void markReconciliationFailed(UUID batchId, String message) {
+        var batch = findEntity(batchId);
+        if (batch.status() == BatchStatus.RUNNING) {
+            batch.failReconciliation(message, Instant.now());
+        }
+    }
+
+    @Transactional(readOnly = true)
+    List<ReconciliationResultEntity> findResults(UUID batchId) {
+        return resultRepository.findAllByBatchId(batchId);
+    }
+
+    private ReconciliationBatchEntity findEntity(UUID batchId) {
+        return batchRepository.findById(batchId)
                 .orElseThrow(() -> new IllegalArgumentException("Batch does not exist: " + batchId));
     }
 }

@@ -1,8 +1,14 @@
 package io.github.user32694.ledgerplatform.reconciliation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.user32694.ledgerplatform.accounts.AccountsApi;
+import io.github.user32694.ledgerplatform.payments.PaymentView;
+import io.github.user32694.ledgerplatform.payments.PaymentsApi;
+import io.github.user32694.ledgerplatform.payments.TopUpCommand;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -41,6 +47,8 @@ import org.springframework.test.context.jdbc.Sql.ExecutionPhase;
 }, executionPhase = ExecutionPhase.AFTER_TEST_METHOD)
 class ReconciliationModuleTest {
     @Autowired ReconciliationApi reconciliationApi;
+    @Autowired PaymentsApi paymentsApi;
+    @Autowired AccountsApi accountsApi;
     @Autowired JdbcTemplate jdbcTemplate;
 
     @Test
@@ -104,6 +112,65 @@ class ReconciliationModuleTest {
                 "hash.csv", csv("CH-HASH,1,2026-01-15T09:30:00Z\n"), "admin"));
 
         assertThat(batch.fileSha256()).matches("[0-9a-f]{64}");
+    }
+
+    @Test
+    void runsExactMatchingForAllFourResultTypes() {
+        var account = accountsApi.create("Matching Customer");
+        PaymentView matched = paymentsApi.topUp(new TopUpCommand("match-1", account.id(), 100));
+        PaymentView mismatch = paymentsApi.topUp(new TopUpCommand("mismatch-1", account.id(), 200));
+        PaymentView internalOnly = paymentsApi.topUp(new TopUpCommand("internal-only-1", account.id(), 300));
+        String rows = String.join("\n",
+                row(matched.channelReference(), 100, matched.occurredAt()),
+                row(mismatch.channelReference(), 201, mismatch.occurredAt()),
+                row("CHANNEL-ONLY", 400, internalOnly.occurredAt())) + "\n";
+
+        var batch = reconciliationApi.importStatement(
+                new StatementUpload("matching.csv", csv(rows), "admin"));
+        var completed = reconciliationApi.run(batch.id());
+
+        assertThat(completed.status()).isEqualTo(BatchStatus.COMPLETED);
+        assertThat(completed.matchedRows()).isEqualTo(1);
+        assertThat(completed.differenceRows()).isEqualTo(3);
+        assertThat(reconciliationApi.findResults(batch.id(), null, null))
+                .extracting(ReconciliationResultView::resultType)
+                .containsExactly(
+                        ResultType.AMOUNT_MISMATCH,
+                        ResultType.CHANNEL_ONLY,
+                        ResultType.INTERNAL_ONLY,
+                        ResultType.MATCHED);
+    }
+
+    @Test
+    void completedBatchRunIsIdempotent() {
+        var batch = reconciliationApi.importStatement(new StatementUpload(
+                "rerun.csv", csv("CH-RERUN,1,2026-01-15T09:30:00Z\n"), "admin"));
+        var completed = reconciliationApi.run(batch.id());
+        var firstResultIds = reconciliationApi.findResults(batch.id(), null, null).stream()
+                .map(ReconciliationResultView::id)
+                .toList();
+
+        var repeated = reconciliationApi.run(batch.id());
+
+        assertThat(repeated).isEqualTo(completed);
+        assertThat(reconciliationApi.findResults(batch.id(), null, null).stream()
+                .map(ReconciliationResultView::id)
+                .toList()).containsExactlyElementsOf(firstResultIds);
+    }
+
+    @Test
+    void importFailedBatchCannotRun() {
+        var batch = reconciliationApi.importStatement(new StatementUpload(
+                "cannot-run.csv", csv("CH-BAD,nope,2026-01-15T09:30:00Z\n"), "admin"));
+
+        assertThatThrownBy(() -> reconciliationApi.run(batch.id()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("IMPORT_FAILED");
+        assertThat(reconciliationApi.getBatch(batch.id()).status()).isEqualTo(BatchStatus.IMPORT_FAILED);
+    }
+
+    private static String row(String channelReference, long amountCents, Instant occurredAt) {
+        return channelReference + "," + amountCents + "," + occurredAt;
     }
 
     private static byte[] csv(String rows) {

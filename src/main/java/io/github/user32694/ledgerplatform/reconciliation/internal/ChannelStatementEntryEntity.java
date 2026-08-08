@@ -40,4 +40,24 @@ class ChannelStatementEntryEntity {
         entity.occurredAt = entry.occurredAt();
         return entity;
     }
+
+    UUID id() {
+        return id;
+    }
+
+    int lineNumber() {
+        return lineNumber;
+    }
+
+    String channelTransactionId() {
+        return channelTransactionId;
+    }
+
+    long amountCents() {
+        return amountCents;
+    }
+
+    Instant occurredAt() {
+        return occurredAt;
+    }
 }
