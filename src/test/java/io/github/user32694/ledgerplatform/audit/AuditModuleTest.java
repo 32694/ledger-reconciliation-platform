@@ -3,6 +3,7 @@ package io.github.user32694.ledgerplatform.audit;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.UUID;
@@ -68,11 +69,11 @@ class AuditModuleTest {
                 "TRANSFER-1"));
         jdbcTemplate.update(
                 "UPDATE audit.audit_event SET occurred_at = ? WHERE id = ?",
-                Instant.parse("2026-08-08T01:00:00Z"),
+                Timestamp.from(Instant.parse("2026-08-08T01:00:00Z")),
                 older.id());
         jdbcTemplate.update(
                 "UPDATE audit.audit_event SET occurred_at = ? WHERE id = ?",
-                Instant.parse("2026-08-08T02:00:00Z"),
+                Timestamp.from(Instant.parse("2026-08-08T02:00:00Z")),
                 newer.id());
 
         assertThat(jdbcTemplate.queryForObject(
@@ -121,7 +122,7 @@ class AuditModuleTest {
         var third = auditApi.record(command(
                 AuditAction.ACCOUNT_CREATE, "ACCOUNT", "a-3", "third", null));
         Instant sameTime = Instant.parse("2026-08-08T03:00:00Z");
-        jdbcTemplate.update("UPDATE audit.audit_event SET occurred_at = ?", sameTime);
+        jdbcTemplate.update("UPDATE audit.audit_event SET occurred_at = ?", Timestamp.from(sameTime));
 
         var expectedIds = java.util.stream.Stream.of(first.id(), second.id(), third.id())
                 .map(UUID::toString)
