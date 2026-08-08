@@ -5,6 +5,7 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 
 @Entity
@@ -37,7 +38,7 @@ class ChannelStatementEntryEntity {
         entity.lineNumber = entry.lineNumber();
         entity.channelTransactionId = entry.channelTransactionId();
         entity.amountCents = entry.amountCents();
-        entity.occurredAt = entry.occurredAt();
+        entity.occurredAt = entry.occurredAt().truncatedTo(ChronoUnit.MICROS);
         return entity;
     }
 

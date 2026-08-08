@@ -9,6 +9,7 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 
 @Entity
@@ -50,7 +51,7 @@ class ReconciliationResultEntity {
         entity.paymentId = draft.paymentId();
         entity.resultType = draft.resultType();
         entity.resolutionStatus = draft.resolutionStatus();
-        entity.createdAt = createdAt;
+        entity.createdAt = createdAt.truncatedTo(ChronoUnit.MICROS);
         return entity;
     }
 

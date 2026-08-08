@@ -6,6 +6,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import jakarta.persistence.Version;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
@@ -63,13 +64,13 @@ class PaymentInstructionEntity {
     void succeed(Instant completedAt) {
         status = "SUCCEEDED";
         failureReason = null;
-        this.completedAt = completedAt;
+        this.completedAt = completedAt.truncatedTo(ChronoUnit.MICROS);
     }
 
     void fail(String failureReason, Instant completedAt) {
         status = "FAILED";
         this.failureReason = failureReason;
-        this.completedAt = completedAt;
+        this.completedAt = completedAt.truncatedTo(ChronoUnit.MICROS);
     }
 
     UUID id() {

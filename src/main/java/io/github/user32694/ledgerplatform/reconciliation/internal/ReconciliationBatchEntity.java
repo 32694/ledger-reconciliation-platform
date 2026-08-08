@@ -10,6 +10,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import jakarta.persistence.Version;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
@@ -83,12 +84,12 @@ class ReconciliationBatchEntity {
         batch.sourceType = "SYNTHETIC_CHANNEL";
         batch.fileName = fileName;
         batch.fileSha256 = fileSha256;
-        batch.periodStart = periodStart;
-        batch.periodEnd = periodEnd;
+        batch.periodStart = normalize(periodStart);
+        batch.periodEnd = normalize(periodEnd);
         batch.status = BatchStatus.IMPORTED;
         batch.totalRows = totalRows;
         batch.createdBy = createdBy;
-        batch.createdAt = createdAt;
+        batch.createdAt = normalize(createdAt);
         return batch;
     }
 
@@ -102,7 +103,7 @@ class ReconciliationBatchEntity {
         batch.status = BatchStatus.IMPORT_FAILED;
         batch.errorMessage = errorMessage;
         batch.createdBy = createdBy;
-        batch.createdAt = createdAt;
+        batch.createdAt = normalize(createdAt);
         return batch;
     }
 
@@ -131,7 +132,7 @@ class ReconciliationBatchEntity {
             throw new IllegalStateException("Batch cannot start from " + status);
         }
         status = BatchStatus.RUNNING;
-        startedAt = now;
+        startedAt = normalize(now);
         completedAt = null;
         errorMessage = null;
     }
@@ -141,20 +142,24 @@ class ReconciliationBatchEntity {
         status = BatchStatus.COMPLETED;
         this.matchedRows = matchedRows;
         this.differenceRows = differenceRows;
-        completedAt = now;
+        completedAt = normalize(now);
     }
 
     void failReconciliation(String message, Instant now) {
         requireRunning();
         status = BatchStatus.RECONCILIATION_FAILED;
         errorMessage = message;
-        completedAt = now;
+        completedAt = normalize(now);
     }
 
     private void requireRunning() {
         if (status != BatchStatus.RUNNING) {
             throw new IllegalStateException("Batch is not running");
         }
+    }
+
+    private static Instant normalize(Instant value) {
+        return value.truncatedTo(ChronoUnit.MICROS);
     }
 
     ReconciliationBatchView toView() {
