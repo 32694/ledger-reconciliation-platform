@@ -45,6 +45,7 @@ import org.springframework.test.web.servlet.MockMvc;
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 @Sql(statements = {
+    "DELETE FROM audit.audit_event",
     "DELETE FROM payments.payment_instruction",
     "DELETE FROM accounts.customer_account",
     "DELETE FROM ledger.ledger_entry",
@@ -52,6 +53,7 @@ import org.springframework.test.web.servlet.MockMvc;
     "DELETE FROM ledger.ledger_account"
 }, executionPhase = ExecutionPhase.BEFORE_TEST_METHOD)
 @Sql(statements = {
+    "DELETE FROM audit.audit_event",
     "DELETE FROM payments.payment_instruction",
     "DELETE FROM accounts.customer_account",
     "DELETE FROM ledger.ledger_entry",
@@ -823,21 +825,27 @@ class AdminWebTest {
                 .andExpect(content().string(containsString(successMarker)))
                 .andExpect(content().string(containsString(failureMarker)));
 
-        int existingEventCount = auditApi.findRecent(null, null, 100).size();
-        for (int index = existingEventCount; index < 100; index++) {
+        for (int index = 0; index < 101; index++) {
+            String aggregateId = "audit-limit-" + index;
             auditApi.record(new AuditCommand(
                     null,
                     AuditAction.RECONCILIATION_RUN,
                     "RECONCILIATION_BATCH",
-                    "audit-limit-" + index + "-" + UUID.randomUUID(),
+                    aggregateId,
                     AuditOutcome.SUCCEEDED,
                     "limit marker " + index,
                     null));
+            jdbcTemplate.update(
+                    "UPDATE audit.audit_event SET occurred_at = ? WHERE aggregate_id = ?",
+                    Timestamp.from(Instant.parse("2026-01-01T00:00:00Z").plusSeconds(index)),
+                    aggregateId);
         }
 
         mockMvc.perform(get("/admin/audit"))
                 .andExpect(status().isOk())
-                .andExpect(model().attribute("events", hasSize(100)));
+                .andExpect(model().attribute("events", hasSize(100)))
+                .andExpect(content().string(containsString("audit-limit-100")))
+                .andExpect(content().string(not(containsString("audit-limit-0"))));
     }
 
     @Test
