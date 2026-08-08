@@ -179,6 +179,27 @@ class MigrationIntegrationTest {
 
     @Test
     @Transactional
+    void rejectsReversePaymentsWithoutAnOriginalPayment() {
+        var payeeId = insertCustomerAccount();
+
+        assertThatThrownBy(() -> insertPayment(
+                        "REFUND", null, payeeId, "FAILED", null, "missing original"))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    @Transactional
+    void rejectsReversePaymentsWithoutAnOperationReason() {
+        var payeeId = insertCustomerAccount();
+        var originalId = insertPayment("TOP_UP", null, payeeId, "SUCCEEDED", null, null);
+
+        assertThatThrownBy(() -> insertPayment(
+                        "REFUND", null, payeeId, "FAILED", originalId, null))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    @Transactional
     void rejectsOriginalPaymentTypesWithReverseFields() {
         var payeeId = insertCustomerAccount();
         var originalId = insertPayment("TOP_UP", null, payeeId, "SUCCEEDED", null, null);
