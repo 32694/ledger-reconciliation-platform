@@ -117,16 +117,22 @@ public class PaymentDetailsWebController {
 
     private void addDetailData(Model model, PaymentView payment) {
         Optional<PaymentView> activeReverse = paymentsApi.findActiveReverse(payment.id());
+        Optional<PaymentView> succeededReverse = activeReverse
+                .filter(reverse -> "SUCCEEDED".equals(reverse.status()));
         model.addAttribute("payment", payment);
         model.addAttribute("paymentTypeLabel", paymentTypeLabel(payment.type()));
         model.addAttribute("paymentStatusLabel", paymentStatusLabel(payment.status()));
         model.addAttribute("paymentFailureLabel", failureReasonLabel(payment.failureReason()));
         model.addAttribute("paymentAmount", BigDecimal.valueOf(payment.amountCents(), 2));
-        model.addAttribute("reversePayment", activeReverse.orElse(null));
+        model.addAttribute("reversePayment", succeededReverse.orElse(null));
+        model.addAttribute("reverseProcessingLabel", activeReverse
+                .filter(reverse -> "PENDING".equals(reverse.status()))
+                .map(reverse -> processingLabel(reverse.type()))
+                .orElse(null));
         model.addAttribute("eligible", isEligible(payment, activeReverse));
         model.addAttribute("reverseActionLabel", reverseActionLabel(payment.type()));
         model.addAttribute("completionLabel", completionLabel(payment.type()));
-        model.addAttribute("reverseCompletionLabel", activeReverse
+        model.addAttribute("reverseCompletionLabel", succeededReverse
                 .map(reverse -> completionLabel(reverse.type()))
                 .orElse(null));
         model.addAttribute("activeNav", "payments");
@@ -198,7 +204,7 @@ public class PaymentDetailsWebController {
         return switch (failureReason) {
             case "INSUFFICIENT_FUNDS" -> "余额不足";
             case "BALANCE_LIMIT_EXCEEDED" -> "账户余额超出系统支持范围";
-            default -> failureReason;
+            default -> "处理失败，请查看审计日志";
         };
     }
 
@@ -211,6 +217,14 @@ public class PaymentDetailsWebController {
             case "REFUND" -> "全额退款";
             case "REVERSAL" -> "全额冲正";
             default -> null;
+        };
+    }
+
+    private static String processingLabel(String type) {
+        return switch (type) {
+            case "REFUND" -> "全额退款处理中";
+            case "REVERSAL" -> "全额冲正处理中";
+            default -> "反向交易处理中";
         };
     }
 

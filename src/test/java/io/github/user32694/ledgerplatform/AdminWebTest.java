@@ -18,11 +18,14 @@ import io.github.user32694.ledgerplatform.payments.PaymentsApi;
 import io.github.user32694.ledgerplatform.payments.ReversePaymentCommand;
 import io.github.user32694.ledgerplatform.payments.TopUpCommand;
 import io.github.user32694.ledgerplatform.payments.TransferCommand;
+import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.jdbc.Sql;
@@ -53,6 +56,7 @@ class AdminWebTest {
     @Autowired MockMvc mockMvc;
     @Autowired AccountsApi accountsApi;
     @Autowired PaymentsApi paymentsApi;
+    @Autowired JdbcTemplate jdbcTemplate;
 
     @Test
     void redirectsAnonymousAdministratorToLogin() throws Exception {
@@ -528,6 +532,62 @@ class AdminWebTest {
                 .andExpect(content().string(matchesPattern(
                         "(?s).*<a[^>]*href=\"" + detailPath + "\"[^>]*>"
                                 + payment.channelReference() + "</a>.*")));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void rendersPendingRefundAsProcessingWithoutSuccessfulReverseLink() throws Exception {
+        var account = accountsApi.create("退款处理中客户");
+        var original = paymentsApi.topUp(new TopUpCommand(
+                "web-pending-refund-source-" + UUID.randomUUID(), account.id(), 500));
+        UUID pendingRefundId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO payments.payment_instruction
+                    (id, idempotency_key, request_fingerprint, channel_reference, payment_type,
+                     payer_account_id, payee_account_id, amount_cents, currency, status,
+                     failure_reason, version, created_at, completed_at,
+                     original_payment_id, operation_reason)
+                VALUES (?, ?, ?, ?, 'REFUND', NULL, ?, 500, 'CNY', 'PENDING',
+                        NULL, 0, ?, NULL, ?, ?)
+                """,
+                pendingRefundId,
+                "web-pending-refund-" + pendingRefundId,
+                "p".repeat(64),
+                "REFUND-" + pendingRefundId,
+                account.id(),
+                Timestamp.from(Instant.now()),
+                original.id(),
+                "等待退款处理");
+
+        mockMvc.perform(get("/admin/payments/" + original.id()))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("全额退款处理中")))
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        containsString("已完成全额退款"))))
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        containsString("/admin/payments/" + pendingRefundId))))
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        containsString("id=\"reverse-payment-action\""))));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void hidesUnknownFailureReasonBehindChineseMessage() throws Exception {
+        var payer = accountsApi.create("未知失败付款人");
+        var payee = accountsApi.create("未知失败收款人");
+        var failed = paymentsApi.transfer(new TransferCommand(
+                "web-unknown-failure-" + UUID.randomUUID(), payer.id(), payee.id(), 100));
+        jdbcTemplate.update("""
+                UPDATE payments.payment_instruction
+                SET failure_reason = 'UNEXPECTED_GATEWAY_ERROR'
+                WHERE id = ?
+                """, failed.id());
+
+        mockMvc.perform(get("/admin/payments/" + failed.id()))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("处理失败，请查看审计日志")))
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        containsString("UNEXPECTED_GATEWAY_ERROR"))));
     }
 
     @Test
