@@ -599,6 +599,50 @@ class TopUpModuleTest {
     }
 
     @Test
+    void rejectsNullReverseIdempotencyKeyWithoutMutation() {
+        assertRejectedReverseWithoutMutation(new ReversePaymentCommand(
+                null, UUID.randomUUID(), "Customer refund"))
+                .hasMessage("Idempotency key is required");
+    }
+
+    @Test
+    void rejectsBlankReverseIdempotencyKeyWithoutMutation() {
+        assertRejectedReverseWithoutMutation(new ReversePaymentCommand(
+                " \t ", UUID.randomUUID(), "Customer refund"))
+                .hasMessage("Idempotency key is required");
+    }
+
+    @Test
+    void rejectsReverseIdempotencyKeyLongerThan128UnicodeCodePointsWithoutMutation() {
+        String supplementaryCharacter = new String(Character.toChars(0x10400));
+
+        assertRejectedReverseWithoutMutation(new ReversePaymentCommand(
+                supplementaryCharacter.repeat(129), UUID.randomUUID(), "Customer refund"))
+                .hasMessage("Idempotency key must not exceed 128 characters");
+    }
+
+    @Test
+    void rejectsNulInReverseIdempotencyKeyWithoutMutation() {
+        assertRejectedReverseWithoutMutation(new ReversePaymentCommand(
+                "invalid\0key", UUID.randomUUID(), "Customer refund"))
+                .hasMessage("Idempotency key must not contain control characters");
+    }
+
+    @Test
+    void rejectsControlCharactersInReverseIdempotencyKeyWithoutMutation() {
+        assertRejectedReverseWithoutMutation(new ReversePaymentCommand(
+                "invalid\u001Fkey", UUID.randomUUID(), "Customer refund"))
+                .hasMessage("Idempotency key must not contain control characters");
+    }
+
+    @Test
+    void rejectsNullReverseReasonWithoutMutation() {
+        assertRejectedReverseWithoutMutation(new ReversePaymentCommand(
+                "null-reason-refund", UUID.randomUUID(), null))
+                .hasMessage("Reverse payment reason is required");
+    }
+
+    @Test
     void rejectsBlankReverseReasonWithoutMutation() {
         assertRejectedReverseWithoutMutation(new ReversePaymentCommand(
                 "blank-reason-refund", UUID.randomUUID(), " \t "))
@@ -618,6 +662,13 @@ class TopUpModuleTest {
     void rejectsControlCharactersInReverseReasonWithoutMutation() {
         assertRejectedReverseWithoutMutation(new ReversePaymentCommand(
                 "control-reason-refund", UUID.randomUUID(), "invalid\u001Freason"))
+                .hasMessage("Reverse payment reason must not contain control characters");
+    }
+
+    @Test
+    void rejectsNulInReverseReasonWithoutMutation() {
+        assertRejectedReverseWithoutMutation(new ReversePaymentCommand(
+                "nul-reason-refund", UUID.randomUUID(), "invalid\0reason"))
                 .hasMessage("Reverse payment reason must not contain control characters");
     }
 
