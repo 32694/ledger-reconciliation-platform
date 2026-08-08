@@ -10,7 +10,10 @@ public record Journal(String businessReference, String type, List<JournalEntry> 
         if (businessReference.length() > 128) {
             throw new IllegalArgumentException("Business reference must not exceed 128 characters");
         }
-        if (!"TOP_UP".equals(type) && !"TRANSFER".equals(type)) {
+        if (!"TOP_UP".equals(type)
+                && !"TRANSFER".equals(type)
+                && !"REFUND".equals(type)
+                && !"REVERSAL".equals(type)) {
             throw new IllegalArgumentException("Unsupported journal type");
         }
         if (entries == null || entries.size() < 2) {

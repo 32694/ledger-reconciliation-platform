@@ -48,6 +48,14 @@ class MigrationImmutabilityTest {
                 "dcf99cb7f678f65ca7e7780c76b2c84cd4223339dc71f6fa2ea6b8d6662b0f51");
     }
 
+    @Test
+    void v11MatchesThePublishedReverseJournalMigration()
+            throws IOException, NoSuchAlgorithmException {
+        assertMigrationDigest(
+                "V11__allow_reverse_journal_types.sql",
+                "34c99f7b048a42769ee9514d1ab663c661e57758068b02d4e905a32b8f09099f");
+    }
+
     private void assertMigrationDigest(String name, String expected)
             throws IOException, NoSuchAlgorithmException {
         var digest = MessageDigest.getInstance("SHA-256").digest(readMigration(name));

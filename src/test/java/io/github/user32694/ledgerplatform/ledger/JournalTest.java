@@ -58,8 +58,20 @@ class JournalTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> Journal.create("TOPUP-5", " ", entries))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> Journal.create("TOPUP-5", "REFUND", entries))
+        assertThatThrownBy(() -> Journal.create("TOPUP-5", "UNKNOWN", entries))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void acceptsReversePaymentTypes() {
+        List<JournalEntry> entries = List.of(
+                new JournalEntry(wallet, EntrySide.DEBIT, Money.cny(5000)),
+                new JournalEntry(cash, EntrySide.CREDIT, Money.cny(5000)));
+
+        assertThat(Journal.create("REFUND-1", "REFUND", entries).type())
+                .isEqualTo("REFUND");
+        assertThat(Journal.create("REVERSAL-1", "REVERSAL", entries).type())
+                .isEqualTo("REVERSAL");
     }
 
     @Test

@@ -104,13 +104,49 @@ class MigrationIntegrationTest {
     }
 
     @Test
-    void appliesReversePaymentMigrationBeforeAuditMigration() {
+    void appliesReversePaymentAndAuditMigrationsBeforeReverseJournalMigration() {
         assertThat(jdbcTemplate.queryForList("""
                 SELECT version
                 FROM flyway_schema_history
-                WHERE version IN ('9', '10') AND success
+                WHERE version IN ('9', '10', '11') AND success
                 ORDER BY installed_rank
-                """, String.class)).containsExactly("9", "10");
+                """, String.class)).containsExactly("9", "10", "11");
+    }
+
+    @Test
+    @Transactional
+    void allowsReverseJournalTypesAndRejectsUnknownTypesAfterV11() {
+        assertThat(jdbcTemplate.queryForMap("""
+                SELECT COUNT(*) AS migration_count, MAX(version::integer) AS latest_version
+                FROM flyway_schema_history
+                WHERE success
+                """))
+                .containsEntry("migration_count", 11L)
+                .containsEntry("latest_version", 11);
+
+        var refundId = UUID.randomUUID();
+        var reversalId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO ledger.ledger_transaction
+                    (id, business_reference, transaction_type, occurred_at)
+                VALUES (?, ?, 'REFUND', CURRENT_TIMESTAMP)
+                """, refundId, "MIGRATION-REFUND-" + refundId);
+        jdbcTemplate.update("""
+                INSERT INTO ledger.ledger_transaction
+                    (id, business_reference, transaction_type, occurred_at)
+                VALUES (?, ?, 'REVERSAL', CURRENT_TIMESTAMP)
+                """, reversalId, "MIGRATION-REVERSAL-" + reversalId);
+
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM ledger.ledger_transaction
+                WHERE id IN (?, ?)
+                """, Integer.class, refundId, reversalId)).isEqualTo(2);
+        assertThatThrownBy(() -> jdbcTemplate.update("""
+                INSERT INTO ledger.ledger_transaction
+                    (id, business_reference, transaction_type, occurred_at)
+                VALUES (?, ?, 'UNKNOWN', CURRENT_TIMESTAMP)
+                """, UUID.randomUUID(), "MIGRATION-UNKNOWN-" + UUID.randomUUID()))
+                .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
@@ -207,7 +243,7 @@ class MigrationIntegrationTest {
                 """, Boolean.class);
         assumeTrue(
                 Boolean.TRUE.equals(canCreateDatabase),
-                "V8-to-V10 upgrade test requires a database-creating test role");
+                "V8-to-V11 upgrade test requires a database-creating test role");
 
         var databaseName = "ledger_migration_test_" + UUID.randomUUID().toString().replace("-", "");
         var temporaryDatasourceUrl = datasourceUrlFor(databaseName);
@@ -244,9 +280,9 @@ class MigrationIntegrationTest {
             assertThat(legacyDatabase.queryForList("""
                     SELECT version
                     FROM flyway_schema_history
-                    WHERE version IN ('9', '10') AND success
+                    WHERE version IN ('9', '10', '11') AND success
                     ORDER BY installed_rank
-                    """, String.class)).containsExactly("9", "10");
+                    """, String.class)).containsExactly("9", "10", "11");
         } finally {
             dropTemporaryDatabase(databaseName);
         }
