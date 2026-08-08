@@ -77,4 +77,22 @@ class ReconciliationResultEntity {
     ResolutionStatus resolutionStatus() {
         return resolutionStatus;
     }
+
+    ReconciliationResolutionEntity resolve(String note, String operator, Instant resolvedAt) {
+        if (resultType == ResultType.MATCHED) {
+            throw new IllegalStateException("MATCHED result does not require resolution");
+        }
+        if (resolutionStatus != ResolutionStatus.OPEN) {
+            throw new IllegalStateException("Result is already resolved");
+        }
+        if (note == null || note.isBlank()) {
+            throw new IllegalArgumentException("Resolution note is required");
+        }
+        if (operator == null || operator.isBlank()) {
+            throw new IllegalArgumentException("Operator is required");
+        }
+        resolutionStatus = ResolutionStatus.RESOLVED;
+        return ReconciliationResolutionEntity.resolve(
+                id, note.strip(), operator.strip(), resolvedAt);
+    }
 }

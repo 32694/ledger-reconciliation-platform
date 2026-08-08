@@ -85,6 +85,9 @@ tbody tr:hover { background: #f8fbfa; }
 .field-invalid input, .field-invalid select { border-color: var(--danger); }
 .field-error { margin: 5px 0 0; color: var(--danger); font-size: 12px; }
 .form-actions { justify-content: flex-end; padding-top: 4px; }
+.filter-form { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.filter-form select { min-height: 34px; padding: 5px 8px; border: 1px solid #aeb8bf; border-radius: 3px; color: var(--ink); background: #fff; }
+.filter-form input { min-width: 150px; min-height: 34px; padding: 5px 8px; border: 1px solid #aeb8bf; border-radius: 3px; }
 .split-workspace { display: grid; grid-template-columns: minmax(320px, 420px) minmax(0, 1fr); gap: 22px; align-items: start; }
 .compact-table td, .compact-table th { height: 40px; padding-inline: 10px; }
 
@@ -107,4 +110,5 @@ tbody tr:hover { background: #f8fbfa; }
     .page-heading { align-items: flex-start; }
     .actions { flex-wrap: wrap; justify-content: flex-end; }
     .metrics, .split-workspace { grid-template-columns: minmax(0, 1fr); }
+    .filter-form { width: 100%; justify-content: flex-start; }
 }

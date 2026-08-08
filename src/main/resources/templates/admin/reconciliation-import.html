@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{admin/layout :: shell('导入渠道账单', ${activeNav}, ~{::main})}">
+<main class="content content-narrow">
+    <div class="page-heading">
+        <div>
+            <p class="eyebrow">模拟渠道</p>
+            <h1>导入渠道账单</h1>
+        </div>
+        <a class="button button-secondary" th:href="@{/admin/reconciliation}">返回批次</a>
+    </div>
+    <p class="alert alert-error" th:if="${importError}" th:text="${importError}">文件导入失败</p>
+    <section class="form-surface">
+        <form method="post" enctype="multipart/form-data" th:action="@{/admin/reconciliation/import}">
+            <input type="hidden" th:name="${_csrf.parameterName}" th:value="${_csrf.token}">
+            <div class="field">
+                <label for="file">CSV 文件</label>
+                <input id="file" name="file" type="file" accept=".csv,text/csv" required>
+                <small>固定表头：<span class="mono">channel_transaction_id,amount_cents,occurred_at</span></small>
+                <small>文件使用 UTF-8，最大 2 MB，最多 10,000 行数据。</small>
+            </div>
+            <div class="form-actions">
+                <button class="button button-primary" type="submit">导入账单</button>
+            </div>
+        </form>
+    </section>
+</main>
+</html>

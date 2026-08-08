@@ -169,6 +169,41 @@ class ReconciliationModuleTest {
         assertThat(reconciliationApi.getBatch(batch.id()).status()).isEqualTo(BatchStatus.IMPORT_FAILED);
     }
 
+    @Test
+    void resolvesDifferenceOnceWithAnAuditRecord() {
+        var batch = reconciliationApi.importStatement(new StatementUpload(
+                "resolve.csv", csv("CH-RESOLVE,1,2026-01-15T09:30:00Z\n"), "admin"));
+        reconciliationApi.run(batch.id());
+        var difference = reconciliationApi.findResults(batch.id(), ResultType.CHANNEL_ONLY, ResolutionStatus.OPEN)
+                .get(0);
+
+        var resolved = reconciliationApi.resolve(difference.id(), " 已核对渠道凭证 ", "operator-1");
+
+        assertThat(resolved.resolutionStatus()).isEqualTo(ResolutionStatus.RESOLVED);
+        assertThat(resolved.resolutionNote()).isEqualTo("已核对渠道凭证");
+        assertThat(resolved.resolvedBy()).isEqualTo("operator-1");
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM reconciliation.reconciliation_resolution", Integer.class)).isOne();
+        assertThatThrownBy(() -> reconciliationApi.resolve(
+                difference.id(), "second", "operator-2"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("already resolved");
+    }
+
+    @Test
+    void cannotResolveMatchedResult() {
+        var account = accountsApi.create("Already Matched");
+        var payment = paymentsApi.topUp(new TopUpCommand("resolve-match", account.id(), 1));
+        var batch = reconciliationApi.importStatement(new StatementUpload(
+                "matched.csv", csv(row(payment.channelReference(), 1, payment.occurredAt()) + "\n"), "admin"));
+        reconciliationApi.run(batch.id());
+        var matched = reconciliationApi.findResults(batch.id(), ResultType.MATCHED, null).get(0);
+
+        assertThatThrownBy(() -> reconciliationApi.resolve(matched.id(), "not needed", "operator"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("MATCHED");
+    }
+
     private static String row(String channelReference, long amountCents, Instant occurredAt) {
         return channelReference + "," + amountCents + "," + occurredAt;
     }

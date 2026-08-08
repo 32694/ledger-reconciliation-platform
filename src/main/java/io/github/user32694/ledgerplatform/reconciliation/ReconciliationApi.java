@@ -14,4 +14,6 @@ public interface ReconciliationApi {
 
     List<ReconciliationResultView> findResults(
             UUID batchId, ResultType resultType, ResolutionStatus resolutionStatus);
+
+    ReconciliationResultView resolve(UUID resultId, String note, String operator);
 }

@@ -15,14 +15,17 @@ class ReconciliationStore {
     private final ReconciliationBatchRepository batchRepository;
     private final ChannelStatementEntryRepository entryRepository;
     private final ReconciliationResultRepository resultRepository;
+    private final ReconciliationResolutionRepository resolutionRepository;
 
     ReconciliationStore(
             ReconciliationBatchRepository batchRepository,
             ChannelStatementEntryRepository entryRepository,
-            ReconciliationResultRepository resultRepository) {
+            ReconciliationResultRepository resultRepository,
+            ReconciliationResolutionRepository resolutionRepository) {
         this.batchRepository = batchRepository;
         this.entryRepository = entryRepository;
         this.resultRepository = resultRepository;
+        this.resolutionRepository = resolutionRepository;
     }
 
     @Transactional(readOnly = true)
@@ -128,6 +131,20 @@ class ReconciliationStore {
     @Transactional(readOnly = true)
     List<ReconciliationResultEntity> findResults(UUID batchId) {
         return resultRepository.findAllByBatchId(batchId);
+    }
+
+    @Transactional
+    ReconciliationResultEntity resolveResult(UUID resultId, String note, String operator) {
+        var result = resultRepository.findByIdForUpdate(resultId)
+                .orElseThrow(() -> new IllegalArgumentException("Result does not exist: " + resultId));
+        var resolution = result.resolve(note, operator, Instant.now());
+        resolutionRepository.saveAndFlush(resolution);
+        return result;
+    }
+
+    @Transactional(readOnly = true)
+    Optional<ReconciliationResolutionEntity> findResolution(UUID resultId) {
+        return resolutionRepository.findByResultId(resultId);
     }
 
     private ReconciliationBatchEntity findEntity(UUID batchId) {
