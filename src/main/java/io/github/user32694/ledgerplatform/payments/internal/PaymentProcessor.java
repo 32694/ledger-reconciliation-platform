@@ -1,6 +1,10 @@
 package io.github.user32694.ledgerplatform.payments.internal;
 
 import io.github.user32694.ledgerplatform.accounts.AccountsApi;
+import io.github.user32694.ledgerplatform.audit.AuditAction;
+import io.github.user32694.ledgerplatform.audit.AuditApi;
+import io.github.user32694.ledgerplatform.audit.AuditCommand;
+import io.github.user32694.ledgerplatform.audit.AuditOutcome;
 import io.github.user32694.ledgerplatform.ledger.EntrySide;
 import io.github.user32694.ledgerplatform.ledger.Journal;
 import io.github.user32694.ledgerplatform.ledger.JournalEntry;
@@ -23,14 +27,17 @@ class PaymentProcessor {
     private final PaymentInstructionRepository repository;
     private final AccountsApi accountsApi;
     private final LedgerApi ledgerApi;
+    private final AuditApi auditApi;
 
     PaymentProcessor(
             PaymentInstructionRepository repository,
             AccountsApi accountsApi,
-            LedgerApi ledgerApi) {
+            LedgerApi ledgerApi,
+            AuditApi auditApi) {
         this.repository = repository;
         this.accountsApi = accountsApi;
         this.ledgerApi = ledgerApi;
+        this.auditApi = auditApi;
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -58,6 +65,7 @@ class PaymentProcessor {
                         new JournalEntry(customerWalletId, EntrySide.CREDIT, amount))));
             }
             payment.succeed(Instant.now());
+            auditApi.record(paymentAudit(payment, AuditOutcome.SUCCEEDED));
         } catch (LedgerInsufficientFundsException exception) {
             throw new PaymentRejectedException(payment.id(), INSUFFICIENT_FUNDS);
         } catch (LedgerBalanceLimitExceededException exception) {
@@ -73,8 +81,32 @@ class PaymentProcessor {
                         "Payment instruction does not exist: " + paymentId));
         if ("PENDING".equals(payment.status())) {
             payment.fail(reason, Instant.now());
+            auditApi.record(paymentAudit(payment, AuditOutcome.FAILED));
         }
         return payment;
+    }
+
+    private static AuditCommand paymentAudit(
+            PaymentInstructionEntity payment, AuditOutcome outcome) {
+        AuditAction action = switch (payment.paymentType()) {
+            case "TOP_UP" -> AuditAction.PAYMENT_TOP_UP;
+            case "TRANSFER" -> AuditAction.PAYMENT_TRANSFER;
+            default -> throw new IllegalStateException(
+                    "Unsupported payment type: " + payment.paymentType());
+        };
+        String summary = "%s CNY %d %s"
+                .formatted(payment.paymentType(), payment.amountCents(), payment.status());
+        if (payment.failureReason() != null) {
+            summary += " " + payment.failureReason();
+        }
+        return new AuditCommand(
+                null,
+                action,
+                "PAYMENT",
+                payment.id().toString(),
+                outcome,
+                summary,
+                payment.channelReference());
     }
 
     static final class PaymentRejectedException extends RuntimeException {

@@ -3,6 +3,10 @@ package io.github.user32694.ledgerplatform.payments;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.user32694.ledgerplatform.audit.AuditAction;
+import io.github.user32694.ledgerplatform.audit.AuditApi;
+import io.github.user32694.ledgerplatform.audit.AuditEventView;
+import io.github.user32694.ledgerplatform.audit.AuditOutcome;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Callable;
@@ -19,10 +23,11 @@ import org.springframework.test.context.jdbc.Sql.ExecutionPhase;
 import org.springframework.test.context.jdbc.SqlMergeMode;
 import org.springframework.test.context.jdbc.SqlMergeMode.MergeMode;
 
-@ApplicationModuleTest(extraIncludes = {"accounts", "ledger"})
+@ApplicationModuleTest(extraIncludes = {"accounts", "ledger", "audit"})
 @ActiveProfiles("test")
 @SqlMergeMode(MergeMode.MERGE)
 @Sql(statements = {
+    "DELETE FROM audit.audit_event",
     "DELETE FROM payments.payment_instruction",
     "DELETE FROM accounts.customer_account",
     "DELETE FROM ledger.ledger_entry",
@@ -30,6 +35,7 @@ import org.springframework.test.context.jdbc.SqlMergeMode.MergeMode;
     "DELETE FROM ledger.ledger_account"
 }, executionPhase = ExecutionPhase.BEFORE_TEST_METHOD)
 @Sql(statements = {
+    "DELETE FROM audit.audit_event",
     "DELETE FROM payments.payment_instruction",
     "DELETE FROM accounts.customer_account",
     "DELETE FROM ledger.ledger_entry",
@@ -39,6 +45,7 @@ import org.springframework.test.context.jdbc.SqlMergeMode.MergeMode;
 class TopUpModuleTest {
     @Autowired PaymentsApi paymentsApi;
     @Autowired io.github.user32694.ledgerplatform.accounts.AccountsApi accountsApi;
+    @Autowired AuditApi auditApi;
     @Autowired JdbcTemplate jdbcTemplate;
 
     @Test
@@ -54,6 +61,15 @@ class TopUpModuleTest {
         assertThat(first.payerAccountId()).isNull();
         assertThat(first.payeeAccountId()).isEqualTo(account.id());
         assertThat(accountsApi.balance(account.id()).cents()).isEqualTo(5000);
+        assertThat(auditApi.findRecent(AuditAction.PAYMENT_TOP_UP, null, 100))
+                .singleElement()
+                .satisfies(event -> {
+                    assertThat(event.aggregateType()).isEqualTo("PAYMENT");
+                    assertThat(event.aggregateId()).isEqualTo(first.id().toString());
+                    assertThat(event.outcome()).isEqualTo(AuditOutcome.SUCCEEDED);
+                    assertThat(event.summary()).isEqualTo("TOP_UP CNY 5000 SUCCEEDED");
+                    assertThat(event.correlationReference()).isEqualTo(first.channelReference());
+                });
     }
 
     @Test
@@ -169,7 +185,10 @@ class TopUpModuleTest {
 
         var transfer = paymentsApi.transfer(new TransferCommand(
                 "transfer-insufficient-1", payer.id(), payee.id(), 600));
+        var replay = paymentsApi.transfer(new TransferCommand(
+                "transfer-insufficient-1", payer.id(), payee.id(), 600));
 
+        assertThat(replay.id()).isEqualTo(transfer.id());
         assertThat(transfer.status()).isEqualTo("FAILED");
         assertThat(transfer.failureReason()).isEqualTo("INSUFFICIENT_FUNDS");
         assertThat(accountsApi.balance(payer.id()).cents()).isEqualTo(500);
@@ -179,6 +198,20 @@ class TopUpModuleTest {
                 FROM ledger.ledger_transaction
                 WHERE business_reference = ?
                 """, transfer.channelReference())).isZero();
+        assertThat(auditApi.findRecent(AuditAction.PAYMENT_TRANSFER, null, 100))
+                .singleElement()
+                .extracting(
+                        AuditEventView::aggregateType,
+                        AuditEventView::aggregateId,
+                        AuditEventView::outcome,
+                        AuditEventView::summary,
+                        AuditEventView::correlationReference)
+                .containsExactly(
+                        "PAYMENT",
+                        transfer.id().toString(),
+                        AuditOutcome.FAILED,
+                        "TRANSFER CNY 600 FAILED INSUFFICIENT_FUNDS",
+                        transfer.channelReference());
     }
 
     @Test

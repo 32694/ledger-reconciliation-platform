@@ -4,6 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.user32694.ledgerplatform.accounts.AccountsApi;
+import io.github.user32694.ledgerplatform.audit.AuditAction;
+import io.github.user32694.ledgerplatform.audit.AuditApi;
+import io.github.user32694.ledgerplatform.audit.AuditOutcome;
 import io.github.user32694.ledgerplatform.payments.PaymentView;
 import io.github.user32694.ledgerplatform.payments.PaymentsApi;
 import io.github.user32694.ledgerplatform.payments.TopUpCommand;
@@ -24,6 +27,7 @@ import org.springframework.test.context.jdbc.Sql.ExecutionPhase;
 })
 @ActiveProfiles("test")
 @Sql(statements = {
+        "DELETE FROM audit.audit_event",
         "DELETE FROM reconciliation.reconciliation_resolution",
         "DELETE FROM reconciliation.reconciliation_result",
         "DELETE FROM reconciliation.channel_statement_entry",
@@ -35,6 +39,7 @@ import org.springframework.test.context.jdbc.Sql.ExecutionPhase;
         "DELETE FROM ledger.ledger_account"
 }, executionPhase = ExecutionPhase.BEFORE_TEST_METHOD)
 @Sql(statements = {
+        "DELETE FROM audit.audit_event",
         "DELETE FROM reconciliation.reconciliation_resolution",
         "DELETE FROM reconciliation.reconciliation_result",
         "DELETE FROM reconciliation.channel_statement_entry",
@@ -49,6 +54,7 @@ class ReconciliationModuleTest {
     @Autowired ReconciliationApi reconciliationApi;
     @Autowired PaymentsApi paymentsApi;
     @Autowired AccountsApi accountsApi;
+    @Autowired AuditApi auditApi;
     @Autowired JdbcTemplate jdbcTemplate;
 
     @Test
@@ -63,6 +69,15 @@ class ReconciliationModuleTest {
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM reconciliation.channel_statement_entry WHERE batch_id = ?",
                 Integer.class, batch.id())).isEqualTo(2);
+        assertThat(auditApi.findRecent(AuditAction.RECONCILIATION_IMPORT, null, 100))
+                .singleElement()
+                .satisfies(event -> {
+                    assertThat(event.actor()).isEqualTo("admin");
+                    assertThat(event.aggregateType()).isEqualTo("RECONCILIATION_BATCH");
+                    assertThat(event.aggregateId()).isEqualTo(batch.id().toString());
+                    assertThat(event.outcome()).isEqualTo(AuditOutcome.SUCCEEDED);
+                    assertThat(event.correlationReference()).isEqualTo(batch.fileSha256());
+                });
     }
 
     @Test
@@ -76,6 +91,8 @@ class ReconciliationModuleTest {
                 "SELECT count(*) FROM reconciliation.reconciliation_batch", Integer.class)).isOne();
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM reconciliation.channel_statement_entry", Integer.class)).isOne();
+        assertThat(auditApi.findRecent(AuditAction.RECONCILIATION_IMPORT, null, 100))
+                .hasSize(1);
     }
 
     @Test
@@ -90,6 +107,13 @@ class ReconciliationModuleTest {
                 "SELECT count(*) FROM reconciliation.channel_statement_entry", Integer.class)).isZero();
         assertThat(reconciliationApi.importStatement(new StatementUpload("bad-again.csv", content, "admin")).id())
                 .isEqualTo(batch.id());
+        assertThat(auditApi.findRecent(
+                        AuditAction.RECONCILIATION_IMPORT, AuditOutcome.FAILED, 100))
+                .singleElement()
+                .satisfies(event -> {
+                    assertThat(event.actor()).isEqualTo("admin");
+                    assertThat(event.aggregateId()).isEqualTo(batch.id().toString());
+                });
     }
 
     @Test
@@ -139,6 +163,13 @@ class ReconciliationModuleTest {
                         ResultType.CHANNEL_ONLY,
                         ResultType.INTERNAL_ONLY,
                         ResultType.MATCHED);
+        assertThat(auditApi.findRecent(AuditAction.RECONCILIATION_RUN, null, 100))
+                .singleElement()
+                .satisfies(event -> {
+                    assertThat(event.actor()).isEqualTo("SYSTEM");
+                    assertThat(event.aggregateId()).isEqualTo(batch.id().toString());
+                    assertThat(event.outcome()).isEqualTo(AuditOutcome.SUCCEEDED);
+                });
     }
 
     @Test
@@ -156,6 +187,34 @@ class ReconciliationModuleTest {
         assertThat(reconciliationApi.findResults(batch.id(), null, null).stream()
                 .map(ReconciliationResultView::id)
                 .toList()).containsExactlyElementsOf(firstResultIds);
+        assertThat(auditApi.findRecent(AuditAction.RECONCILIATION_RUN, null, 100))
+                .hasSize(1);
+    }
+
+    @Test
+    @Sql(statements = {
+        "ALTER TABLE reconciliation.reconciliation_result DROP CONSTRAINT IF EXISTS ck_test_result_insert_failure",
+        "ALTER TABLE reconciliation.reconciliation_result ADD CONSTRAINT ck_test_result_insert_failure CHECK (FALSE)"
+    }, executionPhase = ExecutionPhase.BEFORE_TEST_METHOD)
+    @Sql(statements = {
+        "ALTER TABLE reconciliation.reconciliation_result DROP CONSTRAINT IF EXISTS ck_test_result_insert_failure"
+    }, executionPhase = ExecutionPhase.AFTER_TEST_METHOD)
+    void auditsFailedReconciliationRun() {
+        var batch = reconciliationApi.importStatement(new StatementUpload(
+                "failed-run.csv", csv("CH-FAILED-RUN,1,2026-01-15T09:30:00Z\n"), "admin"));
+
+        assertThatThrownBy(() -> reconciliationApi.run(batch.id()))
+                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+
+        assertThat(reconciliationApi.getBatch(batch.id()).status())
+                .isEqualTo(BatchStatus.RECONCILIATION_FAILED);
+        assertThat(auditApi.findRecent(
+                        AuditAction.RECONCILIATION_RUN, AuditOutcome.FAILED, 100))
+                .singleElement()
+                .satisfies(event -> {
+                    assertThat(event.actor()).isEqualTo("SYSTEM");
+                    assertThat(event.aggregateId()).isEqualTo(batch.id().toString());
+                });
     }
 
     @Test
@@ -188,6 +247,14 @@ class ReconciliationModuleTest {
                 difference.id(), "second", "operator-2"))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("already resolved");
+        assertThat(auditApi.findRecent(AuditAction.RECONCILIATION_RESOLVE, null, 100))
+                .singleElement()
+                .satisfies(event -> {
+                    assertThat(event.actor()).isEqualTo("operator-1");
+                    assertThat(event.aggregateType()).isEqualTo("RECONCILIATION_RESULT");
+                    assertThat(event.aggregateId()).isEqualTo(difference.id().toString());
+                    assertThat(event.outcome()).isEqualTo(AuditOutcome.SUCCEEDED);
+                });
     }
 
     @Test

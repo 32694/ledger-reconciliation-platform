@@ -1,7 +1,11 @@
 package io.github.user32694.ledgerplatform.reconciliation.internal;
 
-import io.github.user32694.ledgerplatform.reconciliation.ReconciliationBatchView;
+import io.github.user32694.ledgerplatform.audit.AuditAction;
+import io.github.user32694.ledgerplatform.audit.AuditApi;
+import io.github.user32694.ledgerplatform.audit.AuditCommand;
+import io.github.user32694.ledgerplatform.audit.AuditOutcome;
 import io.github.user32694.ledgerplatform.reconciliation.BatchStatus;
+import io.github.user32694.ledgerplatform.reconciliation.ReconciliationBatchView;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -16,16 +20,19 @@ class ReconciliationStore {
     private final ChannelStatementEntryRepository entryRepository;
     private final ReconciliationResultRepository resultRepository;
     private final ReconciliationResolutionRepository resolutionRepository;
+    private final AuditApi auditApi;
 
     ReconciliationStore(
             ReconciliationBatchRepository batchRepository,
             ChannelStatementEntryRepository entryRepository,
             ReconciliationResultRepository resultRepository,
-            ReconciliationResolutionRepository resolutionRepository) {
+            ReconciliationResolutionRepository resolutionRepository,
+            AuditApi auditApi) {
         this.batchRepository = batchRepository;
         this.entryRepository = entryRepository;
         this.resultRepository = resultRepository;
         this.resolutionRepository = resolutionRepository;
+        this.auditApi = auditApi;
     }
 
     @Transactional(readOnly = true)
@@ -51,6 +58,14 @@ class ReconciliationStore {
         entryRepository.saveAllAndFlush(parsed.entries().stream()
                 .map(entry -> ChannelStatementEntryEntity.from(batch.id(), entry))
                 .toList());
+        auditApi.record(reconciliationAudit(
+                operator,
+                AuditAction.RECONCILIATION_IMPORT,
+                "RECONCILIATION_BATCH",
+                batch.id(),
+                AuditOutcome.SUCCEEDED,
+                "对账单导入成功",
+                hash));
         return batch;
     }
 
@@ -61,8 +76,17 @@ class ReconciliationStore {
             String errorMessage,
             String operator,
             Instant createdAt) {
-        return batchRepository.save(ReconciliationBatchEntity.importFailed(
+        var batch = batchRepository.save(ReconciliationBatchEntity.importFailed(
                 fileName, hash, errorMessage, operator, createdAt));
+        auditApi.record(reconciliationAudit(
+                operator,
+                AuditAction.RECONCILIATION_IMPORT,
+                "RECONCILIATION_BATCH",
+                batch.id(),
+                AuditOutcome.FAILED,
+                "对账单导入失败",
+                hash));
+        return batch;
     }
 
     @Transactional(readOnly = true)
@@ -117,6 +141,14 @@ class ReconciliationStore {
                 .filter(draft -> draft.resultType().name().equals("MATCHED"))
                 .count();
         batch.complete(matchedRows, drafts.size() - matchedRows, Instant.now());
+        auditApi.record(reconciliationAudit(
+                null,
+                AuditAction.RECONCILIATION_RUN,
+                "RECONCILIATION_BATCH",
+                batch.id(),
+                AuditOutcome.SUCCEEDED,
+                "对账运行成功",
+                null));
         return batch.toView();
     }
 
@@ -125,6 +157,14 @@ class ReconciliationStore {
         var batch = findEntity(batchId);
         if (batch.status() == BatchStatus.RUNNING) {
             batch.failReconciliation(message, Instant.now());
+            auditApi.record(reconciliationAudit(
+                    null,
+                    AuditAction.RECONCILIATION_RUN,
+                    "RECONCILIATION_BATCH",
+                    batch.id(),
+                    AuditOutcome.FAILED,
+                    "对账运行失败",
+                    null));
         }
     }
 
@@ -139,6 +179,14 @@ class ReconciliationStore {
                 .orElseThrow(() -> new IllegalArgumentException("Result does not exist: " + resultId));
         var resolution = result.resolve(note, operator, Instant.now());
         resolutionRepository.saveAndFlush(resolution);
+        auditApi.record(reconciliationAudit(
+                operator,
+                AuditAction.RECONCILIATION_RESOLVE,
+                "RECONCILIATION_RESULT",
+                result.id(),
+                AuditOutcome.SUCCEEDED,
+                "对账差异处理成功",
+                result.batchId().toString()));
         return result;
     }
 
@@ -150,5 +198,23 @@ class ReconciliationStore {
     private ReconciliationBatchEntity findEntity(UUID batchId) {
         return batchRepository.findById(batchId)
                 .orElseThrow(() -> new IllegalArgumentException("Batch does not exist: " + batchId));
+    }
+
+    private static AuditCommand reconciliationAudit(
+            String actor,
+            AuditAction action,
+            String aggregateType,
+            UUID aggregateId,
+            AuditOutcome outcome,
+            String summary,
+            String correlationReference) {
+        return new AuditCommand(
+                actor,
+                action,
+                aggregateType,
+                aggregateId.toString(),
+                outcome,
+                summary,
+                correlationReference);
     }
 }

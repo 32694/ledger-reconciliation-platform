@@ -42,12 +42,22 @@ class ModularityTest {
     }
 
     @Test
-    void reconciliationDependsOnlyOnPayments() throws ClassNotFoundException {
+    void businessModulesDeclareOnlyRequiredDependencies() throws ClassNotFoundException {
+        Package accounts = Class.forName(
+                        "io.github.user32694.ledgerplatform.accounts.package-info")
+                .getPackage();
+        Package payments = Class.forName(
+                        "io.github.user32694.ledgerplatform.payments.package-info")
+                .getPackage();
         Package reconciliation = Class.forName(
                         "io.github.user32694.ledgerplatform.reconciliation.package-info")
                 .getPackage();
 
+        assertThat(accounts.getAnnotation(ApplicationModule.class).allowedDependencies())
+                .containsExactly("ledger", "audit");
+        assertThat(payments.getAnnotation(ApplicationModule.class).allowedDependencies())
+                .containsExactly("accounts", "ledger", "audit");
         assertThat(reconciliation.getAnnotation(ApplicationModule.class).allowedDependencies())
-                .containsExactly("payments");
+                .containsExactly("payments", "audit");
     }
 }
