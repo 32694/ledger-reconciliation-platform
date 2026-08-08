@@ -7,6 +7,7 @@ import io.github.user32694.ledgerplatform.audit.AuditAction;
 import io.github.user32694.ledgerplatform.audit.AuditApi;
 import io.github.user32694.ledgerplatform.audit.AuditEventView;
 import io.github.user32694.ledgerplatform.audit.AuditOutcome;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -527,7 +528,7 @@ class TopUpModuleTest {
             UUID payeeAccountId,
             String status,
             String failureReason) {
-        var now = Instant.now();
+        var now = Timestamp.from(Instant.now());
         jdbcTemplate.update("""
                 INSERT INTO payments.payment_instruction
                     (id, idempotency_key, request_fingerprint, channel_reference, payment_type,
