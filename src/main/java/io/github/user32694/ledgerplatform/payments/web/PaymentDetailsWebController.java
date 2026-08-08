@@ -44,13 +44,16 @@ public class PaymentDetailsWebController {
             @PathVariable UUID paymentId, Model model, HttpServletResponse response) {
         PaymentView payment = requirePayment(paymentId);
         Optional<PaymentView> activeReverse = paymentsApi.findActiveReverse(payment.id());
-        if (!isEligible(payment, activeReverse)) {
+        Optional<PaymentView> pendingReverse = pendingReverse(activeReverse);
+        if (pendingReverse.isEmpty() && !isEligible(payment, activeReverse)) {
             return rejectIneligible(model, response, payment);
         }
         if (!model.containsAttribute("reverseForm")) {
-            model.addAttribute("reverseForm", new ReverseForm());
+            ReverseForm form = new ReverseForm();
+            pendingReverse.ifPresent(reverse -> form.setReason(reverse.operationReason()));
+            model.addAttribute("reverseForm", form);
         }
-        addReverseFormData(model, payment);
+        addReverseFormData(model, payment, pendingReverse);
         return "admin/payment-reverse-form";
     }
 
@@ -63,37 +66,44 @@ public class PaymentDetailsWebController {
             HttpServletResponse response) {
         PaymentView payment = requirePayment(paymentId);
         Optional<PaymentView> activeReverse = paymentsApi.findActiveReverse(payment.id());
-        if (activeReverse.isPresent()) {
-            return redirectTo(activeReverse.orElseThrow());
+        Optional<PaymentView> succeededReverse = succeededReverse(activeReverse);
+        if (succeededReverse.isPresent()) {
+            return redirectTo(succeededReverse.orElseThrow());
         }
-        if (!isEligible(payment, activeReverse)) {
+        Optional<PaymentView> pendingReverse = pendingReverse(activeReverse);
+        if (pendingReverse.isEmpty() && !isEligible(payment, activeReverse)) {
             return rejectIneligible(model, response, payment);
         }
         if (bindingResult.hasErrors()) {
-            addReverseFormData(model, payment);
+            addReverseFormData(model, payment, pendingReverse);
             return "admin/payment-reverse-form";
         }
 
         PaymentView reversePayment;
         try {
             reversePayment = paymentsApi.reverse(new ReversePaymentCommand(
-                    form.getIdempotencyKey(), payment.id(), form.getReason()));
+                    form.getIdempotencyKey(),
+                    payment.id(),
+                    pendingReverse.map(PaymentView::operationReason).orElse(form.getReason())));
         } catch (IdempotencyConflictException exception) {
             bindingResult.rejectValue(
                     "idempotencyKey",
                     "reverse.idempotencyKey.conflict",
                     "该幂等键已被其他请求使用，请更换后重试");
-            addReverseFormData(model, payment);
+            addReverseFormData(
+                    model, payment, paymentsApi.findActiveReverse(payment.id()));
             return "admin/payment-reverse-form";
         } catch (IllegalArgumentException exception) {
             bindingResult.reject("reverse.invalid", "退款或冲正失败，请检查输入后重试");
-            addReverseFormData(model, payment);
+            addReverseFormData(
+                    model, payment, paymentsApi.findActiveReverse(payment.id()));
             return "admin/payment-reverse-form";
         }
 
         if ("FAILED".equals(reversePayment.status())) {
             rejectFailedReverse(bindingResult, reversePayment.failureReason());
-            addReverseFormData(model, payment);
+            addReverseFormData(
+                    model, payment, paymentsApi.findActiveReverse(payment.id()));
             return "admin/payment-reverse-form";
         }
         return redirectTo(reversePayment);
@@ -138,12 +148,32 @@ public class PaymentDetailsWebController {
         model.addAttribute("activeNav", "payments");
     }
 
-    private void addReverseFormData(Model model, PaymentView payment) {
+    private void addReverseFormData(
+            Model model, PaymentView payment, Optional<PaymentView> pendingReverse) {
+        pendingReverse.ifPresent(reverse -> {
+            ReverseForm form = (ReverseForm) model.getAttribute("reverseForm");
+            if (form != null) {
+                form.setReason(reverse.operationReason());
+            }
+        });
         model.addAttribute("payment", payment);
         model.addAttribute("paymentTypeLabel", paymentTypeLabel(payment.type()));
         model.addAttribute("paymentAmount", BigDecimal.valueOf(payment.amountCents(), 2));
-        model.addAttribute("reverseActionLabel", reverseActionLabel(payment.type()));
+        model.addAttribute(
+                "reverseActionLabel",
+                pendingReverse.isPresent() ? "继续处理" : reverseActionLabel(payment.type()));
+        model.addAttribute("recovering", pendingReverse.isPresent());
         model.addAttribute("activeNav", "payments");
+    }
+
+    private static Optional<PaymentView> pendingReverse(
+            Optional<PaymentView> activeReverse) {
+        return activeReverse.filter(reverse -> "PENDING".equals(reverse.status()));
+    }
+
+    private static Optional<PaymentView> succeededReverse(
+            Optional<PaymentView> activeReverse) {
+        return activeReverse.filter(reverse -> "SUCCEEDED".equals(reverse.status()));
     }
 
     private PaymentView requirePayment(UUID paymentId) {

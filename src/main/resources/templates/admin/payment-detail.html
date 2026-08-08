@@ -13,6 +13,8 @@
     <p class="alert alert-error" th:if="${operationError}" th:text="${operationError}">该交易不可退款或冲正</p>
     <p class="alert" th:if="${reverseProcessingLabel}">
         <strong th:text="${reverseProcessingLabel}">全额退款处理中</strong>
+        <a id="resume-reverse-payment-action" class="text-link"
+           th:href="@{/admin/payments/{id}/reverse(id=${payment.id})}">继续处理</a>
     </p>
     <div class="alert alert-success" th:if="${reversePayment}">
         <strong th:text="${'已完成' + reverseCompletionLabel}">已完成全额退款</strong>

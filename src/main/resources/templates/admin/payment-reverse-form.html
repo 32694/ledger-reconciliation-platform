@@ -25,10 +25,13 @@
              th:each="error : ${#fields.globalErrors()}" th:text="${error}">操作失败</div>
         <div class="field" th:classappend="${#fields.hasErrors('reason')} ? ' field-invalid'">
             <label for="reason">退款或冲正原因</label>
-            <textarea id="reason" rows="4" maxlength="500" th:field="*{reason}"></textarea>
+            <textarea id="reason" rows="4" maxlength="500" th:field="*{reason}"
+                      th:readonly="${recovering}"></textarea>
             <p id="reason-error" class="field-error" th:if="${#fields.hasErrors('reason')}"
                th:errors="*{reason}">原因无效</p>
-            <small>请记录可审计的业务原因，最多500个字符</small>
+            <small th:text="${recovering} ? '恢复处理时沿用原业务原因' : '请记录可审计的业务原因，最多500个字符'">
+                请记录可审计的业务原因，最多500个字符
+            </small>
         </div>
         <div class="field" th:classappend="${#fields.hasErrors('idempotencyKey')} ? ' field-invalid'">
             <label for="idempotencyKey">幂等键</label>

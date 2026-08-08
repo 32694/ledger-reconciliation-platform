@@ -545,38 +545,122 @@ class AdminWebTest {
 
     @Test
     @WithMockUser(roles = "ADMIN")
-    void rendersPendingRefundAsProcessingWithoutSuccessfulReverseLink() throws Exception {
+    void rendersPendingRefundRecoveryEntryAndStoredReason() throws Exception {
         var account = accountsApi.create("退款处理中客户");
         var original = paymentsApi.topUp(new TopUpCommand(
                 "web-pending-refund-source-" + UUID.randomUUID(), account.id(), 500));
-        UUID pendingRefundId = UUID.randomUUID();
-        jdbcTemplate.update("""
-                INSERT INTO payments.payment_instruction
-                    (id, idempotency_key, request_fingerprint, channel_reference, payment_type,
-                     payer_account_id, payee_account_id, amount_cents, currency, status,
-                     failure_reason, version, created_at, completed_at,
-                     original_payment_id, operation_reason)
-                VALUES (?, ?, ?, ?, 'REFUND', NULL, ?, 500, 'CNY', 'PENDING',
-                        NULL, 0, ?, NULL, ?, ?)
-                """,
-                pendingRefundId,
-                "web-pending-refund-" + pendingRefundId,
-                "p".repeat(64),
-                "REFUND-" + pendingRefundId,
-                account.id(),
-                Timestamp.from(Instant.now()),
-                original.id(),
-                "等待退款处理");
+        UUID pendingRefundId = insertPendingRefund(
+                original.id(), account.id(), "等待退款处理");
+        String reversePath = "/admin/payments/" + original.id() + "/reverse";
 
         mockMvc.perform(get("/admin/payments/" + original.id()))
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("全额退款处理中")))
+                .andExpect(content().string(containsString("继续处理")))
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*<a[^>]*id=\"resume-reverse-payment-action\"[^>]*"
+                                + "href=\"" + reversePath + "\"[^>]*>继续处理</a>.*")))
                 .andExpect(content().string(org.hamcrest.Matchers.not(
                         containsString("已完成全额退款"))))
                 .andExpect(content().string(org.hamcrest.Matchers.not(
                         containsString("/admin/payments/" + pendingRefundId))))
                 .andExpect(content().string(org.hamcrest.Matchers.not(
                         containsString("id=\"reverse-payment-action\""))));
+
+        mockMvc.perform(get(reversePath))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/payment-reverse-form"))
+                .andExpect(content().string(containsString("等待退款处理")))
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*<textarea[^>]*id=\"reason\"[^>]*readonly[^>]*>等待退款处理</textarea>.*")))
+                .andExpect(content().string(containsString("继续处理")));
+    }
+
+    @Test
+    @WithMockUser(username = "recovery-admin", roles = "ADMIN")
+    void recoversPendingRefundThroughWebExactlyOnce() throws Exception {
+        var account = accountsApi.create("退款恢复客户");
+        var original = paymentsApi.topUp(new TopUpCommand(
+                "web-recovery-source-" + UUID.randomUUID(), account.id(), 500));
+        UUID pendingRefundId = insertPendingRefund(
+                original.id(), account.id(), "进程中断前原因");
+
+        mockMvc.perform(post("/admin/payments/" + original.id() + "/reverse")
+                        .with(csrf())
+                        .param("reason", "页面篡改原因")
+                        .param("idempotencyKey", "web-recovery-new-key"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/admin/payments/" + pendingRefundId));
+
+        var recovered = paymentsApi.get(pendingRefundId);
+        assertThat(recovered.status()).isEqualTo("SUCCEEDED");
+        assertThat(recovered.operationReason()).isEqualTo("进程中断前原因");
+        assertThat(accountsApi.balance(account.id()).cents()).isZero();
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM payments.payment_instruction
+                WHERE original_payment_id = ?
+                """, Long.class, original.id())).isOne();
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM ledger.ledger_transaction transaction
+                JOIN payments.payment_instruction payment
+                  ON payment.channel_reference = transaction.business_reference
+                WHERE payment.original_payment_id = ?
+                """, Long.class, original.id())).isOne();
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM ledger.ledger_entry entry
+                JOIN ledger.ledger_transaction transaction
+                  ON transaction.id = entry.transaction_id
+                WHERE transaction.business_reference = ?
+                """, Long.class, recovered.channelReference())).isEqualTo(2);
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM audit.audit_event
+                WHERE action = 'PAYMENT_REFUND'
+                  AND outcome = 'SUCCEEDED'
+                  AND aggregate_id = ?
+                """, Long.class, pendingRefundId.toString())).isOne();
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void keepsPendingRefundRecoverableAfterValidationAndKeyConflict() throws Exception {
+        var account = accountsApi.create("退款恢复校验客户");
+        var original = paymentsApi.topUp(new TopUpCommand(
+                "web-recovery-validation-source-" + UUID.randomUUID(), account.id(), 500));
+        UUID pendingRefundId = insertPendingRefund(
+                original.id(), account.id(), "不得丢失的原因");
+        String path = "/admin/payments/" + original.id() + "/reverse";
+
+        mockMvc.perform(post(path).with(csrf())
+                        .param("reason", "不得丢失的原因")
+                        .param("idempotencyKey", ""))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/payment-reverse-form"))
+                .andExpect(model().attributeHasFieldErrors("reverseForm", "idempotencyKey"));
+
+        paymentsApi.topUp(new TopUpCommand(
+                "web-recovery-conflicting-key", account.id(), 100));
+        mockMvc.perform(post(path).with(csrf())
+                        .param("reason", "页面篡改原因")
+                        .param("idempotencyKey", "web-recovery-conflicting-key"))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/payment-reverse-form"))
+                .andExpect(model().attributeHasFieldErrors("reverseForm", "idempotencyKey"))
+                .andExpect(content().string(containsString(
+                        "该幂等键已被其他请求使用，请更换后重试")))
+                .andExpect(content().string(containsString("不得丢失的原因")));
+
+        assertThat(paymentsApi.get(pendingRefundId).status()).isEqualTo("PENDING");
+        assertThat(paymentsApi.get(pendingRefundId).operationReason()).isEqualTo("不得丢失的原因");
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM payments.payment_instruction
+                WHERE original_payment_id = ?
+                """, Long.class, original.id())).isOne();
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM ledger.ledger_transaction
+                WHERE business_reference = ?
+                """, Long.class, paymentsApi.get(pendingRefundId).channelReference())).isZero();
     }
 
     @Test
@@ -964,5 +1048,39 @@ class AdminWebTest {
                 .andExpect(content().string(not(containsString("<td>REFUND</td>"))))
                 .andExpect(content().string(not(containsString("<td>REVERSAL</td>"))))
                 .andExpect(content().string(containsString("最近20条充值、转账及反向操作")));
+
+        for (var request : new org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder[] {
+            get("/admin/ledger"), get("/admin/ledger").header("HX-Request", "true")
+        }) {
+            mockMvc.perform(request)
+                    .andExpect(status().isOk())
+                    .andExpect(content().string(containsString("<td>充值退款</td>")))
+                    .andExpect(content().string(containsString("<td>转账冲正</td>")))
+                    .andExpect(content().string(not(containsString("<td>REFUND</td>"))))
+                    .andExpect(content().string(not(containsString("<td>REVERSAL</td>"))));
+        }
+    }
+
+    private UUID insertPendingRefund(
+            UUID originalPaymentId, UUID payeeAccountId, String operationReason) {
+        UUID pendingRefundId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO payments.payment_instruction
+                    (id, idempotency_key, request_fingerprint, channel_reference, payment_type,
+                     payer_account_id, payee_account_id, amount_cents, currency, status,
+                     failure_reason, version, created_at, completed_at,
+                     original_payment_id, operation_reason)
+                VALUES (?, ?, ?, ?, 'REFUND', NULL, ?, 500, 'CNY', 'PENDING',
+                        NULL, 0, ?, NULL, ?, ?)
+                """,
+                pendingRefundId,
+                "web-pending-refund-" + pendingRefundId,
+                "p".repeat(64),
+                "REFUND-" + pendingRefundId,
+                payeeAccountId,
+                Timestamp.from(Instant.now()),
+                originalPaymentId,
+                operationReason);
+        return pendingRefundId;
     }
 }
