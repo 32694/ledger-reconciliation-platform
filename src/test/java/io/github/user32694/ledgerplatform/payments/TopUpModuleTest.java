@@ -551,6 +551,71 @@ class TopUpModuleTest {
     }
 
     @Test
+    void retriesAFailedRefundWithANewKeyAfterFunding() {
+        var customer = accountsApi.create("Retry Refund Customer");
+        var recipient = accountsApi.create("Retry Refund Recipient");
+        var original = paymentsApi.topUp(
+                new TopUpCommand("retry-refund-source", customer.id(), 500));
+        paymentsApi.transfer(new TransferCommand(
+                "spend-retry-refund", customer.id(), recipient.id(), 500));
+        var failedCommand = new ReversePaymentCommand(
+                "retry-refund-failed", original.id(), "Initial refund attempt");
+
+        var failed = paymentsApi.reverse(failedCommand);
+
+        assertThat(failed.status()).isEqualTo("FAILED");
+        assertThat(failed.failureReason()).isEqualTo("INSUFFICIENT_FUNDS");
+        assertThat(count("""
+                SELECT COUNT(*) FROM ledger.ledger_transaction
+                WHERE business_reference = ?
+                """, failed.channelReference())).isZero();
+
+        paymentsApi.topUp(new TopUpCommand("fund-retry-refund", customer.id(), 500));
+        var succeededCommand = new ReversePaymentCommand(
+                "retry-refund-succeeded", original.id(), "Refund after funding");
+        var succeeded = paymentsApi.reverse(succeededCommand);
+        var failedReplay = paymentsApi.reverse(failedCommand);
+        var succeededReplay = paymentsApi.reverse(succeededCommand);
+
+        assertThat(succeeded.id()).isNotEqualTo(failed.id());
+        assertThat(succeeded.status()).isEqualTo("SUCCEEDED");
+        assertThat(failedReplay.id()).isEqualTo(failed.id());
+        assertThat(failedReplay.status()).isEqualTo("FAILED");
+        assertThat(succeededReplay.id()).isEqualTo(succeeded.id());
+        assertThat(succeededReplay.status()).isEqualTo("SUCCEEDED");
+        assertThat(accountsApi.balance(customer.id()).cents()).isZero();
+        assertThat(count("""
+                SELECT COUNT(*) FROM payments.payment_instruction
+                WHERE original_payment_id = ?
+                """, original.id())).isEqualTo(2);
+        assertThat(count("""
+                SELECT COUNT(*) FROM payments.payment_instruction
+                WHERE original_payment_id = ? AND status = 'FAILED'
+                """, original.id())).isOne();
+        assertThat(count("""
+                SELECT COUNT(*) FROM payments.payment_instruction
+                WHERE original_payment_id = ? AND status = 'SUCCEEDED'
+                """, original.id())).isOne();
+        assertThat(count("""
+                SELECT COUNT(*)
+                FROM ledger.ledger_transaction transaction
+                JOIN payments.payment_instruction payment
+                  ON payment.channel_reference = transaction.business_reference
+                WHERE payment.original_payment_id = ?
+                """, original.id())).isOne();
+        assertThat(auditApi.findRecent(
+                AuditAction.PAYMENT_REFUND, AuditOutcome.FAILED, 100))
+                .singleElement()
+                .extracting(AuditEventView::aggregateId)
+                .isEqualTo(failed.id().toString());
+        assertThat(auditApi.findRecent(
+                AuditAction.PAYMENT_REFUND, AuditOutcome.SUCCEEDED, 100))
+                .singleElement()
+                .extracting(AuditEventView::aggregateId)
+                .isEqualTo(succeeded.id().toString());
+    }
+
+    @Test
     void returnsTheExistingReverseForTheSameRequestAndActiveOriginal() {
         var account = accountsApi.create("Repeated Refund Customer");
         var original = paymentsApi.topUp(
@@ -576,6 +641,53 @@ class TopUpModuleTest {
     }
 
     @Test
+    void processesConcurrentDifferentReverseKeysForTheSameOriginalOnce() throws Exception {
+        var account = accountsApi.create("Concurrent Refund Customer");
+        var original = paymentsApi.topUp(
+                new TopUpCommand("concurrent-refund-source", account.id(), 500));
+        var first = new ReversePaymentCommand(
+                "concurrent-refund-1", original.id(), "First refund request");
+        var second = new ReversePaymentCommand(
+                "concurrent-refund-2", original.id(), "Second refund request");
+
+        var attempts = reverseConcurrently(first, second);
+
+        assertThat(attempts).extracting(Attempt::error).containsOnlyNulls();
+        assertThat(attempts).extracting(attempt -> attempt.payment().id())
+                .containsOnly(attempts.get(0).payment().id());
+        assertThat(attempts).extracting(attempt -> attempt.payment().status())
+                .containsOnly("SUCCEEDED");
+        var reverse = attempts.get(0).payment();
+        assertThat(accountsApi.balance(account.id()).cents()).isZero();
+        assertThat(count("""
+                SELECT COUNT(*) FROM payments.payment_instruction
+                WHERE original_payment_id = ?
+                """, original.id())).isOne();
+        assertThat(count("""
+                SELECT COUNT(*) FROM payments.payment_instruction
+                WHERE original_payment_id = ? AND status IN ('PENDING', 'SUCCEEDED')
+                """, original.id())).isOne();
+        assertThat(count("""
+                SELECT COUNT(*)
+                FROM ledger.ledger_transaction transaction
+                JOIN payments.payment_instruction payment
+                  ON payment.channel_reference = transaction.business_reference
+                WHERE payment.original_payment_id = ?
+                """, original.id())).isOne();
+        assertThat(count("""
+                SELECT COUNT(*)
+                FROM ledger.ledger_entry entry
+                JOIN ledger.ledger_transaction transaction
+                  ON transaction.id = entry.transaction_id
+                WHERE transaction.business_reference = ?
+                """, reverse.channelReference())).isEqualTo(2);
+        assertThat(count("""
+                SELECT COUNT(*) FROM audit.audit_event
+                WHERE action = 'PAYMENT_REFUND' AND aggregate_id = ?
+                """, reverse.id().toString())).isOne();
+    }
+
+    @Test
     void rejectsAReusedReverseIdempotencyKeyWithDifferentPayload() {
         var firstAccount = accountsApi.create("First Refund Conflict Customer");
         var secondAccount = accountsApi.create("Second Refund Conflict Customer");
@@ -590,6 +702,19 @@ class TopUpModuleTest {
                 "refund-conflict-1", secondOriginal.id(), "Second reason")))
                 .isInstanceOf(IdempotencyConflictException.class);
         assertThat(accountsApi.balance(secondAccount.id()).cents()).isEqualTo(500);
+    }
+
+    @Test
+    void rejectsAReusedReverseIdempotencyKeyWhenOnlyReasonChanges() {
+        var account = accountsApi.create("Refund Reason Conflict Customer");
+        var original = paymentsApi.topUp(
+                new TopUpCommand("refund-reason-conflict-source", account.id(), 500));
+        paymentsApi.reverse(new ReversePaymentCommand(
+                "refund-reason-conflict", original.id(), "First reason"));
+
+        assertThatThrownBy(() -> paymentsApi.reverse(new ReversePaymentCommand(
+                "refund-reason-conflict", original.id(), "Second reason")))
+                .isInstanceOf(IdempotencyConflictException.class);
     }
 
     @Test
@@ -806,6 +931,38 @@ class TopUpModuleTest {
             start.await();
             try {
                 return new Attempt(paymentsApi.transfer(command), null);
+            } catch (RuntimeException exception) {
+                return new Attempt(null, exception);
+            }
+        };
+    }
+
+    private List<Attempt> reverseConcurrently(
+            ReversePaymentCommand first, ReversePaymentCommand second) throws Exception {
+        var executor = Executors.newFixedThreadPool(2);
+        var ready = new CountDownLatch(2);
+        var start = new CountDownLatch(1);
+        try {
+            var firstFuture = executor.submit(concurrentReverse(first, ready, start));
+            var secondFuture = executor.submit(concurrentReverse(second, ready, start));
+            assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            return List.of(
+                    firstFuture.get(10, TimeUnit.SECONDS),
+                    secondFuture.get(10, TimeUnit.SECONDS));
+        } finally {
+            start.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    private Callable<Attempt> concurrentReverse(
+            ReversePaymentCommand command, CountDownLatch ready, CountDownLatch start) {
+        return () -> {
+            ready.countDown();
+            start.await();
+            try {
+                return new Attempt(paymentsApi.reverse(command), null);
             } catch (RuntimeException exception) {
                 return new Attempt(null, exception);
             }
