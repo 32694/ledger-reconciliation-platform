@@ -3,6 +3,7 @@ package io.github.user32694.ledgerplatform.payments.internal;
 import io.github.user32694.ledgerplatform.payments.PaymentView;
 import io.github.user32694.ledgerplatform.payments.PaymentsApi;
 import io.github.user32694.ledgerplatform.payments.TopUpCommand;
+import java.time.Instant;
 import java.util.List;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -42,6 +43,19 @@ class PaymentsFacade implements PaymentsApi {
                 .toList();
     }
 
+    @Override
+    public List<PaymentView> findSucceededTopUps(Instant fromInclusive, Instant toInclusive) {
+        if (fromInclusive == null || toInclusive == null) {
+            throw new IllegalArgumentException("Range is required");
+        }
+        if (fromInclusive.isAfter(toInclusive)) {
+            throw new IllegalArgumentException("Start must not be after end");
+        }
+        return repository.findSucceededTopUps(fromInclusive, toInclusive).stream()
+                .map(PaymentsFacade::toView)
+                .toList();
+    }
+
     private static PaymentView toView(PaymentInstructionEntity payment) {
         return new PaymentView(
                 payment.id(),
@@ -49,6 +63,7 @@ class PaymentsFacade implements PaymentsApi {
                 payment.paymentType(),
                 payment.amountCents(),
                 payment.status(),
-                payment.failureReason());
+                payment.failureReason(),
+                payment.occurredAt());
     }
 }

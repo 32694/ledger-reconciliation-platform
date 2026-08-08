@@ -51,4 +51,16 @@ interface PaymentInstructionRepository extends JpaRepository<PaymentInstructionE
     Optional<PaymentInstructionEntity> findByIdForUpdate(@Param("id") UUID id);
 
     List<PaymentInstructionEntity> findAllByOrderByCreatedAtDescIdDesc(Pageable pageable);
+
+    @Query("""
+            SELECT payment
+            FROM PaymentInstructionEntity payment
+            WHERE payment.paymentType = 'TOP_UP'
+              AND payment.status = 'SUCCEEDED'
+              AND payment.completedAt BETWEEN :fromInclusive AND :toInclusive
+            ORDER BY payment.completedAt ASC, payment.id ASC
+            """)
+    List<PaymentInstructionEntity> findSucceededTopUps(
+            @Param("fromInclusive") Instant fromInclusive,
+            @Param("toInclusive") Instant toInclusive);
 }

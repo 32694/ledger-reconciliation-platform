@@ -103,4 +103,8 @@ class PaymentInstructionEntity {
     String failureReason() {
         return failureReason;
     }
+
+    Instant occurredAt() {
+        return completedAt;
+    }
 }

@@ -55,6 +55,21 @@ class TopUpModuleTest {
     }
 
     @Test
+    void findsOnlySuccessfulTopUpsInInclusiveCompletionRange() {
+        var account = accountsApi.create("Reconciliation Candidate");
+        var first = paymentsApi.topUp(new TopUpCommand("candidate-1", account.id(), 100));
+        var second = paymentsApi.topUp(new TopUpCommand("candidate-2", account.id(), 200));
+
+        assertThat(paymentsApi.findSucceededTopUps(first.occurredAt(), second.occurredAt()))
+                .extracting(PaymentView::id)
+                .containsExactly(first.id(), second.id());
+        assertThatThrownBy(() -> paymentsApi.findSucceededTopUps(
+                second.occurredAt(), first.occurredAt()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Start must not be after end");
+    }
+
+    @Test
     void rejectsIdempotencyKeyWithDifferentPayload() {
         var account = accountsApi.create("Conflict Customer");
         paymentsApi.topUp(new TopUpCommand("idem-conflict-1", account.id(), 5000));
