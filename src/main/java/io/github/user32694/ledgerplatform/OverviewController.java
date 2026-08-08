@@ -51,8 +51,8 @@ public class OverviewController {
         return switch (type) {
             case "TOP_UP" -> "充值";
             case "TRANSFER" -> "转账";
-            case "REFUND" -> "退款";
-            case "REVERSAL" -> "冲正";
+            case "REFUND" -> "充值退款";
+            case "REVERSAL" -> "转账冲正";
             default -> type;
         };
     }

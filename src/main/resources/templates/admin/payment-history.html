@@ -3,7 +3,7 @@
 <section id="recent-payments-table" class="table-section compact-table"
          aria-labelledby="recent-payments-title" th:fragment="recentPaymentsTable">
     <div class="section-heading">
-        <div><h2 id="recent-payments-title">近期资金操作</h2><p>最近20条充值和转账指令</p></div>
+        <div><h2 id="recent-payments-title">近期资金操作</h2><p>最近20条充值、转账及反向操作</p></div>
         <a id="refresh-payments" class="button button-secondary"
            th:href="${paymentHistoryRefreshUrl}" hx-get="/admin/payments/recent"
            hx-target="#recent-payments-table" hx-swap="outerHTML">刷新</a>

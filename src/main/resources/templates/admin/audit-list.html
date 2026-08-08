@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{admin/layout :: shell('业务审计日志', ${activeNav}, ~{::main})}">
+<main class="content">
+    <div class="page-heading">
+        <div>
+            <p class="eyebrow">管理操作留痕</p>
+            <h1>业务审计日志</h1>
+        </div>
+    </div>
+
+    <section class="table-section compact-table">
+        <div class="section-heading">
+            <div><h2>近期审计记录</h2><p>最近100条管理端业务操作</p></div>
+            <form class="filter-form" method="get" th:action="@{/admin/audit}">
+                <select name="action" aria-label="操作类型">
+                    <option value="">全部操作</option>
+                    <option th:each="option : ${actions}" th:value="${option.value}"
+                            th:selected="${selectedAction != null and selectedAction.name() == option.value}"
+                            th:text="${option.label}">账户创建</option>
+                </select>
+                <select name="outcome" aria-label="操作结果">
+                    <option value="">全部结果</option>
+                    <option th:each="option : ${outcomes}" th:value="${option.value}"
+                            th:selected="${selectedOutcome != null and selectedOutcome.name() == option.value}"
+                            th:text="${option.label}">成功</option>
+                </select>
+                <button class="button button-primary" type="submit">查询</button>
+                <a class="button button-secondary" th:href="@{/admin/audit}">清除筛选</a>
+            </form>
+        </div>
+        <div class="table-scroll">
+            <table>
+                <thead><tr><th>时间</th><th>操作人</th><th>操作</th><th>业务对象</th><th>结果</th><th>摘要</th><th>关联标识</th></tr></thead>
+                <tbody>
+                <tr th:each="event : ${events}">
+                    <td th:text="${#temporals.format(event.occurredAt, 'yyyy-MM-dd HH:mm:ss')}">2026-01-01 12:00:00</td>
+                    <td th:text="${event.actor}">管理员</td>
+                    <td th:text="${event.actionLabel}">账户创建</td>
+                    <td><span th:text="${event.aggregateTypeLabel}">业务对象</span>
+                        <span class="mono" th:text="${event.aggregateId}">ID</span></td>
+                    <td><span class="status"
+                              th:classappend="${event.outcome.name() == 'SUCCEEDED'} ? ' status-success' : ' status-danger'"
+                              th:text="${event.outcomeLabel}">成功</span></td>
+                    <td th:text="${event.summary}">暂无摘要</td>
+                    <td class="mono" th:text="${event.correlationReference}">—</td>
+                </tr>
+                <tr th:if="${#lists.isEmpty(events)}"><td colspan="7" class="empty-state">暂无审计记录</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+</main>
+</html>

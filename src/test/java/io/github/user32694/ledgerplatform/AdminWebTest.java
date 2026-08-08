@@ -2,7 +2,9 @@ package io.github.user32694.ledgerplatform;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.matchesPattern;
+import static org.hamcrest.Matchers.not;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -14,6 +16,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.view;
 
 import io.github.user32694.ledgerplatform.accounts.AccountsApi;
+import io.github.user32694.ledgerplatform.audit.AuditAction;
+import io.github.user32694.ledgerplatform.audit.AuditApi;
+import io.github.user32694.ledgerplatform.audit.AuditCommand;
+import io.github.user32694.ledgerplatform.audit.AuditOutcome;
 import io.github.user32694.ledgerplatform.payments.PaymentsApi;
 import io.github.user32694.ledgerplatform.payments.ReversePaymentCommand;
 import io.github.user32694.ledgerplatform.payments.TopUpCommand;
@@ -55,6 +61,7 @@ import org.springframework.test.web.servlet.MockMvc;
 class AdminWebTest {
     @Autowired MockMvc mockMvc;
     @Autowired AccountsApi accountsApi;
+    @Autowired AuditApi auditApi;
     @Autowired PaymentsApi paymentsApi;
     @Autowired JdbcTemplate jdbcTemplate;
 
@@ -102,7 +109,7 @@ class AdminWebTest {
                 .andExpect(content().string(containsString("账本流水")))
                 .andExpect(content().string(containsString("自动对账")))
                 .andExpect(content().string(containsString("审计日志")))
-                .andExpect(content().string(containsString("后续开放")))
+                .andExpect(content().string(not(containsString("后续开放"))))
                 .andExpect(content().string(containsString("管理后台")))
                 .andExpect(content().string(containsString("退出登录")))
                 .andExpect(content().string(containsString("新建账户")));
@@ -737,5 +744,195 @@ class AdminWebTest {
                 .andExpect(model().attributeHasFieldErrors("reverseForm", "idempotencyKey"))
                 .andExpect(content().string(containsString(
                         "该幂等键已被其他请求使用，请更换后重试")));
+    }
+
+    @Test
+    void protectsAuditLogFromAnonymousAccess() throws Exception {
+        mockMvc.perform(get("/admin/audit"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrlPattern("**/login"));
+    }
+
+    @Test
+    @WithMockUser(username = "audit-admin", roles = "ADMIN")
+    void filtersAuditLogAndRendersChineseLabelsForAdministrator() throws Exception {
+        var account = accountsApi.create("审计日志客户");
+        var topUp = paymentsApi.topUp(new TopUpCommand(
+                "audit-page-top-up-" + UUID.randomUUID(), account.id(), 500));
+
+        mockMvc.perform(get("/admin/audit")
+                        .param("action", "PAYMENT_TOP_UP")
+                        .param("outcome", "SUCCEEDED"))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/audit-list"))
+                .andExpect(model().attribute("activeNav", "audit"))
+                .andExpect(model().attribute("selectedAction", AuditAction.PAYMENT_TOP_UP))
+                .andExpect(model().attribute("selectedOutcome", AuditOutcome.SUCCEEDED))
+                .andExpect(content().string(containsString("业务审计日志")))
+                .andExpect(content().string(containsString("账户充值")))
+                .andExpect(content().string(containsString("成功")))
+                .andExpect(content().string(containsString("账户充值成功，人民币 5.00")))
+                .andExpect(content().string(not(containsString("TOP_UP CNY 500 SUCCEEDED"))))
+                .andExpect(content().string(containsString("audit-admin")))
+                .andExpect(content().string(containsString(topUp.id().toString())))
+                .andExpect(content().string(not(containsString(account.id().toString()))))
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*<a[^>]*href=\"/admin/audit\"[^>]*class=\"[^\"]*active[^\"]*\"[^>]*>\\s*审计日志\\s*</a>.*")));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void supportsAuditFilterCombinationsAndLimitsDefaultResultsToOneHundred() throws Exception {
+        String successMarker = "audit-action-only-" + UUID.randomUUID();
+        String failureMarker = "audit-outcome-only-" + UUID.randomUUID();
+        auditApi.record(new AuditCommand(
+                null,
+                AuditAction.PAYMENT_REFUND,
+                "PAYMENT",
+                successMarker,
+                AuditOutcome.SUCCEEDED,
+                "人工退款备注",
+                null));
+        auditApi.record(new AuditCommand(
+                null,
+                AuditAction.PAYMENT_REVERSAL,
+                "PAYMENT",
+                failureMarker,
+                AuditOutcome.FAILED,
+                "reversal marker",
+                null));
+
+        mockMvc.perform(get("/admin/audit").param("action", "PAYMENT_REFUND"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString(successMarker)))
+                .andExpect(content().string(containsString("人工退款备注")))
+                .andExpect(content().string(not(containsString(failureMarker))))
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*<option value=\"PAYMENT_REFUND\"\\s+selected=\"selected\">充值退款</option>.*")))
+                .andExpect(content().string(containsString("清除筛选")));
+
+        mockMvc.perform(get("/admin/audit").param("outcome", "FAILED"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString(failureMarker)))
+                .andExpect(content().string(not(containsString(successMarker))))
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*<option value=\"FAILED\"\\s+selected=\"selected\">失败</option>.*")));
+
+        mockMvc.perform(get("/admin/audit"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString(successMarker)))
+                .andExpect(content().string(containsString(failureMarker)));
+
+        int existingEventCount = auditApi.findRecent(null, null, 100).size();
+        for (int index = existingEventCount; index < 100; index++) {
+            auditApi.record(new AuditCommand(
+                    null,
+                    AuditAction.RECONCILIATION_RUN,
+                    "RECONCILIATION_BATCH",
+                    "audit-limit-" + index + "-" + UUID.randomUUID(),
+                    AuditOutcome.SUCCEEDED,
+                    "limit marker " + index,
+                    null));
+        }
+
+        mockMvc.perform(get("/admin/audit"))
+                .andExpect(status().isOk())
+                .andExpect(model().attribute("events", hasSize(100)));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void rejectsInvalidAuditFiltersWithoutLeakingConversionDetails() throws Exception {
+        for (String parameter : new String[] {"action", "outcome"}) {
+            mockMvc.perform(get("/admin/audit").param(parameter, "NOT_A_VALID_ENUM"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(content().string(not(containsString("Whitelabel"))))
+                    .andExpect(content().string(not(containsString("MethodArgumentTypeMismatchException"))))
+                    .andExpect(content().string(not(containsString("Failed to convert"))));
+        }
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void rendersAuditColumnsAndNeutralPlaceholderForMissingCorrelation() throws Exception {
+        String marker = "audit-columns-" + UUID.randomUUID();
+        auditApi.record(new AuditCommand(
+                null,
+                AuditAction.RECONCILIATION_RESOLVE,
+                "RECONCILIATION_DIFFERENCE",
+                marker,
+                AuditOutcome.SUCCEEDED,
+                "已安全处理",
+                null));
+
+        mockMvc.perform(get("/admin/audit")
+                        .param("action", "RECONCILIATION_RESOLVE"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("时间")))
+                .andExpect(content().string(containsString("操作人")))
+                .andExpect(content().string(containsString("<th>操作</th>")))
+                .andExpect(content().string(containsString("业务对象")))
+                .andExpect(content().string(containsString("<th>结果</th>")))
+                .andExpect(content().string(containsString("摘要")))
+                .andExpect(content().string(containsString("关联标识")))
+                .andExpect(content().string(containsString("处理差异")))
+                .andExpect(content().string(containsString(marker)))
+                .andExpect(content().string(containsString("已安全处理")))
+                .andExpect(content().string(containsString("—")));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void localizesStandardFailedPaymentSummaryWithoutLeakingReasonCode() throws Exception {
+        String marker = "audit-failed-refund-" + UUID.randomUUID();
+        auditApi.record(new AuditCommand(
+                null,
+                AuditAction.PAYMENT_REFUND,
+                "PAYMENT",
+                marker,
+                AuditOutcome.FAILED,
+                "REFUND CNY 500 FAILED INSUFFICIENT_FUNDS",
+                null));
+
+        mockMvc.perform(get("/admin/audit")
+                        .param("action", "PAYMENT_REFUND")
+                        .param("outcome", "FAILED"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString(
+                        "充值退款失败，人民币 5.00，余额不足")))
+                .andExpect(content().string(not(containsString(
+                        "REFUND CNY 500 FAILED INSUFFICIENT_FUNDS"))))
+                .andExpect(content().string(not(containsString("INSUFFICIENT_FUNDS"))));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void rendersRefundAndReversalLabelsInOverviewAndRecentHistory() throws Exception {
+        var customer = accountsApi.create("中文反向客户");
+        var recipient = accountsApi.create("中文反向收款人");
+        var topUp = paymentsApi.topUp(new TopUpCommand(
+                "chinese-refund-source-" + UUID.randomUUID(), customer.id(), 1000));
+        var transfer = paymentsApi.transfer(new TransferCommand(
+                "chinese-reversal-source-" + UUID.randomUUID(), customer.id(), recipient.id(), 400));
+        paymentsApi.reverse(new ReversePaymentCommand(
+                "chinese-reversal-" + UUID.randomUUID(), transfer.id(), "测试转账冲正"));
+        paymentsApi.reverse(new ReversePaymentCommand(
+                "chinese-refund-" + UUID.randomUUID(), topUp.id(), "测试充值退款"));
+
+        mockMvc.perform(get("/admin"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("<td>充值退款</td>")))
+                .andExpect(content().string(containsString("<td>转账冲正</td>")))
+                .andExpect(content().string(not(containsString("<td>REFUND</td>"))))
+                .andExpect(content().string(not(containsString("<td>REVERSAL</td>"))))
+                .andExpect(content().string(containsString("最近处理的充值、转账及反向操作")));
+
+        mockMvc.perform(get("/admin/payments/top-up"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("<td>充值退款</td>")))
+                .andExpect(content().string(containsString("<td>转账冲正</td>")))
+                .andExpect(content().string(not(containsString("<td>REFUND</td>"))))
+                .andExpect(content().string(not(containsString("<td>REVERSAL</td>"))))
+                .andExpect(content().string(containsString("最近20条充值、转账及反向操作")));
     }
 }
