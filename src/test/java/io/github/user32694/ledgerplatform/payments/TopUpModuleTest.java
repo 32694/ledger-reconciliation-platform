@@ -683,8 +683,14 @@ class TopUpModuleTest {
                 """, reverse.channelReference())).isEqualTo(2);
         assertThat(count("""
                 SELECT COUNT(*) FROM audit.audit_event
-                WHERE action = 'PAYMENT_REFUND' AND aggregate_id = ?
-                """, reverse.id().toString())).isOne();
+                WHERE action = 'PAYMENT_REFUND'
+                """)).isOne();
+        assertThat(jdbcTemplate.queryForMap("""
+                SELECT aggregate_id, outcome FROM audit.audit_event
+                WHERE action = 'PAYMENT_REFUND'
+                """))
+                .containsEntry("aggregate_id", reverse.id().toString())
+                .containsEntry("outcome", "SUCCEEDED");
     }
 
     @Test
