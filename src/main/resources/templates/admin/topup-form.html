@@ -2,7 +2,10 @@
 <html lang="zh-CN" xmlns:th="http://www.thymeleaf.org"
       th:replace="~{admin/layout :: shell('资金操作', ${activeNav}, ~{::main})}">
 <main class="content">
-    <div class="page-heading"><div><p class="eyebrow">资金操作</p><h1>账户充值</h1></div></div>
+    <div class="page-heading">
+        <div><p class="eyebrow">资金操作</p><h1>账户充值</h1></div>
+        <a class="button button-secondary" th:href="@{/admin/payments/transfer}">账户转账</a>
+    </div>
     <div class="split-workspace">
         <form class="form-surface" method="post" th:action="@{/admin/payments/top-up}" th:object="${topUpForm}">
             <div class="alert alert-error" th:if="${#fields.hasGlobalErrors()}" th:each="error : ${#fields.globalErrors()}" th:text="${error}">充值失败，请检查输入后重试</div>
@@ -28,24 +31,7 @@
             </div>
             <div class="form-actions"><button class="button button-primary" type="submit">提交充值</button></div>
         </form>
-        <section id="recent-payments-table" class="table-section compact-table" aria-labelledby="recent-topups-title" th:fragment="recentPaymentsTable">
-            <div class="section-heading">
-                <div><h2 id="recent-topups-title">近期充值</h2><p>最近20条充值指令</p></div>
-                <a id="refresh-payments" class="button button-secondary" th:href="@{/admin/payments/top-up}" hx-get="/admin/payments/recent" hx-target="#recent-payments-table" hx-swap="outerHTML">刷新</a>
-            </div>
-            <div class="table-scroll">
-                <table><thead><tr><th>业务流水号</th><th class="numeric">金额</th><th>状态</th></tr></thead>
-                    <tbody>
-                    <tr th:each="payment : ${recentPayments}">
-                        <td class="mono" th:text="${payment.channelReference}">PAY-001</td>
-                        <td class="numeric">人民币 <span th:text="${payment.amount}">0.00</span></td>
-                        <td><span class="status" th:classappend="${payment.status == 'SUCCEEDED'} ? ' status-success' : ' status-danger'" th:text="${payment.statusLabel}">成功</span></td>
-                    </tr>
-                    <tr th:if="${#lists.isEmpty(recentPayments)}"><td colspan="3" class="empty-state">暂无充值记录</td></tr>
-                    </tbody>
-                </table>
-            </div>
-        </section>
+        <section th:replace="~{admin/payment-history :: recentPaymentsTable}"></section>
     </div>
 </main>
 </html>

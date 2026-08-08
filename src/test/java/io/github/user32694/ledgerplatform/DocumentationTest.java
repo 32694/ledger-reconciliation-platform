@@ -41,4 +41,23 @@ class DocumentationTest {
                 .contains("仅内部存在")
                 .contains("原支付和账本事实不会被修改");
     }
+
+    @org.junit.jupiter.api.Test
+    void documentsAccountTransferMilestone() throws IOException {
+        String readme = Files.readString(Path.of("README.md"));
+        String guide = Files.readString(Path.of("docs/USER_GUIDE.md"));
+
+        assertThat(readme)
+                .contains("账户转账")
+                .contains("双重记账")
+                .contains("并发")
+                .doesNotContain("transfers, production channel integrations");
+        assertThat(guide)
+                .contains("/admin/payments/transfer")
+                .contains("付款账户余额不足")
+                .contains("`INSUFFICIENT_FUNDS`")
+                .contains("不能出现负余额")
+                .contains("10,000")
+                .contains("2,500");
+    }
 }

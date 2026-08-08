@@ -51,6 +51,8 @@ class TopUpModuleTest {
 
         assertThat(first.id()).isEqualTo(repeated.id());
         assertThat(first.status()).isEqualTo("SUCCEEDED");
+        assertThat(first.payerAccountId()).isNull();
+        assertThat(first.payeeAccountId()).isEqualTo(account.id());
         assertThat(accountsApi.balance(account.id()).cents()).isEqualTo(5000);
     }
 
@@ -110,6 +112,131 @@ class TopUpModuleTest {
         assertThat(failed.failureReason()).isEqualTo("BALANCE_LIMIT_EXCEEDED");
         assertThat(accountsApi.balance(account.id()).cents()).isEqualTo(Long.MAX_VALUE);
         assertThat(paymentsApi.findRecent(1)).containsExactly(failed);
+    }
+
+    @Test
+    void transfersFundsBetweenCustomerAccounts() {
+        var payer = accountsApi.create("Transfer Payer");
+        var payee = accountsApi.create("Transfer Payee");
+        paymentsApi.topUp(new TopUpCommand("fund-transfer-payer", payer.id(), 5000));
+
+        var transfer = paymentsApi.transfer(new TransferCommand(
+                "transfer-success-1", payer.id(), payee.id(), 1200));
+
+        assertThat(transfer.type()).isEqualTo("TRANSFER");
+        assertThat(transfer.payerAccountId()).isEqualTo(payer.id());
+        assertThat(transfer.payeeAccountId()).isEqualTo(payee.id());
+        assertThat(transfer.status()).isEqualTo("SUCCEEDED");
+        assertThat(accountsApi.balance(payer.id()).cents()).isEqualTo(3800);
+        assertThat(accountsApi.balance(payee.id()).cents()).isEqualTo(1200);
+        assertThat(count("""
+                SELECT COUNT(*)
+                FROM ledger.ledger_entry entry
+                JOIN ledger.ledger_transaction transaction ON transaction.id = entry.transaction_id
+                WHERE transaction.business_reference = ?
+                """, transfer.channelReference())).isEqualTo(2);
+    }
+
+    @Test
+    void rejectsTransferToTheSameAccountWithoutCreatingInstruction() {
+        var account = accountsApi.create("Self Transfer Customer");
+
+        assertThatThrownBy(() -> paymentsApi.transfer(new TransferCommand(
+                "transfer-self-1", account.id(), account.id(), 100)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("different");
+
+        assertThat(paymentsApi.findRecent(1)).isEmpty();
+    }
+
+    @Test
+    void rejectsUnknownTransferPartyWithoutCreatingInstruction() {
+        var payee = accountsApi.create("Known Transfer Payee");
+
+        assertThatThrownBy(() -> paymentsApi.transfer(new TransferCommand(
+                "transfer-unknown-party-1", UUID.randomUUID(), payee.id(), 100)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("does not exist");
+
+        assertThat(paymentsApi.findRecent(1)).isEmpty();
+    }
+
+    @Test
+    void recordsFailedTransferWhenPayerHasInsufficientFunds() {
+        var payer = accountsApi.create("Insufficient Payer");
+        var payee = accountsApi.create("Insufficient Payee");
+        paymentsApi.topUp(new TopUpCommand("fund-insufficient-payer", payer.id(), 500));
+
+        var transfer = paymentsApi.transfer(new TransferCommand(
+                "transfer-insufficient-1", payer.id(), payee.id(), 600));
+
+        assertThat(transfer.status()).isEqualTo("FAILED");
+        assertThat(transfer.failureReason()).isEqualTo("INSUFFICIENT_FUNDS");
+        assertThat(accountsApi.balance(payer.id()).cents()).isEqualTo(500);
+        assertThat(accountsApi.balance(payee.id()).cents()).isZero();
+        assertThat(count("""
+                SELECT COUNT(*)
+                FROM ledger.ledger_transaction
+                WHERE business_reference = ?
+                """, transfer.channelReference())).isZero();
+    }
+
+    @Test
+    void replaysTheSameTransferWithoutMovingFundsAgain() {
+        var payer = accountsApi.create("Replay Payer");
+        var payee = accountsApi.create("Replay Payee");
+        paymentsApi.topUp(new TopUpCommand("fund-replay-payer", payer.id(), 1000));
+        var command = new TransferCommand("transfer-replay-1", payer.id(), payee.id(), 400);
+
+        var first = paymentsApi.transfer(command);
+        var replay = paymentsApi.transfer(command);
+
+        assertThat(replay.id()).isEqualTo(first.id());
+        assertThat(replay.status()).isEqualTo("SUCCEEDED");
+        assertThat(accountsApi.balance(payer.id()).cents()).isEqualTo(600);
+        assertThat(accountsApi.balance(payee.id()).cents()).isEqualTo(400);
+        assertThat(count("""
+                SELECT COUNT(*)
+                FROM ledger.ledger_transaction
+                WHERE business_reference = ?
+                """, first.channelReference())).isOne();
+    }
+
+    @Test
+    void rejectsTransferIdempotencyKeyWithDifferentPayload() {
+        var payer = accountsApi.create("Transfer Conflict Payer");
+        var payee = accountsApi.create("Transfer Conflict Payee");
+        paymentsApi.topUp(new TopUpCommand("fund-transfer-conflict", payer.id(), 1000));
+        paymentsApi.transfer(new TransferCommand(
+                "transfer-conflict-1", payer.id(), payee.id(), 400));
+
+        assertThatThrownBy(() -> paymentsApi.transfer(new TransferCommand(
+                "transfer-conflict-1", payer.id(), payee.id(), 500)))
+                .isInstanceOf(IdempotencyConflictException.class);
+    }
+
+    @Test
+    void preventsConcurrentTransfersFromOverdrawingThePayer() throws Exception {
+        var payer = accountsApi.create("Concurrent Transfer Payer");
+        var firstPayee = accountsApi.create("Concurrent Transfer Payee One");
+        var secondPayee = accountsApi.create("Concurrent Transfer Payee Two");
+        paymentsApi.topUp(new TopUpCommand("fund-concurrent-transfer", payer.id(), 1000));
+        var first = new TransferCommand(
+                "concurrent-transfer-1", payer.id(), firstPayee.id(), 700);
+        var second = new TransferCommand(
+                "concurrent-transfer-2", payer.id(), secondPayee.id(), 700);
+
+        var attempts = transferConcurrently(first, second);
+
+        assertThat(attempts).extracting(Attempt::error).containsOnlyNulls();
+        assertThat(attempts).extracting(attempt -> attempt.payment().status())
+                .containsExactlyInAnyOrder("SUCCEEDED", "FAILED");
+        assertThat(attempts).filteredOn(attempt -> "FAILED".equals(attempt.payment().status()))
+                .extracting(attempt -> attempt.payment().failureReason())
+                .containsExactly("INSUFFICIENT_FUNDS");
+        assertThat(accountsApi.balance(payer.id()).cents()).isEqualTo(300);
+        assertThat(accountsApi.balance(firstPayee.id()).cents()
+                + accountsApi.balance(secondPayee.id()).cents()).isEqualTo(700);
     }
 
     @Test
@@ -254,6 +381,38 @@ class TopUpModuleTest {
             start.await();
             try {
                 return new Attempt(paymentsApi.topUp(command), null);
+            } catch (RuntimeException exception) {
+                return new Attempt(null, exception);
+            }
+        };
+    }
+
+    private List<Attempt> transferConcurrently(TransferCommand first, TransferCommand second)
+            throws Exception {
+        var executor = Executors.newFixedThreadPool(2);
+        var ready = new CountDownLatch(2);
+        var start = new CountDownLatch(1);
+        try {
+            var firstFuture = executor.submit(concurrentTransfer(first, ready, start));
+            var secondFuture = executor.submit(concurrentTransfer(second, ready, start));
+            assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            return List.of(
+                    firstFuture.get(10, TimeUnit.SECONDS),
+                    secondFuture.get(10, TimeUnit.SECONDS));
+        } finally {
+            start.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    private Callable<Attempt> concurrentTransfer(
+            TransferCommand command, CountDownLatch ready, CountDownLatch start) {
+        return () -> {
+            ready.countDown();
+            start.await();
+            try {
+                return new Attempt(paymentsApi.transfer(command), null);
             } catch (RuntimeException exception) {
                 return new Attempt(null, exception);
             }

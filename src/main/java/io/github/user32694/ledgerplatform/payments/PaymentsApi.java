@@ -5,6 +5,7 @@ import java.util.List;
 
 public interface PaymentsApi {
     PaymentView topUp(TopUpCommand command);
+    PaymentView transfer(TransferCommand command);
     List<PaymentView> findRecent(int limit);
     List<PaymentView> findSucceededTopUps(Instant fromInclusive, Instant toInclusive);
 }

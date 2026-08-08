@@ -7,6 +7,7 @@ import io.github.user32694.ledgerplatform.ledger.Journal;
 import io.github.user32694.ledgerplatform.ledger.LedgerAccountView;
 import io.github.user32694.ledgerplatform.ledger.LedgerApi;
 import io.github.user32694.ledgerplatform.ledger.LedgerBalanceLimitExceededException;
+import io.github.user32694.ledgerplatform.ledger.LedgerInsufficientFundsException;
 import io.github.user32694.ledgerplatform.ledger.LedgerTransactionView;
 import io.github.user32694.ledgerplatform.ledger.PostedJournal;
 import java.math.BigDecimal;
@@ -96,7 +97,11 @@ class LedgerService implements LedgerApi {
         }
         for (var account : lockedAccounts) {
             try {
-                Math.addExact(currentBalance(account), deltas.getOrDefault(account.id(), 0L));
+                long resultingBalance = Math.addExact(
+                        currentBalance(account), deltas.getOrDefault(account.id(), 0L));
+                if (account.accountType() == AccountType.LIABILITY && resultingBalance < 0) {
+                    throw new LedgerInsufficientFundsException();
+                }
             } catch (ArithmeticException exception) {
                 throw new LedgerBalanceLimitExceededException(exception);
             }

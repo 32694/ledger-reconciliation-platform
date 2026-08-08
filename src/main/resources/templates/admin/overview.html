@@ -9,7 +9,8 @@
         </div>
         <div class="actions">
             <a class="button button-secondary" th:href="@{/admin/accounts/new}">新建账户</a>
-            <a class="button button-primary" th:href="@{/admin/payments/top-up}">账户充值</a>
+            <a class="button button-secondary" th:href="@{/admin/payments/top-up}">账户充值</a>
+            <a class="button button-primary" th:href="@{/admin/payments/transfer}">账户转账</a>
         </div>
     </div>
 
@@ -23,7 +24,7 @@
             <strong>人民币 <span th:text="${customerBalance}">0.00</span></strong>
         </article>
         <article>
-            <span>近期充值笔数</span>
+            <span>近期资金操作笔数</span>
             <strong th:text="${#lists.size(recentPayments)}">0</strong>
         </article>
     </section>
@@ -32,7 +33,7 @@
         <div class="section-heading">
             <div>
                 <h2>近期资金操作</h2>
-                <p>最近处理的充值指令</p>
+                <p>最近处理的充值和转账指令</p>
             </div>
             <a class="text-link" th:href="@{/admin/payments/top-up}">资金操作</a>
         </div>
