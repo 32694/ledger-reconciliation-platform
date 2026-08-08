@@ -18,7 +18,6 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 class AuditService implements AuditApi {
     private static final String SYSTEM_ACTOR = "SYSTEM";
-    private static final String ANONYMOUS_ACTOR = "anonymousUser";
 
     private final AuditEventRepository repository;
 
@@ -93,9 +92,7 @@ class AuditService implements AuditApi {
             return SYSTEM_ACTOR;
         }
         String principal = authentication.getName();
-        if (principal == null
-                || principal.isBlank()
-                || ANONYMOUS_ACTOR.equalsIgnoreCase(principal.strip())) {
+        if (principal == null || principal.isBlank()) {
             return SYSTEM_ACTOR;
         }
         return requireText(principal, "Actor", 128);

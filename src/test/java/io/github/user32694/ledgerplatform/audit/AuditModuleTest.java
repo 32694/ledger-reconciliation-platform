@@ -150,6 +150,31 @@ class AuditModuleTest {
     }
 
     @Test
+    @WithMockUser(username = "anonymousUser")
+    void preservesAuthenticatedPrincipalNamedAnonymousUser() {
+        var nullActor = auditApi.record(new AuditCommand(
+                null,
+                AuditAction.ACCOUNT_CREATE,
+                "ACCOUNT",
+                "a-null-actor",
+                AuditOutcome.SUCCEEDED,
+                "account created",
+                null));
+        var blankActor = auditApi.record(new AuditCommand(
+                " ",
+                AuditAction.ACCOUNT_CREATE,
+                "ACCOUNT",
+                "a-blank-actor",
+                AuditOutcome.SUCCEEDED,
+                "account created",
+                null));
+
+        assertThat(java.util.List.of(nullActor, blankActor))
+                .extracting(AuditEventView::actor)
+                .containsExactly("anonymousUser", "anonymousUser");
+    }
+
+    @Test
     void usesSystemActorWhenNoActorOrPrincipalExists() {
         var event = auditApi.record(new AuditCommand(
                 null,
