@@ -110,19 +110,25 @@ Submission rules:
 4. Lock the original payment row.
 5. Require the original status to be `SUCCEEDED` and its type to be `TOP_UP`
    or `TRANSFER`.
-6. Return the existing successful reverse instruction if one already exists.
-7. Insert a linked `PENDING` instruction using copied amount and parties.
+6. Return the existing `PENDING` or `SUCCEEDED` reverse instruction if one
+   already exists.
+7. Insert a linked `PENDING` instruction using copied amount and parties. A
+   concurrent uniqueness conflict is resolved by loading that existing active
+   instruction instead of creating another one.
 8. Post the inverse journal and complete or fail the instruction.
 
 The reverse request fingerprint includes operation type, original payment ID,
 reason, amount, accounts, and currency. Changing the reason while reusing a key
 is an idempotency conflict.
 
-The original row lock serializes competing reverse requests. A PostgreSQL
-partial unique index on `original_payment_id` for `status = 'SUCCEEDED'`
-provides a final invariant: at most one successful reverse instruction for an
-original payment. Failed attempts do not consume that allowance. After the
-source wallet is funded, an operator may retry with a new idempotency key.
+The original row lock serializes competing submissions, while submission and
+processing remain separate short transactions. A PostgreSQL partial unique
+index on `original_payment_id` for `status IN ('PENDING', 'SUCCEEDED')`
+provides the cross-transaction invariant: at most one active or successful
+reverse instruction for an original payment. Concurrent callers reuse that
+instruction and therefore process the same payment ID. Failed attempts leave
+the index when their status changes to `FAILED`; after the source wallet is
+funded, an operator may retry with a new idempotency key.
 
 ## 6. Ledger Behavior
 
@@ -190,7 +196,7 @@ Add two forward-only Flyway migrations:
 
 - `V9__add_payment_refunds_and_reversals.sql` expands the payment type column,
   adds the self-reference and reason, replaces the party/type check, and adds
-  the partial unique index for one successful reverse operation.
+  the partial unique index for one active or successful reverse operation.
 - `V10__create_audit_events.sql` creates the `audit` schema, event table, and a
   descending `(occurred_at, id)` index.
 
@@ -270,7 +276,8 @@ columns, status values, and log messages stay English.
 - MockMvc covers detail, eligibility, reverse form validation, CSRF, Chinese
   feedback, linked transactions, audit navigation, and filters.
 - PostgreSQL migration tests prove existing data remains valid and cover local
-  type/original-field constraints plus the successful-reverse unique index.
+  type/original-field constraints plus the active-or-successful reverse unique
+  index.
 - Service tests cover cross-row original type and status rules that cannot be
   expressed by a PostgreSQL row check constraint.
 - Spring Modulith and ArchUnit tests confirm only public module APIs are used.
