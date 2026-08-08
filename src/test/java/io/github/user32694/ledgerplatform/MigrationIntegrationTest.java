@@ -43,6 +43,27 @@ class MigrationIntegrationTest {
     }
 
     @Test
+    void createsReconciliationTablesWithDatabaseConstraints() {
+        assertThat(jdbcTemplate.queryForList("""
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = 'reconciliation'
+                ORDER BY table_name
+                """, String.class)).containsExactly(
+                        "channel_statement_entry",
+                        "reconciliation_batch",
+                        "reconciliation_resolution",
+                        "reconciliation_result");
+
+        assertThatThrownBy(() -> jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_batch
+                    (id, source_type, file_name, file_sha256, status, created_by, created_at)
+                VALUES (?, 'OTHER', 'bad.csv', ?, 'IMPORTED', 'test', CURRENT_TIMESTAMP)
+                """, UUID.randomUUID(), "0".repeat(64)))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
     @Transactional
     void upgradesTheLegacyConstraintWithoutRewritingExistingTransactions() throws IOException {
         jdbcTemplate.execute("ALTER TABLE ledger.ledger_transaction RENAME CONSTRAINT "

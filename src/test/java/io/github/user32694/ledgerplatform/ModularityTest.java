@@ -18,7 +18,8 @@ class ModularityTest {
                 .map(module -> module.getName())
                 .collect(Collectors.toSet());
 
-        assertThat(names).containsExactlyInAnyOrder("identity", "accounts", "ledger", "payments");
+        assertThat(names).containsExactlyInAnyOrder(
+                "identity", "accounts", "ledger", "payments", "reconciliation");
     }
 
     @Test
@@ -35,5 +36,15 @@ class ModularityTest {
 
         assertThat(identity.getAnnotation(ApplicationModule.class).allowedDependencies()).isEmpty();
         assertThat(ledger.getAnnotation(ApplicationModule.class).allowedDependencies()).isEmpty();
+    }
+
+    @Test
+    void reconciliationDependsOnlyOnPayments() throws ClassNotFoundException {
+        Package reconciliation = Class.forName(
+                        "io.github.user32694.ledgerplatform.reconciliation.package-info")
+                .getPackage();
+
+        assertThat(reconciliation.getAnnotation(ApplicationModule.class).allowedDependencies())
+                .containsExactly("payments");
     }
 }
