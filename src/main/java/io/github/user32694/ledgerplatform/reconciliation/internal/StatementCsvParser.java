@@ -16,7 +16,9 @@ import java.util.Set;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVRecord;
+import org.springframework.stereotype.Component;
 
+@Component
 public final class StatementCsvParser {
     private static final List<String> HEADER = List.of(
             "channel_transaction_id", "amount_cents", "occurred_at");
