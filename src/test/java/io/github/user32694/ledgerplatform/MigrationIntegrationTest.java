@@ -2,6 +2,7 @@ package io.github.user32694.ledgerplatform;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -199,6 +200,15 @@ class MigrationIntegrationTest {
 
     @Test
     void upgradesLegacyPaymentsFromV8WithoutRewritingThem() throws SQLException {
+        var canCreateDatabase = jdbcTemplate.queryForObject("""
+                SELECT rolcreatedb OR rolsuper
+                FROM pg_roles
+                WHERE rolname = current_user
+                """, Boolean.class);
+        assumeTrue(
+                Boolean.TRUE.equals(canCreateDatabase),
+                "V8-to-V10 upgrade test requires a database-creating test role");
+
         var databaseName = "ledger_migration_test_" + UUID.randomUUID().toString().replace("-", "");
         var temporaryDatasourceUrl = datasourceUrlFor(databaseName);
 
