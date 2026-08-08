@@ -19,7 +19,7 @@ class ModularityTest {
                 .collect(Collectors.toSet());
 
         assertThat(names).containsExactlyInAnyOrder(
-                "identity", "accounts", "ledger", "payments", "reconciliation");
+                "identity", "accounts", "ledger", "payments", "reconciliation", "audit");
     }
 
     @Test
@@ -33,9 +33,12 @@ class ModularityTest {
                 .getPackage();
         Package ledger = Class.forName("io.github.user32694.ledgerplatform.ledger.package-info")
                 .getPackage();
+        Package audit = Class.forName("io.github.user32694.ledgerplatform.audit.package-info")
+                .getPackage();
 
         assertThat(identity.getAnnotation(ApplicationModule.class).allowedDependencies()).isEmpty();
         assertThat(ledger.getAnnotation(ApplicationModule.class).allowedDependencies()).isEmpty();
+        assertThat(audit.getAnnotation(ApplicationModule.class).allowedDependencies()).isEmpty();
     }
 
     @Test
