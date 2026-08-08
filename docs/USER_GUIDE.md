@@ -98,8 +98,32 @@ java -jar target/ledger-reconciliation-platform-0.1.0-SNAPSHOT.jar
 3. Open **Payments**, choose the account, enter a positive amount in CNY cents and a unique idempotency key, then choose **Post top up**.
 4. Return to **Accounts** to see the available balance derived from ledger entries.
 5. Open **Ledger** to inspect the recent balanced journal transaction.
+6. Open **自动对账** to import a synthetic channel statement and compare it with successful top-ups.
 
-Reusing an idempotency key with different top-up data is rejected. Transfers and channel-statement imports are not available in this milestone.
+Reusing an idempotency key with different top-up data is rejected. Transfers are not available in this milestone.
+
+### Automatic Reconciliation
+
+The reconciliation page is available to administrators from the **自动对账** navigation item. This milestone supports one synthetic channel, `SYNTHETIC_CHANNEL`, and a fixed UTF-8 CSV header:
+
+```text
+channel_transaction_id,amount_cents,occurred_at
+```
+
+Each data row contains a non-empty channel transaction ID, a positive amount in CNY cents, and an ISO-8601 timestamp. Uploads are limited to 2 MB and 10,000 data rows. The file is validated as a whole: if any row is invalid, the batch is marked `IMPORT_FAILED` and no statement details are stored.
+
+After a successful upload, the batch is `IMPORTED`. Select **开始对账** to compare the statement with successful internal top-ups in the statement time range. The first version runs synchronously and produces four result types:
+
+| 页面显示 | Internal status | Meaning |
+| --- | --- | --- |
+| 匹配一致 | `MATCHED` | Channel transaction ID and amount match an internal top-up. |
+| 金额不一致 | `AMOUNT_MISMATCH` | The channel transaction ID exists internally, but amounts differ. |
+| 仅渠道存在 | `CHANNEL_ONLY` | The statement contains a transaction with no matching internal top-up. |
+| 仅内部存在 | `INTERNAL_ONLY` | A successful internal top-up has no matching statement row. |
+
+The result list shows discrepancies first. An administrator can resolve an open discrepancy by entering a required note. The resolution records the administrator, timestamp, and note in a separate immutable history; resolving a discrepancy means **原支付和账本事实不会被修改**, and the imported channel statement remains unchanged. A matched result cannot be resolved.
+
+The SHA-256 digest of the uploaded file provides idempotency. Uploading the same file again returns the existing batch instead of creating another one. A different file that repeats a channel transaction ID already imported in another batch is rejected, so the same channel event cannot be reconciled twice. A failed import can be retried with a corrected file; it has no statement details and cannot be started.
 
 Check application health without signing in:
 

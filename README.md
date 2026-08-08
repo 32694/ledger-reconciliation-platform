@@ -4,14 +4,15 @@ A simulated payment-ledger application built as a learning and portfolio project
 
 ## Milestone 1
 
-The current milestone is a Spring Boot modular monolith with four modules:
+The current milestone is a Spring Boot modular monolith with five modules:
 
 - `identity`: bootstraps one configured administrator and provides form login.
 - `accounts`: creates and lists simulated customer accounts and shows balances derived from the ledger.
 - `ledger`: persists balanced, immutable journal entries and lists recent ledger transactions.
 - `payments`: records idempotent simulated top-ups into customer wallets.
+- `reconciliation`: imports synthetic channel statements, runs exact-match reconciliation, and records auditable discrepancy resolutions.
 
-Transfers, channel-statement import, reconciliation, discrepancy resolution, and an audit log are not implemented yet. [`examples/channel-statement.csv`](examples/channel-statement.csv) is synthetic input for a future reconciliation milestone; the current application cannot import it.
+The **自动对账** entry in the administrator navigation provides the first reconciliation workflow. It accepts the fixed synthetic CSV format documented in the [User Guide](docs/USER_GUIDE.md), creates an immutable import batch, and lets an administrator start reconciliation and resolve discrepancies. The application remains a learning and portfolio project: transfers, production channel integrations, and a general-purpose audit log are outside this milestone.
 
 ## Prerequisites
 
