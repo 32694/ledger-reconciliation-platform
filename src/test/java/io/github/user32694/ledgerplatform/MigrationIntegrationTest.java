@@ -5,13 +5,21 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.sql.DriverManager;
+import java.sql.SQLException;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Pattern;
+import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,8 +28,19 @@ import org.springframework.transaction.annotation.Transactional;
 class MigrationIntegrationTest {
     private static final String LEGACY_CONSTRAINT = "ledger_transaction_business_reference_key";
     private static final String TARGET_CONSTRAINT = "uk_ledger_transaction_business_reference";
+    private static final Pattern TEMPORARY_DATABASE_NAME =
+            Pattern.compile("ledger_migration_test_[0-9a-f]{32}");
 
     @Autowired JdbcTemplate jdbcTemplate;
+
+    @Value("${spring.datasource.url}")
+    String datasourceUrl;
+
+    @Value("${spring.datasource.username}")
+    String datasourceUsername;
+
+    @Value("${spring.datasource.password}")
+    String datasourcePassword;
 
     @Test
     void appliesLegacyV2AndConstraintNamingV6() {
@@ -108,13 +127,16 @@ class MigrationIntegrationTest {
     void createsThePartialUniqueIndexForActiveReversePayments() {
         var index = jdbcTemplate.queryForMap("""
                 SELECT index_definition.indisunique AS is_unique,
-                       pg_get_expr(index_definition.indpred, index_definition.indrelid) AS predicate
+                       pg_get_expr(index_definition.indpred, index_definition.indrelid) AS predicate,
+                       pg_get_indexdef(index_definition.indexrelid, 1, true) AS indexed_column
                 FROM pg_index index_definition
                 JOIN pg_class index_name ON index_name.oid = index_definition.indexrelid
                 WHERE index_name.relname = 'uk_payment_instruction_active_reverse'
+                  AND index_definition.indrelid = 'payments.payment_instruction'::regclass
                 """);
 
         assertThat(index.get("is_unique")).isEqualTo(true);
+        assertThat(index.get("indexed_column")).isEqualTo("original_payment_id");
         assertThat((String) index.get("predicate"))
                 .contains("original_payment_id IS NOT NULL")
                 .contains("PENDING")
@@ -142,12 +164,33 @@ class MigrationIntegrationTest {
 
     @Test
     @Transactional
-    void acceptsFailedReverseRetriesButRejectsAfterSucceededReverse() {
+    void releasesFailedReverseForRetryAndBlocksAnotherAfterSuccess() {
         var payeeId = insertCustomerAccount();
         var originalId = insertPayment("TOP_UP", null, payeeId, "SUCCEEDED", null, null);
-        insertPayment("REFUND", null, payeeId, "FAILED", originalId, "first attempt");
-        insertPayment("REFUND", null, payeeId, "FAILED", originalId, "second attempt");
-        insertPayment("REFUND", null, payeeId, "SUCCEEDED", originalId, "completed refund");
+        var firstAttemptId = insertPayment(
+                "REFUND", null, payeeId, "PENDING", originalId, "first attempt");
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT completed_at FROM payments.payment_instruction WHERE id = ?",
+                Object.class,
+                firstAttemptId)).isNull();
+
+        jdbcTemplate.update("""
+                UPDATE payments.payment_instruction
+                SET status = 'FAILED', completed_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """, firstAttemptId);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT completed_at FROM payments.payment_instruction WHERE id = ?",
+                Object.class,
+                firstAttemptId)).isNotNull();
+
+        var retryId = insertPayment(
+                "REFUND", null, payeeId, "PENDING", originalId, "retry attempt");
+        jdbcTemplate.update("""
+                UPDATE payments.payment_instruction
+                SET status = 'SUCCEEDED', completed_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """, retryId);
 
         assertThatThrownBy(() -> insertPayment(
                         "REFUND", null, payeeId, "PENDING", originalId, "duplicate refund"))
@@ -155,15 +198,48 @@ class MigrationIntegrationTest {
     }
 
     @Test
-    @Transactional
-    void rejectsAnotherActiveReverseWhileOneIsPending() {
-        var payeeId = insertCustomerAccount();
-        var originalId = insertPayment("TOP_UP", null, payeeId, "SUCCEEDED", null, null);
-        insertPayment("REFUND", null, payeeId, "PENDING", originalId, "pending refund");
+    void upgradesLegacyPaymentsFromV8WithoutRewritingThem() throws SQLException {
+        var databaseName = "ledger_migration_test_" + UUID.randomUUID().toString().replace("-", "");
+        var temporaryDatasourceUrl = datasourceUrlFor(databaseName);
 
-        assertThatThrownBy(() -> insertPayment(
-                        "REFUND", null, payeeId, "SUCCEEDED", originalId, "duplicate refund"))
-                .isInstanceOf(DataIntegrityViolationException.class);
+        try {
+            createTemporaryDatabase(databaseName);
+            Flyway.configure()
+                    .dataSource(temporaryDatasourceUrl, datasourceUsername, datasourcePassword)
+                    .target("8")
+                    .load()
+                    .migrate();
+
+            var legacyDatabase = new JdbcTemplate(new DriverManagerDataSource(
+                    temporaryDatasourceUrl, datasourceUsername, datasourcePassword));
+            var payerId = insertLegacyCustomerAccount(legacyDatabase);
+            var payeeId = insertLegacyCustomerAccount(legacyDatabase);
+            var topUpId = insertLegacyPayment(legacyDatabase, "TOP_UP", null, payeeId);
+            var transferId = insertLegacyPayment(legacyDatabase, "TRANSFER", payerId, payeeId);
+            var legacyRows = paymentSnapshots(legacyDatabase, topUpId, transferId);
+
+            Flyway.configure()
+                    .dataSource(temporaryDatasourceUrl, datasourceUsername, datasourcePassword)
+                    .load()
+                    .migrate();
+
+            assertThat(paymentSnapshots(legacyDatabase, topUpId, transferId)).isEqualTo(legacyRows);
+            assertThat(legacyDatabase.queryForObject("""
+                    SELECT COUNT(*)
+                    FROM payments.payment_instruction
+                    WHERE id IN (?, ?)
+                      AND original_payment_id IS NULL
+                      AND operation_reason IS NULL
+                    """, Integer.class, topUpId, transferId)).isEqualTo(2);
+            assertThat(legacyDatabase.queryForList("""
+                    SELECT version
+                    FROM flyway_schema_history
+                    WHERE version IN ('9', '10') AND success
+                    ORDER BY installed_rank
+                    """, String.class)).containsExactly("9", "10");
+        } finally {
+            dropTemporaryDatabase(databaseName);
+        }
     }
 
     @Test
@@ -347,7 +423,8 @@ class MigrationIntegrationTest {
                      payer_account_id, payee_account_id, amount_cents, currency, status,
                      original_payment_id, operation_reason, created_at, completed_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, 100, 'CNY', ?, ?, ?,
-                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                        CURRENT_TIMESTAMP,
+                        CASE WHEN ? = 'PENDING' THEN NULL ELSE CURRENT_TIMESTAMP END)
                 """,
                 paymentId,
                 UUID.randomUUID().toString(),
@@ -358,7 +435,104 @@ class MigrationIntegrationTest {
                 payeeId,
                 status,
                 originalPaymentId,
-                operationReason);
+                operationReason,
+                status);
         return paymentId;
+    }
+
+    private String datasourceUrlFor(String databaseName) {
+        validateTemporaryDatabaseName(databaseName);
+        var queryStart = datasourceUrl.indexOf('?');
+        var query = queryStart >= 0 ? datasourceUrl.substring(queryStart) : "";
+        var urlWithoutQuery = queryStart >= 0 ? datasourceUrl.substring(0, queryStart) : datasourceUrl;
+        var databaseSeparator = urlWithoutQuery.lastIndexOf('/');
+        if (!urlWithoutQuery.startsWith("jdbc:postgresql://")
+                || databaseSeparator < "jdbc:postgresql://".length()) {
+            throw new IllegalStateException("Expected a PostgreSQL JDBC URL with a database name");
+        }
+        return urlWithoutQuery.substring(0, databaseSeparator + 1) + databaseName + query;
+    }
+
+    private void createTemporaryDatabase(String databaseName) throws SQLException {
+        validateTemporaryDatabaseName(databaseName);
+        try (var connection =
+                DriverManager.getConnection(datasourceUrl, datasourceUsername, datasourcePassword)) {
+            connection.setAutoCommit(true);
+            try (var statement = connection.createStatement()) {
+                statement.execute("CREATE DATABASE " + statement.enquoteIdentifier(databaseName, true));
+            }
+        }
+    }
+
+    private void dropTemporaryDatabase(String databaseName) throws SQLException {
+        validateTemporaryDatabaseName(databaseName);
+        try (var connection =
+                DriverManager.getConnection(datasourceUrl, datasourceUsername, datasourcePassword)) {
+            connection.setAutoCommit(true);
+            try (var statement = connection.createStatement()) {
+                statement.execute("DROP DATABASE IF EXISTS "
+                        + statement.enquoteIdentifier(databaseName, true) + " WITH (FORCE)");
+            }
+        }
+    }
+
+    private void validateTemporaryDatabaseName(String databaseName) {
+        if (!TEMPORARY_DATABASE_NAME.matcher(databaseName).matches()) {
+            throw new IllegalArgumentException("Unexpected temporary database name: " + databaseName);
+        }
+    }
+
+    private UUID insertLegacyCustomerAccount(JdbcTemplate legacyDatabase) {
+        var ledgerAccountId = UUID.randomUUID();
+        legacyDatabase.update("""
+                INSERT INTO ledger.ledger_account
+                    (id, owner_ref, account_type, currency, created_at)
+                VALUES (?, ?, 'LIABILITY', 'CNY', CURRENT_TIMESTAMP)
+                """, ledgerAccountId, "LEGACY-" + UUID.randomUUID());
+        var accountId = UUID.randomUUID();
+        legacyDatabase.update("""
+                INSERT INTO accounts.customer_account
+                    (id, account_number, owner_name, status, currency, ledger_account_id,
+                     created_at, updated_at)
+                VALUES (?, ?, 'Legacy Account', 'ACTIVE', 'CNY', ?,
+                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                accountId,
+                "LEGACY-" + accountId.toString().replace("-", "").substring(0, 25),
+                ledgerAccountId);
+        return accountId;
+    }
+
+    private UUID insertLegacyPayment(
+            JdbcTemplate legacyDatabase, String type, UUID payerId, UUID payeeId) {
+        var paymentId = UUID.randomUUID();
+        legacyDatabase.update("""
+                INSERT INTO payments.payment_instruction
+                    (id, idempotency_key, request_fingerprint, channel_reference, payment_type,
+                     payer_account_id, payee_account_id, amount_cents, currency, status,
+                     created_at, completed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 100, 'CNY', 'SUCCEEDED',
+                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                paymentId,
+                UUID.randomUUID().toString(),
+                "0".repeat(64),
+                "LEGACY-" + UUID.randomUUID(),
+                type,
+                payerId,
+                payeeId);
+        return paymentId;
+    }
+
+    private List<Map<String, Object>> paymentSnapshots(
+            JdbcTemplate legacyDatabase, UUID topUpId, UUID transferId) {
+        return legacyDatabase.queryForList("""
+                SELECT id, idempotency_key, request_fingerprint, channel_reference, payment_type,
+                       payer_account_id, payee_account_id, amount_cents, currency, status,
+                       failure_reason, version, created_at, completed_at
+                FROM payments.payment_instruction
+                WHERE id IN (?, ?)
+                ORDER BY id
+                """, topUpId, transferId);
     }
 }
