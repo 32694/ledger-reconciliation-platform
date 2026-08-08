@@ -453,6 +453,250 @@ class TopUpModuleTest {
         assertThat(paymentsApi.findActiveReverse(original.id())).isEmpty();
     }
 
+    @Test
+    void refundsASuccessfulTopUpInFullWithoutChangingTheOriginal() {
+        var account = accountsApi.create("Refund Customer");
+        var original = paymentsApi.topUp(
+                new TopUpCommand("refund-source-1", account.id(), 5000));
+        var originalJournal = journalSnapshot(original.channelReference());
+
+        var refund = paymentsApi.reverse(new ReversePaymentCommand(
+                "refund-success-1", original.id(), "  Customer requested refund  "));
+
+        assertThat(refund.type()).isEqualTo("REFUND");
+        assertThat(refund.originalPaymentId()).isEqualTo(original.id());
+        assertThat(refund.amountCents()).isEqualTo(5000);
+        assertThat(refund.status()).isEqualTo("SUCCEEDED");
+        assertThat(refund.operationReason()).isEqualTo("Customer requested refund");
+        assertThat(refund.payerAccountId()).isNull();
+        assertThat(refund.payeeAccountId()).isEqualTo(account.id());
+        assertThat(refund.channelReference()).startsWith("REFUND-");
+        assertThat(accountsApi.balance(account.id()).cents()).isZero();
+        assertThat(journalType(refund.channelReference())).isEqualTo("REFUND");
+        assertThat(journalEntries(refund.channelReference()))
+                .extracting(JournalEntrySnapshot::accountId, JournalEntrySnapshot::side,
+                        JournalEntrySnapshot::amountCents)
+                .containsExactlyInAnyOrder(
+                        org.assertj.core.groups.Tuple.tuple(
+                                account.ledgerAccountId(), "DEBIT", 5000L),
+                        org.assertj.core.groups.Tuple.tuple(
+                                platformCashAccountId(), "CREDIT", 5000L));
+        assertThat(paymentsApi.get(original.id())).isEqualTo(original);
+        assertThat(journalSnapshot(original.channelReference())).isEqualTo(originalJournal);
+        assertSuccessfulPaymentAudit(AuditAction.PAYMENT_REFUND, refund);
+    }
+
+    @Test
+    void reversesASuccessfulTransferInFullWithoutChangingTheOriginal() {
+        var payer = accountsApi.create("Reversal Payer");
+        var payee = accountsApi.create("Reversal Payee");
+        paymentsApi.topUp(new TopUpCommand("reversal-funding-1", payer.id(), 5000));
+        var original = paymentsApi.transfer(new TransferCommand(
+                "reversal-source-1", payer.id(), payee.id(), 1200));
+        var originalJournal = journalSnapshot(original.channelReference());
+
+        var reversal = paymentsApi.reverse(new ReversePaymentCommand(
+                "reversal-success-1", original.id(), "Transfer entered twice"));
+
+        assertThat(reversal.type()).isEqualTo("REVERSAL");
+        assertThat(reversal.originalPaymentId()).isEqualTo(original.id());
+        assertThat(reversal.amountCents()).isEqualTo(1200);
+        assertThat(reversal.status()).isEqualTo("SUCCEEDED");
+        assertThat(reversal.operationReason()).isEqualTo("Transfer entered twice");
+        assertThat(reversal.payerAccountId()).isEqualTo(payer.id());
+        assertThat(reversal.payeeAccountId()).isEqualTo(payee.id());
+        assertThat(reversal.channelReference()).startsWith("REVERSAL-");
+        assertThat(accountsApi.balance(payer.id()).cents()).isEqualTo(5000);
+        assertThat(accountsApi.balance(payee.id()).cents()).isZero();
+        assertThat(journalType(reversal.channelReference())).isEqualTo("REVERSAL");
+        assertThat(journalEntries(reversal.channelReference()))
+                .extracting(JournalEntrySnapshot::accountId, JournalEntrySnapshot::side,
+                        JournalEntrySnapshot::amountCents)
+                .containsExactlyInAnyOrder(
+                        org.assertj.core.groups.Tuple.tuple(
+                                payee.ledgerAccountId(), "DEBIT", 1200L),
+                        org.assertj.core.groups.Tuple.tuple(
+                                payer.ledgerAccountId(), "CREDIT", 1200L));
+        assertThat(paymentsApi.get(original.id())).isEqualTo(original);
+        assertThat(journalSnapshot(original.channelReference())).isEqualTo(originalJournal);
+        assertSuccessfulPaymentAudit(AuditAction.PAYMENT_REVERSAL, reversal);
+    }
+
+    @Test
+    void recordsFailedRefundWhenTheCustomerWalletHasInsufficientFunds() {
+        var customer = accountsApi.create("Spent Refund Customer");
+        var recipient = accountsApi.create("Spent Refund Recipient");
+        var original = paymentsApi.topUp(
+                new TopUpCommand("spent-refund-source", customer.id(), 500));
+        paymentsApi.transfer(new TransferCommand(
+                "spend-refund-balance", customer.id(), recipient.id(), 500));
+
+        var refund = paymentsApi.reverse(new ReversePaymentCommand(
+                "spent-refund-1", original.id(), "Customer requested refund"));
+
+        assertThat(refund.status()).isEqualTo("FAILED");
+        assertThat(refund.failureReason()).isEqualTo("INSUFFICIENT_FUNDS");
+        assertThat(accountsApi.balance(customer.id()).cents()).isZero();
+        assertThat(count("""
+                SELECT COUNT(*)
+                FROM ledger.ledger_transaction
+                WHERE business_reference = ?
+                """, refund.channelReference())).isZero();
+        assertThat(auditApi.findRecent(AuditAction.PAYMENT_REFUND, null, 100))
+                .singleElement()
+                .extracting(AuditEventView::outcome, AuditEventView::summary)
+                .containsExactly(
+                        AuditOutcome.FAILED,
+                        "REFUND CNY 500 FAILED INSUFFICIENT_FUNDS");
+    }
+
+    @Test
+    void returnsTheExistingReverseForTheSameRequestAndActiveOriginal() {
+        var account = accountsApi.create("Repeated Refund Customer");
+        var original = paymentsApi.topUp(
+                new TopUpCommand("repeated-refund-source", account.id(), 500));
+        var command = new ReversePaymentCommand(
+                "repeated-refund-1", original.id(), "Customer refund");
+
+        var first = paymentsApi.reverse(command);
+        var replay = paymentsApi.reverse(command);
+        var differentKey = paymentsApi.reverse(new ReversePaymentCommand(
+                "repeated-refund-2", original.id(), "Another explanation"));
+
+        assertThat(replay.id()).isEqualTo(first.id());
+        assertThat(differentKey.id()).isEqualTo(first.id());
+        assertThat(count("""
+                SELECT COUNT(*) FROM payments.payment_instruction
+                WHERE original_payment_id = ?
+                """, original.id())).isOne();
+        assertThat(count("""
+                SELECT COUNT(*) FROM ledger.ledger_transaction
+                WHERE business_reference = ?
+                """, first.channelReference())).isOne();
+    }
+
+    @Test
+    void rejectsAReusedReverseIdempotencyKeyWithDifferentPayload() {
+        var firstAccount = accountsApi.create("First Refund Conflict Customer");
+        var secondAccount = accountsApi.create("Second Refund Conflict Customer");
+        var firstOriginal = paymentsApi.topUp(
+                new TopUpCommand("first-refund-conflict-source", firstAccount.id(), 500));
+        var secondOriginal = paymentsApi.topUp(
+                new TopUpCommand("second-refund-conflict-source", secondAccount.id(), 500));
+        paymentsApi.reverse(new ReversePaymentCommand(
+                "refund-conflict-1", firstOriginal.id(), "First reason"));
+
+        assertThatThrownBy(() -> paymentsApi.reverse(new ReversePaymentCommand(
+                "refund-conflict-1", secondOriginal.id(), "Second reason")))
+                .isInstanceOf(IdempotencyConflictException.class);
+        assertThat(accountsApi.balance(secondAccount.id()).cents()).isEqualTo(500);
+    }
+
+    @Test
+    void rejectsNullReverseCommandWithoutMutation() {
+        assertRejectedReverseWithoutMutation(null)
+                .hasMessage("Reverse payment command is required");
+    }
+
+    @Test
+    void rejectsBlankReverseReasonWithoutMutation() {
+        assertRejectedReverseWithoutMutation(new ReversePaymentCommand(
+                "blank-reason-refund", UUID.randomUUID(), " \t "))
+                .hasMessage("Reverse payment reason is required");
+    }
+
+    @Test
+    void rejectsReverseReasonLongerThan500UnicodeCodePointsWithoutMutation() {
+        String supplementaryCharacter = new String(Character.toChars(0x10400));
+
+        assertRejectedReverseWithoutMutation(new ReversePaymentCommand(
+                "long-reason-refund", UUID.randomUUID(), supplementaryCharacter.repeat(501)))
+                .hasMessage("Reverse payment reason must not exceed 500 characters");
+    }
+
+    @Test
+    void rejectsControlCharactersInReverseReasonWithoutMutation() {
+        assertRejectedReverseWithoutMutation(new ReversePaymentCommand(
+                "control-reason-refund", UUID.randomUUID(), "invalid\u001Freason"))
+                .hasMessage("Reverse payment reason must not contain control characters");
+    }
+
+    @Test
+    void rejectsNullOriginalPaymentWithoutMutation() {
+        assertRejectedReverseWithoutMutation(new ReversePaymentCommand(
+                "null-original-refund", null, "Customer refund"))
+                .hasMessage("Original payment id is required");
+    }
+
+    @Test
+    void rejectsMissingOriginalPaymentWithoutMutation() {
+        var missingId = UUID.randomUUID();
+
+        assertRejectedReverseWithoutMutation(new ReversePaymentCommand(
+                "missing-original-refund", missingId, "Customer refund"))
+                .hasMessage("Original payment does not exist: " + missingId);
+    }
+
+    @Test
+    void rejectsPendingOriginalPaymentWithoutMutation() {
+        var account = accountsApi.create("Pending Original Customer");
+        var originalId = UUID.randomUUID();
+        insertPaymentFixture(
+                originalId, "pending-original", "TOP_UP", null, account.id(), 500,
+                "PENDING", null, null, null);
+
+        assertRejectedReverseWithoutMutation(new ReversePaymentCommand(
+                "pending-original-refund", originalId, "Customer refund"))
+                .hasMessage("Original payment must be successful");
+    }
+
+    @Test
+    void rejectsFailedOriginalPaymentWithoutMutation() {
+        var account = accountsApi.create("Failed Original Customer");
+        var originalId = UUID.randomUUID();
+        insertPaymentFixture(
+                originalId, "failed-original", "TOP_UP", null, account.id(), 500,
+                "FAILED", "PROCESSING_REJECTED", null, null);
+
+        assertRejectedReverseWithoutMutation(new ReversePaymentCommand(
+                "failed-original-refund", originalId, "Customer refund"))
+                .hasMessage("Original payment must be successful");
+    }
+
+    @Test
+    void rejectsRefundAsAnOriginalPaymentWithoutMutation() {
+        var account = accountsApi.create("Reverse Refund Customer");
+        var topUp = paymentsApi.topUp(
+                new TopUpCommand("reverse-refund-topup", account.id(), 500));
+        var refundId = UUID.randomUUID();
+        insertPaymentFixture(
+                refundId, "reverse-refund-source", "REFUND", null, account.id(), 500,
+                "SUCCEEDED", null, topUp.id(), "Previous refund");
+
+        assertRejectedReverseWithoutMutation(new ReversePaymentCommand(
+                "reverse-refund-attempt", refundId, "Reverse a refund"))
+                .hasMessage("Original payment type cannot be reversed: REFUND");
+    }
+
+    @Test
+    void rejectsReversalAsAnOriginalPaymentWithoutMutation() {
+        var payer = accountsApi.create("Reverse Reversal Payer");
+        var payee = accountsApi.create("Reverse Reversal Payee");
+        var topUp = paymentsApi.topUp(
+                new TopUpCommand("reverse-reversal-topup", payer.id(), 500));
+        var transfer = paymentsApi.transfer(new TransferCommand(
+                "reverse-reversal-transfer", payer.id(), payee.id(), 500));
+        var reversalId = UUID.randomUUID();
+        insertPaymentFixture(
+                reversalId, "reverse-reversal-source", "REVERSAL", payer.id(), payee.id(),
+                500, "SUCCEEDED", null, transfer.id(), "Previous reversal");
+
+        assertRejectedReverseWithoutMutation(new ReversePaymentCommand(
+                "reverse-reversal-attempt", reversalId, "Reverse a reversal"))
+                .hasMessage("Original payment type cannot be reversed: REVERSAL");
+        assertThat(paymentsApi.get(topUp.id()).status()).isEqualTo("SUCCEEDED");
+    }
+
     private List<Attempt> topUpConcurrently(TopUpCommand first, TopUpCommand second)
             throws Exception {
         var executor = Executors.newFixedThreadPool(2);
@@ -521,6 +765,81 @@ class TopUpModuleTest {
         return jdbcTemplate.queryForObject(sql, Long.class, argument);
     }
 
+    private long count(String sql) {
+        return jdbcTemplate.queryForObject(sql, Long.class);
+    }
+
+    private org.assertj.core.api.AbstractThrowableAssert<?, ? extends Throwable>
+            assertRejectedReverseWithoutMutation(ReversePaymentCommand command) {
+        long paymentCount = count("SELECT COUNT(*) FROM payments.payment_instruction");
+        long journalCount = count("SELECT COUNT(*) FROM ledger.ledger_transaction");
+        long reverseAuditCount = count("""
+                SELECT COUNT(*) FROM audit.audit_event
+                WHERE action IN ('PAYMENT_REFUND', 'PAYMENT_REVERSAL')
+                """);
+
+        var assertion = assertThatThrownBy(() -> paymentsApi.reverse(command))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        assertThat(count("SELECT COUNT(*) FROM payments.payment_instruction"))
+                .isEqualTo(paymentCount);
+        assertThat(count("SELECT COUNT(*) FROM ledger.ledger_transaction"))
+                .isEqualTo(journalCount);
+        assertThat(count("""
+                SELECT COUNT(*) FROM audit.audit_event
+                WHERE action IN ('PAYMENT_REFUND', 'PAYMENT_REVERSAL')
+                """)).isEqualTo(reverseAuditCount);
+        return assertion;
+    }
+
+    private void assertSuccessfulPaymentAudit(AuditAction action, PaymentView payment) {
+        assertThat(auditApi.findRecent(action, null, 100))
+                .singleElement()
+                .extracting(
+                        AuditEventView::aggregateType,
+                        AuditEventView::aggregateId,
+                        AuditEventView::outcome,
+                        AuditEventView::summary,
+                        AuditEventView::correlationReference)
+                .containsExactly(
+                        "PAYMENT",
+                        payment.id().toString(),
+                        AuditOutcome.SUCCEEDED,
+                        payment.type() + " CNY " + payment.amountCents() + " SUCCEEDED",
+                        payment.channelReference());
+    }
+
+    private UUID platformCashAccountId() {
+        return jdbcTemplate.queryForObject("""
+                SELECT id FROM ledger.ledger_account WHERE owner_ref = 'PLATFORM_CASH'
+                """, UUID.class);
+    }
+
+    private String journalType(String businessReference) {
+        return jdbcTemplate.queryForObject("""
+                SELECT transaction_type FROM ledger.ledger_transaction
+                WHERE business_reference = ?
+                """, String.class, businessReference);
+    }
+
+    private List<JournalEntrySnapshot> journalSnapshot(String businessReference) {
+        return jdbcTemplate.query("""
+                SELECT entry.id, entry.ledger_account_id, entry.side, entry.amount_cents
+                FROM ledger.ledger_entry entry
+                JOIN ledger.ledger_transaction transaction ON transaction.id = entry.transaction_id
+                WHERE transaction.business_reference = ?
+                ORDER BY entry.id
+                """, (resultSet, rowNumber) -> new JournalEntrySnapshot(
+                        resultSet.getObject("id", UUID.class),
+                        resultSet.getObject("ledger_account_id", UUID.class),
+                        resultSet.getString("side"),
+                        resultSet.getLong("amount_cents")), businessReference);
+    }
+
+    private List<JournalEntrySnapshot> journalEntries(String businessReference) {
+        return journalSnapshot(businessReference);
+    }
+
     private void insertReverseFixture(
             UUID id,
             String idempotencyKey,
@@ -550,5 +869,43 @@ class TopUpModuleTest {
                 "Customer refund");
     }
 
+    private void insertPaymentFixture(
+            UUID id,
+            String idempotencyKey,
+            String paymentType,
+            UUID payerAccountId,
+            UUID payeeAccountId,
+            long amountCents,
+            String status,
+            String failureReason,
+            UUID originalPaymentId,
+            String operationReason) {
+        var now = Timestamp.from(Instant.now());
+        jdbcTemplate.update("""
+                INSERT INTO payments.payment_instruction
+                    (id, idempotency_key, request_fingerprint, channel_reference, payment_type,
+                     payer_account_id, payee_account_id, amount_cents, currency, status,
+                     failure_reason, version, created_at, completed_at,
+                     original_payment_id, operation_reason)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CNY', ?, ?, 0, ?, ?, ?, ?)
+                """,
+                id,
+                idempotencyKey,
+                "e".repeat(64),
+                paymentType.replace("_", "") + "-" + id,
+                paymentType,
+                payerAccountId,
+                payeeAccountId,
+                amountCents,
+                status,
+                failureReason,
+                now,
+                "PENDING".equals(status) ? null : now,
+                originalPaymentId,
+                operationReason);
+    }
+
     private record Attempt(PaymentView payment, RuntimeException error) {}
+
+    private record JournalEntrySnapshot(UUID id, UUID accountId, String side, long amountCents) {}
 }

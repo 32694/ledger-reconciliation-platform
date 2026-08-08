@@ -51,18 +51,43 @@ class PaymentProcessor {
 
         try {
             var amount = Money.cny(payment.amountCents());
-            if ("TRANSFER".equals(payment.paymentType())) {
-                var payerWalletId = accountsApi.get(payment.payerAccountId()).ledgerAccountId();
-                var payeeWalletId = accountsApi.get(payment.payeeAccountId()).ledgerAccountId();
-                ledgerApi.post(Journal.create(payment.channelReference(), "TRANSFER", List.of(
-                        new JournalEntry(payerWalletId, EntrySide.DEBIT, amount),
-                        new JournalEntry(payeeWalletId, EntrySide.CREDIT, amount))));
-            } else {
-                var customerWalletId = accountsApi.get(payment.payeeAccountId()).ledgerAccountId();
-                var platformCashId = ledgerApi.createPlatformCashAccount().id();
-                ledgerApi.post(Journal.create(payment.channelReference(), "TOP_UP", List.of(
-                        new JournalEntry(platformCashId, EntrySide.DEBIT, amount),
-                        new JournalEntry(customerWalletId, EntrySide.CREDIT, amount))));
+            switch (payment.paymentType()) {
+                case "TOP_UP" -> {
+                    var customerWalletId =
+                            accountsApi.get(payment.payeeAccountId()).ledgerAccountId();
+                    var platformCashId = ledgerApi.createPlatformCashAccount().id();
+                    ledgerApi.post(Journal.create(payment.channelReference(), "TOP_UP", List.of(
+                            new JournalEntry(platformCashId, EntrySide.DEBIT, amount),
+                            new JournalEntry(customerWalletId, EntrySide.CREDIT, amount))));
+                }
+                case "TRANSFER" -> {
+                    var payerWalletId =
+                            accountsApi.get(payment.payerAccountId()).ledgerAccountId();
+                    var payeeWalletId =
+                            accountsApi.get(payment.payeeAccountId()).ledgerAccountId();
+                    ledgerApi.post(Journal.create(payment.channelReference(), "TRANSFER", List.of(
+                            new JournalEntry(payerWalletId, EntrySide.DEBIT, amount),
+                            new JournalEntry(payeeWalletId, EntrySide.CREDIT, amount))));
+                }
+                case "REFUND" -> {
+                    var customerWalletId =
+                            accountsApi.get(payment.payeeAccountId()).ledgerAccountId();
+                    var platformCashId = ledgerApi.createPlatformCashAccount().id();
+                    ledgerApi.post(Journal.create(payment.channelReference(), "REFUND", List.of(
+                            new JournalEntry(customerWalletId, EntrySide.DEBIT, amount),
+                            new JournalEntry(platformCashId, EntrySide.CREDIT, amount))));
+                }
+                case "REVERSAL" -> {
+                    var payerWalletId =
+                            accountsApi.get(payment.payerAccountId()).ledgerAccountId();
+                    var payeeWalletId =
+                            accountsApi.get(payment.payeeAccountId()).ledgerAccountId();
+                    ledgerApi.post(Journal.create(payment.channelReference(), "REVERSAL", List.of(
+                            new JournalEntry(payeeWalletId, EntrySide.DEBIT, amount),
+                            new JournalEntry(payerWalletId, EntrySide.CREDIT, amount))));
+                }
+                default -> throw new IllegalStateException(
+                        "Unsupported payment type: " + payment.paymentType());
             }
             payment.succeed(Instant.now());
             auditApi.record(paymentAudit(payment, AuditOutcome.SUCCEEDED));
@@ -91,6 +116,8 @@ class PaymentProcessor {
         AuditAction action = switch (payment.paymentType()) {
             case "TOP_UP" -> AuditAction.PAYMENT_TOP_UP;
             case "TRANSFER" -> AuditAction.PAYMENT_TRANSFER;
+            case "REFUND" -> AuditAction.PAYMENT_REFUND;
+            case "REVERSAL" -> AuditAction.PAYMENT_REVERSAL;
             default -> throw new IllegalStateException(
                     "Unsupported payment type: " + payment.paymentType());
         };

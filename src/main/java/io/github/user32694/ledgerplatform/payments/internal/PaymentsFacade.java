@@ -49,7 +49,12 @@ class PaymentsFacade implements PaymentsApi {
 
     @Override
     public PaymentView reverse(ReversePaymentCommand command) {
-        throw new UnsupportedOperationException("Reverse payment processing is not implemented");
+        var paymentId = submission.submit(command);
+        try {
+            return toView(processor.process(paymentId));
+        } catch (PaymentProcessor.PaymentRejectedException exception) {
+            return toView(processor.fail(exception.paymentId(), exception.reason()));
+        }
     }
 
     @Override

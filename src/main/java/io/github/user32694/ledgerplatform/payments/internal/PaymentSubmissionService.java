@@ -2,6 +2,7 @@ package io.github.user32694.ledgerplatform.payments.internal;
 
 import io.github.user32694.ledgerplatform.accounts.AccountsApi;
 import io.github.user32694.ledgerplatform.payments.IdempotencyConflictException;
+import io.github.user32694.ledgerplatform.payments.ReversePaymentCommand;
 import io.github.user32694.ledgerplatform.payments.TopUpCommand;
 import io.github.user32694.ledgerplatform.payments.TransferCommand;
 import java.nio.charset.StandardCharsets;
@@ -50,6 +51,62 @@ class PaymentSubmissionService {
                         command.payerAccountId(),
                         command.payeeAccountId(),
                         command.amountCents()));
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    UUID submit(ReversePaymentCommand command) {
+        String normalizedReason = validate(command);
+        repository.acquireIdempotencyLock(command.idempotencyKey());
+        var existing = repository.findByIdempotencyKey(command.idempotencyKey());
+        if (existing.isPresent()) {
+            return resolveReverse(existing.orElseThrow(), command, normalizedReason);
+        }
+
+        var original = repository.findByIdForUpdate(command.originalPaymentId())
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Original payment does not exist: " + command.originalPaymentId()));
+        String reverseType = validateOriginal(original);
+        String fingerprint = reverseFingerprint(
+                reverseType,
+                original.id(),
+                normalizedReason,
+                original.payerAccountId(),
+                original.payeeAccountId(),
+                original.amountCents());
+
+        var activeReverse = repository.findActiveReverse(original.id());
+        if (activeReverse.isPresent()) {
+            return activeReverse.orElseThrow().id();
+        }
+
+        UUID paymentId = UUID.randomUUID();
+        int inserted = repository.insertPending(
+                paymentId,
+                command.idempotencyKey(),
+                fingerprint,
+                reverseType + "-" + UUID.randomUUID().toString().replace("-", ""),
+                reverseType,
+                original.payerAccountId(),
+                original.payeeAccountId(),
+                original.amountCents(),
+                original.id(),
+                normalizedReason,
+                Instant.now());
+        if (inserted == 0) {
+            var paymentByKey = repository.findByIdempotencyKey(command.idempotencyKey());
+            if (paymentByKey.isPresent()) {
+                return resolve(paymentByKey.orElseThrow(), fingerprint);
+            }
+            return repository.findActiveReverse(original.id())
+                    .map(PaymentInstructionEntity::id)
+                    .orElseThrow(() -> new IllegalStateException(
+                            "Reverse payment instruction was not created"));
+        }
+
+        var payment = repository.findByIdempotencyKey(command.idempotencyKey())
+                .orElseThrow(() -> new IllegalStateException(
+                        "Reverse payment instruction was not created"));
+        return resolve(payment, fingerprint);
     }
 
     private UUID submit(
@@ -112,6 +169,23 @@ class PaymentSubmissionService {
         return payment.id();
     }
 
+    private static UUID resolveReverse(
+            PaymentInstructionEntity payment,
+            ReversePaymentCommand command,
+            String normalizedReason) {
+        if (!("REFUND".equals(payment.paymentType())
+                || "REVERSAL".equals(payment.paymentType()))) {
+            throw new IdempotencyConflictException();
+        }
+        return resolve(payment, reverseFingerprint(
+                payment.paymentType(),
+                command.originalPaymentId(),
+                normalizedReason,
+                payment.payerAccountId(),
+                payment.payeeAccountId(),
+                payment.amountCents()));
+    }
+
     private static void validate(TopUpCommand command) {
         if (command == null) {
             throw new IllegalArgumentException("Top-up command is required");
@@ -153,6 +227,46 @@ class PaymentSubmissionService {
         }
     }
 
+    private static String validate(ReversePaymentCommand command) {
+        if (command == null) {
+            throw new IllegalArgumentException("Reverse payment command is required");
+        }
+        validateIdempotencyKey(command.idempotencyKey());
+        if (command.originalPaymentId() == null) {
+            throw new IllegalArgumentException("Original payment id is required");
+        }
+        if (command.reason() == null || command.reason().isBlank()) {
+            throw new IllegalArgumentException("Reverse payment reason is required");
+        }
+        if (command.reason().codePoints().anyMatch(
+                codePoint -> codePoint == 0 || Character.isISOControl(codePoint))) {
+            throw new IllegalArgumentException(
+                    "Reverse payment reason must not contain control characters");
+        }
+        String normalizedReason = command.reason().strip();
+        if (normalizedReason.codePointCount(0, normalizedReason.length()) > 500) {
+            throw new IllegalArgumentException(
+                    "Reverse payment reason must not exceed 500 characters");
+        }
+        return normalizedReason;
+    }
+
+    private static String validateOriginal(PaymentInstructionEntity original) {
+        if (!"SUCCEEDED".equals(original.status())) {
+            throw new IllegalArgumentException("Original payment must be successful");
+        }
+        return reverseType(original.paymentType());
+    }
+
+    private static String reverseType(String originalType) {
+        return switch (originalType) {
+            case "TOP_UP" -> "REFUND";
+            case "TRANSFER" -> "REVERSAL";
+            default -> throw new IllegalArgumentException(
+                    "Original payment type cannot be reversed: " + originalType);
+        };
+    }
+
     private static void validateIdempotencyKey(String idempotencyKey) {
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
             throw new IllegalArgumentException("Idempotency key is required");
@@ -170,6 +284,22 @@ class PaymentSubmissionService {
             String paymentType, UUID payerAccountId, UUID payeeAccountId, long amountCents) {
         String canonical = paymentType + "|" + payerAccountId + "|" + payeeAccountId + "|"
                 + amountCents + "|CNY";
+        return sha256(canonical);
+    }
+
+    private static String reverseFingerprint(
+            String paymentType,
+            UUID originalPaymentId,
+            String normalizedReason,
+            UUID payerAccountId,
+            UUID payeeAccountId,
+            long amountCents) {
+        String canonical = paymentType + "|" + originalPaymentId + "|" + normalizedReason + "|"
+                + payerAccountId + "|" + payeeAccountId + "|" + amountCents + "|CNY";
+        return sha256(canonical);
+    }
+
+    private static String sha256(String canonical) {
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
                     .digest(canonical.getBytes(StandardCharsets.UTF_8)));
