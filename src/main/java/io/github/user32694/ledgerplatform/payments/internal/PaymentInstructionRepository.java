@@ -26,8 +26,8 @@ interface PaymentInstructionRepository extends JpaRepository<PaymentInstructionE
                  payer_account_id, payee_account_id, amount_cents, currency, status,
                  failure_reason, version, created_at, completed_at)
             VALUES
-                (:id, :idempotencyKey, :requestFingerprint, :channelReference, 'TOP_UP',
-                 NULL, :payeeAccountId, :amountCents, 'CNY', 'PENDING',
+                (:id, :idempotencyKey, :requestFingerprint, :channelReference, :paymentType,
+                 :payerAccountId, :payeeAccountId, :amountCents, 'CNY', 'PENDING',
                  NULL, 0, :createdAt, NULL)
             ON CONFLICT (idempotency_key) DO NOTHING
             """, nativeQuery = true)
@@ -36,6 +36,8 @@ interface PaymentInstructionRepository extends JpaRepository<PaymentInstructionE
             @Param("idempotencyKey") String idempotencyKey,
             @Param("requestFingerprint") String requestFingerprint,
             @Param("channelReference") String channelReference,
+            @Param("paymentType") String paymentType,
+            @Param("payerAccountId") UUID payerAccountId,
             @Param("payeeAccountId") UUID payeeAccountId,
             @Param("amountCents") long amountCents,
             @Param("createdAt") Instant createdAt);

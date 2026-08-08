@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{admin/layout :: shell('账户转账', ${activeNav}, ~{::main})}">
+<main class="content">
+    <div class="page-heading">
+        <div><p class="eyebrow">资金操作</p><h1>账户转账</h1></div>
+        <a class="button button-secondary" th:href="@{/admin/payments/top-up}">账户充值</a>
+    </div>
+    <div class="split-workspace">
+        <form class="form-surface" method="post" th:action="@{/admin/payments/transfer}" th:object="${transferForm}">
+            <div class="alert alert-error" th:if="${#fields.hasGlobalErrors()}"
+                 th:each="error : ${#fields.globalErrors()}" th:text="${error}">转账失败，请检查输入后重试</div>
+            <div class="field" th:classappend="${#fields.hasErrors('payerAccountId')} ? ' field-invalid'">
+                <label for="payerAccountId">付款账户</label>
+                <select id="payerAccountId" th:field="*{payerAccountId}" aria-describedby="payerAccountId-error" required>
+                    <option value="">请选择付款账户</option>
+                    <option th:each="account : ${accounts}" th:value="${account.id}"
+                            th:text="${account.accountNumber + ' - ' + account.ownerName}">付款账户</option>
+                </select>
+                <p id="payerAccountId-error" class="field-error" th:if="${#fields.hasErrors('payerAccountId')}"
+                   th:errors="*{payerAccountId}">付款账户无效</p>
+            </div>
+            <div class="field" th:classappend="${#fields.hasErrors('payeeAccountId')} ? ' field-invalid'">
+                <label for="payeeAccountId">收款账户</label>
+                <select id="payeeAccountId" th:field="*{payeeAccountId}" aria-describedby="payeeAccountId-error" required>
+                    <option value="">请选择收款账户</option>
+                    <option th:each="account : ${accounts}" th:value="${account.id}"
+                            th:text="${account.accountNumber + ' - ' + account.ownerName}">收款账户</option>
+                </select>
+                <p id="payeeAccountId-error" class="field-error" th:if="${#fields.hasErrors('payeeAccountId')}"
+                   th:errors="*{payeeAccountId}">收款账户无效</p>
+            </div>
+            <div class="field" th:classappend="${#fields.hasErrors('amountCents')} ? ' field-invalid'">
+                <label for="amountCents">转账金额（分）</label>
+                <input id="amountCents" type="number" min="1" step="1" th:field="*{amountCents}"
+                       aria-describedby="amountCents-help amountCents-error" required>
+                <small id="amountCents-help">请输入以人民币分为单位的整数金额</small>
+                <p id="amountCents-error" class="field-error" th:if="${#fields.hasErrors('amountCents')}"
+                   th:errors="*{amountCents}">转账金额无效</p>
+            </div>
+            <div class="field" th:classappend="${#fields.hasErrors('idempotencyKey')} ? ' field-invalid'">
+                <label for="idempotencyKey">幂等键</label>
+                <input id="idempotencyKey" type="text" maxlength="128" th:field="*{idempotencyKey}"
+                       aria-describedby="idempotencyKey-help idempotencyKey-error" required>
+                <small id="idempotencyKey-help">用于标识本次操作的唯一请求编号</small>
+                <p id="idempotencyKey-error" class="field-error" th:if="${#fields.hasErrors('idempotencyKey')}"
+                   th:errors="*{idempotencyKey}">幂等键无效</p>
+            </div>
+            <div class="form-actions"><button class="button button-primary" type="submit">提交转账</button></div>
+        </form>
+        <section th:replace="~{admin/payment-history :: recentPaymentsTable}"></section>
+    </div>
+</main>
+</html>

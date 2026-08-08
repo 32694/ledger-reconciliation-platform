@@ -89,6 +89,10 @@ class PaymentInstructionEntity {
         return paymentType;
     }
 
+    UUID payerAccountId() {
+        return payerAccountId;
+    }
+
     UUID payeeAccountId() {
         return payeeAccountId;
     }

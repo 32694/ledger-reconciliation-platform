@@ -1,5 +1,6 @@
 package io.github.user32694.ledgerplatform;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.matchesPattern;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
@@ -64,6 +65,10 @@ class AdminWebTest {
                 .andExpect(content().string(containsString("用户名")))
                 .andExpect(content().string(containsString("密码")))
                 .andExpect(content().string(containsString(">登录</button>")));
+
+        mockMvc.perform(get("/admin/payments/transfer"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrlPattern("**/login"));
     }
 
     @Test
@@ -156,6 +161,112 @@ class AdminWebTest {
                 .andExpect(content().string(containsString("刷新")))
                 .andExpect(content().string(matchesPattern(
                         "(?s).*<a[^>]*id=\"refresh-ledger\"[^>]*href=\"/admin/ledger\"[^>]*>.*")));
+
+        mockMvc.perform(get("/admin/payments/transfer"))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/transfer-form"))
+                .andExpect(content().string(containsString("账户转账")))
+                .andExpect(content().string(containsString("付款账户")))
+                .andExpect(content().string(containsString("收款账户")))
+                .andExpect(content().string(containsString("转账金额（分）")))
+                .andExpect(content().string(containsString("幂等键")))
+                .andExpect(content().string(containsString("提交转账")))
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*<a[^>]*id=\"refresh-payments\"[^>]*"
+                                + "href=\"/admin/payments/transfer\"[^>]*>.*")));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void rejectsTransferWithoutCsrf() throws Exception {
+        mockMvc.perform(post("/admin/payments/transfer"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void rejectsBlankTransferFieldsWithChineseMessages() throws Exception {
+        mockMvc.perform(post("/admin/payments/transfer")
+                        .with(csrf())
+                        .param("payerAccountId", "")
+                        .param("payeeAccountId", "")
+                        .param("amountCents", "")
+                        .param("idempotencyKey", ""))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/transfer-form"))
+                .andExpect(model().attributeHasFieldErrors(
+                        "transferForm",
+                        "payerAccountId",
+                        "payeeAccountId",
+                        "amountCents",
+                        "idempotencyKey"))
+                .andExpect(content().string(containsString("请选择付款账户")))
+                .andExpect(content().string(containsString("请选择收款账户")))
+                .andExpect(content().string(containsString("请输入转账金额")))
+                .andExpect(content().string(containsString("请输入幂等键")));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void rejectsSelfTransferWithChineseMessage() throws Exception {
+        var account = accountsApi.create("自转账客户");
+
+        mockMvc.perform(post("/admin/payments/transfer")
+                        .with(csrf())
+                        .param("payerAccountId", account.id().toString())
+                        .param("payeeAccountId", account.id().toString())
+                        .param("amountCents", "100")
+                        .param("idempotencyKey", "web-self-transfer-" + UUID.randomUUID()))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/transfer-form"))
+                .andExpect(model().attributeHasErrors("transferForm"))
+                .andExpect(content().string(containsString("付款账户和收款账户不能相同")));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void returnsInsufficientTransferToFormWithChineseMessage() throws Exception {
+        var payer = accountsApi.create("余额不足付款人");
+        var payee = accountsApi.create("余额不足收款人");
+
+        mockMvc.perform(post("/admin/payments/transfer")
+                        .with(csrf())
+                        .param("payerAccountId", payer.id().toString())
+                        .param("payeeAccountId", payee.id().toString())
+                        .param("amountCents", "100")
+                        .param("idempotencyKey", "web-insufficient-transfer-" + UUID.randomUUID()))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/transfer-form"))
+                .andExpect(model().attributeHasErrors("transferForm"))
+                .andExpect(content().string(containsString("付款账户余额不足")));
+
+        assertThat(accountsApi.balance(payer.id()).cents()).isZero();
+        assertThat(accountsApi.balance(payee.id()).cents()).isZero();
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void transfersFundsAndRendersChineseTransferType() throws Exception {
+        var payer = accountsApi.create("网页付款人");
+        var payee = accountsApi.create("网页收款人");
+        paymentsApi.topUp(new TopUpCommand(
+                "fund-web-transfer-" + UUID.randomUUID(), payer.id(), 1000));
+
+        mockMvc.perform(post("/admin/payments/transfer")
+                        .with(csrf())
+                        .param("payerAccountId", payer.id().toString())
+                        .param("payeeAccountId", payee.id().toString())
+                        .param("amountCents", "400")
+                        .param("idempotencyKey", "web-transfer-" + UUID.randomUUID()))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/admin/payments/transfer"));
+
+        assertThat(accountsApi.balance(payer.id()).cents()).isEqualTo(600);
+        assertThat(accountsApi.balance(payee.id()).cents()).isEqualTo(400);
+        mockMvc.perform(get("/admin/payments/transfer"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("<td>转账</td>")))
+                .andExpect(content().string(containsString("成功")));
     }
 
     @Test

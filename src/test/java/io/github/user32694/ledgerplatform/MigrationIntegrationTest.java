@@ -64,6 +64,26 @@ class MigrationIntegrationTest {
     }
 
     @Test
+    void requiresValidPartiesForEachPaymentType() {
+        var definition = jdbcTemplate.queryForObject("""
+                SELECT pg_get_constraintdef(oid)
+                FROM pg_constraint
+                WHERE conrelid = 'payments.payment_instruction'::regclass
+                  AND conname = 'ck_payment_instruction_parties'
+                """, String.class);
+
+        assertThat(definition)
+                .contains("payment_type")
+                .contains("payer_account_id")
+                .contains("payee_account_id");
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM flyway_schema_history
+                WHERE version = '8' AND success
+                """, Integer.class)).isOne();
+    }
+
+    @Test
     @Transactional
     void upgradesTheLegacyConstraintWithoutRewritingExistingTransactions() throws IOException {
         jdbcTemplate.execute("ALTER TABLE ledger.ledger_transaction RENAME CONSTRAINT "

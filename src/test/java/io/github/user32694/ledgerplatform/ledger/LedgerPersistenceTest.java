@@ -83,13 +83,35 @@ class LedgerPersistenceTest {
                 .hasMessage("Ledger balance exceeds supported range");
         assertThat(ledgerApi.walletBalance(wallet.id())).isEqualTo(Long.MAX_VALUE);
 
-        var source = ledgerApi.createCustomerWallet("ACC-SOURCE");
         var destination = ledgerApi.createCustomerWallet("ACC-DESTINATION");
         var retried = ledgerApi.post(Journal.create("TOPUP-OVERFLOW", "TRANSFER", List.of(
-                new JournalEntry(source.id(), EntrySide.DEBIT, Money.cny(1)),
+                new JournalEntry(wallet.id(), EntrySide.DEBIT, Money.cny(1)),
                 new JournalEntry(destination.id(), EntrySide.CREDIT, Money.cny(1)))));
 
         assertThat(retried.businessReference()).isEqualTo("TOPUP-OVERFLOW");
+    }
+
+    @Test
+    void rejectsTransferThatWouldMakeACustomerWalletNegative() {
+        var cash = ledgerApi.createPlatformCashAccount();
+        var payer = ledgerApi.createCustomerWallet("ACC-FUNDED-PAYER");
+        var payee = ledgerApi.createCustomerWallet("ACC-TRANSFER-PAYEE");
+        ledgerApi.post(Journal.create("TOPUP-FUNDED-PAYER", "TOP_UP", List.of(
+                new JournalEntry(cash.id(), EntrySide.DEBIT, Money.cny(500)),
+                new JournalEntry(payer.id(), EntrySide.CREDIT, Money.cny(500)))));
+
+        var transfer = Journal.create("TRANSFER-INSUFFICIENT", "TRANSFER", List.of(
+                new JournalEntry(payer.id(), EntrySide.DEBIT, Money.cny(600)),
+                new JournalEntry(payee.id(), EntrySide.CREDIT, Money.cny(600))));
+
+        assertThatThrownBy(() -> ledgerApi.post(transfer))
+                .isInstanceOf(LedgerInsufficientFundsException.class)
+                .hasMessage("Customer wallet has insufficient funds");
+        assertThat(ledgerApi.walletBalance(payer.id())).isEqualTo(500);
+        assertThat(ledgerApi.walletBalance(payee.id())).isZero();
+        assertThat(ledgerApi.findRecentTransactions(10))
+                .extracting(LedgerTransactionView::businessReference)
+                .doesNotContain("TRANSFER-INSUFFICIENT");
     }
 
     @Test

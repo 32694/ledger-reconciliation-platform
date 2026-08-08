@@ -2,17 +2,27 @@
 
 A simulated payment-ledger application built as a learning and portfolio project. It is not a production banking system and must not be used for real money, customer data, or regulated workloads.
 
-## Milestone 1
+## Milestone 2
 
 The current milestone is a Spring Boot modular monolith with five modules:
 
 - `identity`: bootstraps one configured administrator and provides form login.
 - `accounts`: creates and lists simulated customer accounts and shows balances derived from the ledger.
 - `ledger`: persists balanced, immutable journal entries and lists recent ledger transactions.
-- `payments`: records idempotent simulated top-ups into customer wallets.
+- `payments`: records idempotent simulated top-ups and account transfers.
 - `reconciliation`: imports synthetic channel statements, runs exact-match reconciliation, and records auditable discrepancy resolutions.
 
-The **自动对账** entry in the administrator navigation provides the first reconciliation workflow. It accepts the fixed synthetic CSV format documented in the [User Guide](docs/USER_GUIDE.md), creates an immutable import batch, and lets an administrator start reconciliation and resolve discrepancies. The application remains a learning and portfolio project: transfers, production channel integrations, and a general-purpose audit log are outside this milestone.
+The administrator interface supports **账户充值**, **账户转账**, ledger inspection, and **自动对账**. A transfer atomically writes one payer debit and one payee credit as a balanced journal. PostgreSQL row locks serialize concurrent debits from the same wallet, and the ledger rejects any transfer that would make a customer balance negative. This provides a concrete demonstration of idempotency, 双重记账, transaction rollback, and 并发 control.
+
+Automatic reconciliation accepts the fixed synthetic CSV format documented in the [User Guide](docs/USER_GUIDE.md), creates an immutable import batch, and lets an administrator start reconciliation and resolve discrepancies. It currently compares channel records with successful top-ups only. Production channel integrations and a general-purpose audit log remain outside this milestone.
+
+## Technology Stack
+
+- Java 17, Spring Boot 3.5, and Spring Modulith
+- Spring Data JPA with Hibernate, PostgreSQL 17, and Flyway migrations
+- Thymeleaf, HTMX, Spring Security, and a responsive administrator interface
+- JUnit 5, AssertJ, MockMvc, Spring Modulith tests, and ArchUnit
+- Maven Wrapper, Docker Compose, and GitHub Actions
 
 ## Prerequisites
 

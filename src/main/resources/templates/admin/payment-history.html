@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org">
+<section id="recent-payments-table" class="table-section compact-table"
+         aria-labelledby="recent-payments-title" th:fragment="recentPaymentsTable">
+    <div class="section-heading">
+        <div><h2 id="recent-payments-title">近期资金操作</h2><p>最近20条充值和转账指令</p></div>
+        <a id="refresh-payments" class="button button-secondary"
+           th:href="${paymentHistoryRefreshUrl}" hx-get="/admin/payments/recent"
+           hx-target="#recent-payments-table" hx-swap="outerHTML">刷新</a>
+    </div>
+    <div class="table-scroll">
+        <table>
+            <thead><tr><th>业务流水号</th><th>类型</th><th class="numeric">金额</th><th>状态</th></tr></thead>
+            <tbody>
+            <tr th:each="payment : ${recentPayments}">
+                <td class="mono" th:text="${payment.channelReference}">PAY-001</td>
+                <td th:text="${payment.typeLabel}">充值</td>
+                <td class="numeric">人民币 <span th:text="${payment.amount}">0.00</span></td>
+                <td><span class="status"
+                          th:classappend="${payment.status == 'SUCCEEDED'} ? ' status-success' : ' status-danger'"
+                          th:text="${payment.statusLabel}">成功</span></td>
+            </tr>
+            <tr th:if="${#lists.isEmpty(recentPayments)}"><td colspan="4" class="empty-state">暂无资金操作记录</td></tr>
+            </tbody>
+        </table>
+    </div>
+</section>
+</html>

@@ -6,6 +6,7 @@ import io.github.user32694.ledgerplatform.ledger.Journal;
 import io.github.user32694.ledgerplatform.ledger.JournalEntry;
 import io.github.user32694.ledgerplatform.ledger.LedgerApi;
 import io.github.user32694.ledgerplatform.ledger.LedgerBalanceLimitExceededException;
+import io.github.user32694.ledgerplatform.ledger.LedgerInsufficientFundsException;
 import io.github.user32694.ledgerplatform.ledger.Money;
 import java.time.Instant;
 import java.util.List;
@@ -17,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 class PaymentProcessor {
     private static final String BALANCE_LIMIT_EXCEEDED = "BALANCE_LIMIT_EXCEEDED";
+    private static final String INSUFFICIENT_FUNDS = "INSUFFICIENT_FUNDS";
 
     private final PaymentInstructionRepository repository;
     private final AccountsApi accountsApi;
@@ -41,18 +43,23 @@ class PaymentProcessor {
         }
 
         try {
-            var customerWalletId = accountsApi.get(payment.payeeAccountId()).ledgerAccountId();
-            var platformCashId = ledgerApi.createPlatformCashAccount().id();
-            ledgerApi.post(Journal.create(payment.channelReference(), "TOP_UP", List.of(
-                    new JournalEntry(
-                            platformCashId,
-                            EntrySide.DEBIT,
-                            Money.cny(payment.amountCents())),
-                    new JournalEntry(
-                            customerWalletId,
-                            EntrySide.CREDIT,
-                            Money.cny(payment.amountCents())))));
+            var amount = Money.cny(payment.amountCents());
+            if ("TRANSFER".equals(payment.paymentType())) {
+                var payerWalletId = accountsApi.get(payment.payerAccountId()).ledgerAccountId();
+                var payeeWalletId = accountsApi.get(payment.payeeAccountId()).ledgerAccountId();
+                ledgerApi.post(Journal.create(payment.channelReference(), "TRANSFER", List.of(
+                        new JournalEntry(payerWalletId, EntrySide.DEBIT, amount),
+                        new JournalEntry(payeeWalletId, EntrySide.CREDIT, amount))));
+            } else {
+                var customerWalletId = accountsApi.get(payment.payeeAccountId()).ledgerAccountId();
+                var platformCashId = ledgerApi.createPlatformCashAccount().id();
+                ledgerApi.post(Journal.create(payment.channelReference(), "TOP_UP", List.of(
+                        new JournalEntry(platformCashId, EntrySide.DEBIT, amount),
+                        new JournalEntry(customerWalletId, EntrySide.CREDIT, amount))));
+            }
             payment.succeed(Instant.now());
+        } catch (LedgerInsufficientFundsException exception) {
+            throw new PaymentRejectedException(payment.id(), INSUFFICIENT_FUNDS);
         } catch (LedgerBalanceLimitExceededException exception) {
             throw new PaymentRejectedException(payment.id(), BALANCE_LIMIT_EXCEEDED);
         }

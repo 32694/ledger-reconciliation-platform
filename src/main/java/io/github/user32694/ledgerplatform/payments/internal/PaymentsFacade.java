@@ -3,6 +3,7 @@ package io.github.user32694.ledgerplatform.payments.internal;
 import io.github.user32694.ledgerplatform.payments.PaymentView;
 import io.github.user32694.ledgerplatform.payments.PaymentsApi;
 import io.github.user32694.ledgerplatform.payments.TopUpCommand;
+import io.github.user32694.ledgerplatform.payments.TransferCommand;
 import java.time.Instant;
 import java.util.List;
 import org.springframework.data.domain.PageRequest;
@@ -25,6 +26,16 @@ class PaymentsFacade implements PaymentsApi {
 
     @Override
     public PaymentView topUp(TopUpCommand command) {
+        var paymentId = submission.submit(command);
+        try {
+            return toView(processor.process(paymentId));
+        } catch (PaymentProcessor.PaymentRejectedException exception) {
+            return toView(processor.fail(exception.paymentId(), exception.reason()));
+        }
+    }
+
+    @Override
+    public PaymentView transfer(TransferCommand command) {
         var paymentId = submission.submit(command);
         try {
             return toView(processor.process(paymentId));
@@ -61,6 +72,8 @@ class PaymentsFacade implements PaymentsApi {
                 payment.id(),
                 payment.channelReference(),
                 payment.paymentType(),
+                payment.payerAccountId(),
+                payment.payeeAccountId(),
                 payment.amountCents(),
                 payment.status(),
                 payment.failureReason(),

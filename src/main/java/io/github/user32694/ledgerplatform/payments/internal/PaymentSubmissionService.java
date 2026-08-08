@@ -3,6 +3,7 @@ package io.github.user32694.ledgerplatform.payments.internal;
 import io.github.user32694.ledgerplatform.accounts.AccountsApi;
 import io.github.user32694.ledgerplatform.payments.IdempotencyConflictException;
 import io.github.user32694.ledgerplatform.payments.TopUpCommand;
+import io.github.user32694.ledgerplatform.payments.TransferCommand;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -26,25 +27,78 @@ class PaymentSubmissionService {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     UUID submit(TopUpCommand command) {
         validate(command);
-        String fingerprint = fingerprint(command);
-        repository.acquireIdempotencyLock(command.idempotencyKey());
-        var existing = repository.findByIdempotencyKey(command.idempotencyKey());
+        return submit(
+                "TOP_UP",
+                command.idempotencyKey(),
+                null,
+                command.payeeAccountId(),
+                command.amountCents(),
+                fingerprint("TOP_UP", null, command.payeeAccountId(), command.amountCents()));
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    UUID submit(TransferCommand command) {
+        validate(command);
+        return submit(
+                "TRANSFER",
+                command.idempotencyKey(),
+                command.payerAccountId(),
+                command.payeeAccountId(),
+                command.amountCents(),
+                fingerprint(
+                        "TRANSFER",
+                        command.payerAccountId(),
+                        command.payeeAccountId(),
+                        command.amountCents()));
+    }
+
+    private UUID submit(
+            String paymentType,
+            String idempotencyKey,
+            UUID payerAccountId,
+            UUID payeeAccountId,
+            long amountCents,
+            String fingerprint) {
+        repository.acquireIdempotencyLock(idempotencyKey);
+        var existing = repository.findByIdempotencyKey(idempotencyKey);
         if (existing.isPresent()) {
             return resolve(existing.orElseThrow(), fingerprint);
         }
 
-        accountsApi.get(command.payeeAccountId());
+        if (payerAccountId != null) {
+            try {
+                accountsApi.get(payerAccountId);
+            } catch (IllegalArgumentException exception) {
+                if ("TRANSFER".equals(paymentType)) {
+                    throw new IllegalArgumentException(
+                            "Payer account does not exist: " + payerAccountId, exception);
+                }
+                throw exception;
+            }
+        }
+        try {
+            accountsApi.get(payeeAccountId);
+        } catch (IllegalArgumentException exception) {
+            if ("TRANSFER".equals(paymentType)) {
+                throw new IllegalArgumentException(
+                        "Payee account does not exist: " + payeeAccountId, exception);
+            }
+            throw exception;
+        }
         UUID paymentId = UUID.randomUUID();
         repository.insertPending(
                 paymentId,
-                command.idempotencyKey(),
+                idempotencyKey,
                 fingerprint,
-                "TOPUP-" + UUID.randomUUID().toString().replace("-", ""),
-                command.payeeAccountId(),
-                command.amountCents(),
+                paymentType.replace("_", "") + "-"
+                        + UUID.randomUUID().toString().replace("-", ""),
+                paymentType,
+                payerAccountId,
+                payeeAccountId,
+                amountCents,
                 Instant.now());
 
-        var payment = repository.findByIdempotencyKey(command.idempotencyKey())
+        var payment = repository.findByIdempotencyKey(idempotencyKey)
                 .orElseThrow(() -> new IllegalStateException("Payment instruction was not created"));
         return resolve(payment, fingerprint);
     }
@@ -78,9 +132,42 @@ class PaymentSubmissionService {
         }
     }
 
-    private static String fingerprint(TopUpCommand command) {
-        String canonical = "TOP_UP|" + command.payeeAccountId() + "|"
-                + command.amountCents() + "|CNY";
+    private static void validate(TransferCommand command) {
+        if (command == null) {
+            throw new IllegalArgumentException("Transfer command is required");
+        }
+        validateIdempotencyKey(command.idempotencyKey());
+        if (command.payerAccountId() == null) {
+            throw new IllegalArgumentException("Payer account id is required");
+        }
+        if (command.payeeAccountId() == null) {
+            throw new IllegalArgumentException("Payee account id is required");
+        }
+        if (command.payerAccountId().equals(command.payeeAccountId())) {
+            throw new IllegalArgumentException("Payer and payee accounts must be different");
+        }
+        if (command.amountCents() <= 0) {
+            throw new IllegalArgumentException("Amount must be positive");
+        }
+    }
+
+    private static void validateIdempotencyKey(String idempotencyKey) {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            throw new IllegalArgumentException("Idempotency key is required");
+        }
+        if (idempotencyKey.codePointCount(0, idempotencyKey.length()) > 128) {
+            throw new IllegalArgumentException("Idempotency key must not exceed 128 characters");
+        }
+        if (idempotencyKey.codePoints().anyMatch(
+                codePoint -> codePoint == 0 || Character.isISOControl(codePoint))) {
+            throw new IllegalArgumentException("Idempotency key must not contain control characters");
+        }
+    }
+
+    private static String fingerprint(
+            String paymentType, UUID payerAccountId, UUID payeeAccountId, long amountCents) {
+        String canonical = paymentType + "|" + payerAccountId + "|" + payeeAccountId + "|"
+                + amountCents + "|CNY";
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
                     .digest(canonical.getBytes(StandardCharsets.UTF_8)));
