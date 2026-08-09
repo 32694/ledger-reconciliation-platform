@@ -27,13 +27,13 @@ class ReconciliationImportService {
 
     ReconciliationBatchView importStatement(StatementUpload upload) {
         validateUpload(upload);
+        var resolvedRule = ruleService.resolveImportRule(upload.channelCode());
         byte[] content = upload.content();
         String hash = sha256(content);
         var existing = store.findByHash(hash);
         if (existing.isPresent()) {
             return existing.get().toView();
         }
-        var resolvedRule = ruleService.resolveImportRule(upload.channelCode());
         try {
             ParsedStatement parsed = parser.parse(content);
             return store.persistImported(

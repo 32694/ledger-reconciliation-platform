@@ -45,18 +45,7 @@ public class ReconciliationFacade implements ReconciliationApi {
 
     @Override
     public ReconciliationBatchView importStatement(StatementUpload upload) {
-        try {
-            return importService.importStatement(upload);
-        } catch (IllegalArgumentException exception) {
-            if (upload == null || upload.fileName() == null || upload.operator() == null) {
-                throw exception;
-            }
-            String hash = java.util.HexFormat.of().formatHex(
-                    sha256(upload.content() == null ? new byte[0] : upload.content()));
-            return store.findByHash(hash)
-                    .map(ReconciliationBatchEntity::toView)
-                    .orElseThrow(() -> exception);
-        }
+        return importService.importStatement(upload);
     }
 
     @Override
@@ -291,11 +280,4 @@ public class ReconciliationFacade implements ReconciliationApi {
         return paymentsApi.findSucceededTopUps(batch.queryStart(), batch.queryEnd());
     }
 
-    private static byte[] sha256(byte[] content) {
-        try {
-            return java.security.MessageDigest.getInstance("SHA-256").digest(content);
-        } catch (java.security.NoSuchAlgorithmException exception) {
-            throw new IllegalStateException("SHA-256 is unavailable", exception);
-        }
-    }
 }

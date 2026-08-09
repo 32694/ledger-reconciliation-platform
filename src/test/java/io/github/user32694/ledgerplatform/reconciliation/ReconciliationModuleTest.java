@@ -291,6 +291,28 @@ class ReconciliationModuleTest {
     }
 
     @Test
+    void rejectsInvalidChannelsBeforeReturningAnExistingBatchForTheFileHash() {
+        var content = csv("CH-INVALID-CHANNEL,1,2026-01-15T09:30:00Z\n");
+        reconciliationApi.importStatement(new StatementUpload("ALIPAY", "first.csv", content, "admin"));
+        reconciliationRulesApi.setChannelActive("WECHAT_PAY", false, "rule-admin");
+
+        assertThatThrownBy(() -> reconciliationApi.importStatement(
+                        new StatementUpload("UNKNOWN", "unknown.csv", content, "admin")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("对账渠道不存在: UNKNOWN");
+        assertThatThrownBy(() -> reconciliationApi.importStatement(
+                        new StatementUpload("", "blank.csv", content, "admin")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Channel code is invalid");
+        assertThatThrownBy(() -> reconciliationApi.importStatement(
+                        new StatementUpload("WECHAT_PAY", "inactive.csv", content, "admin")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("对账渠道未启用: WECHAT_PAY");
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM reconciliation.reconciliation_batch", Integer.class)).isOne();
+    }
+
+    @Test
     void retainsOnlyFailureMetadataWhenCsvIsInvalid() {
         var content = csv("CH-BAD,not-an-amount,2026-01-15T09:30:00Z\n");
         var resolved = reconciliationRulesApi.resolvePublishedVersion("ALIPAY");
