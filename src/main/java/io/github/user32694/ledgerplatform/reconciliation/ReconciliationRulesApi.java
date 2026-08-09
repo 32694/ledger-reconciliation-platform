@@ -17,6 +17,13 @@ public interface ReconciliationRulesApi {
 
     ReconciliationRuleVersionView publish(UUID ruleId, String operator);
 
+    ReconciliationRuleVersionView publish(
+            UUID ruleId,
+            UUID expectedDraftId,
+            long expectedAmountToleranceCents,
+            int expectedQueryWindowHours,
+            String operator);
+
     List<ReconciliationRuleVersionView> findVersions(UUID ruleId);
 
     ReconciliationRuleVersionView resolvePublishedVersion(String channelCode);

@@ -64,6 +64,9 @@
                             <form class="inline-form" method="post" th:if="${rule.hasDraft}"
                                   th:action="@{/admin/reconciliation/rules/{id}/publish(id=${rule.id})}">
                                 <span class="pending-parameters" th:text="${'待发布参数：' + rule.pendingSummary}">待发布参数</span>
+                                <input type="hidden" name="expectedDraftId" th:value="${rule.draftId}">
+                                <input type="hidden" name="expectedAmountToleranceCents" th:value="${rule.draftAmountToleranceCents}">
+                                <input type="hidden" name="expectedQueryWindowHours" th:value="${rule.draftQueryWindowHours}">
                                 <button class="button button-primary" type="submit">发布</button>
                             </form>
                         </div>

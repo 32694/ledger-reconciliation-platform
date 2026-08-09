@@ -131,11 +131,25 @@ public class ReconciliationRuleWebController {
     @PostMapping("/rules/{ruleId}/publish")
     String publish(
             @PathVariable UUID ruleId,
+            @RequestParam UUID expectedDraftId,
+            @RequestParam long expectedAmountToleranceCents,
+            @RequestParam int expectedQueryWindowHours,
             Authentication authentication,
             RedirectAttributes redirectAttributes) {
         try {
-            rulesApi.publish(ruleId, operator(authentication));
+            rulesApi.publish(
+                    ruleId,
+                    expectedDraftId,
+                    expectedAmountToleranceCents,
+                    expectedQueryWindowHours,
+                    operator(authentication));
             redirectAttributes.addFlashAttribute("ruleSuccess", "对账规则版本已发布");
+        } catch (IllegalStateException exception) {
+            if ("草稿已更新，请刷新后重新确认".equals(exception.getMessage())) {
+                redirectAttributes.addFlashAttribute("ruleError", exception.getMessage());
+            } else {
+                redirectAttributes.addFlashAttribute("ruleError", "发布失败，请确认已保存待发布草稿");
+            }
         } catch (RuntimeException exception) {
             redirectAttributes.addFlashAttribute("ruleError", "发布失败，请确认已保存待发布草稿");
         }
@@ -230,6 +244,9 @@ public class ReconciliationRuleWebController {
                 rule.draft() != null,
                 rule.draft() == null ? "无待发布草稿" : "待发布草稿",
                 rule.draft() == null ? null : pendingSummary(rule.draft()),
+                rule.draft() == null ? null : rule.draft().id(),
+                rule.draft() == null ? null : rule.draft().amountToleranceCents(),
+                rule.draft() == null ? null : rule.draft().queryWindowHours(),
                 channel == null ? null : channel.code(),
                 channel == null ? null : channel.active(),
                 channel == null ? "--" : channel.active() ? "启用" : "停用");
@@ -337,6 +354,9 @@ public class ReconciliationRuleWebController {
             boolean hasDraft,
             String draftStatusLabel,
             String pendingSummary,
+            UUID draftId,
+            Long draftAmountToleranceCents,
+            Integer draftQueryWindowHours,
             String channelCode,
             Boolean channelActive,
             String channelStatusLabel) {}

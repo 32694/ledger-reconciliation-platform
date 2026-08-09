@@ -237,19 +237,54 @@ class ReconciliationWebTest {
 
     @Test
     @WithMockUser(username = "rule-publisher", roles = "ADMIN")
-    void publishesExactPendingParametersAndRendersPublishedHistory() throws Exception {
-        reconciliationRulesApi.saveDraft(
+    void rejectsStalePublishConfirmationAndPublishesCurrentExactDraft() throws Exception {
+        var originalDraft = reconciliationRulesApi.saveDraft(
                 ALIPAY_RULE_ID, new ReconciliationRuleDraftCommand(250, 72, "draft-editor"));
 
-        mockMvc.perform(get("/admin/reconciliation/rules"))
+        String listPage = mockMvc.perform(get("/admin/reconciliation/rules"))
                 .andExpect(status().isOk())
-                .andExpect(content().string(containsString("待发布参数：2.50 元 / 72 小时")))
-                .andExpect(content().string(matchesPattern(
-                        "(?s).*action=\"/admin/reconciliation/rules/" + ALIPAY_RULE_ID
-                                + "/publish\".*name=\"_csrf\".*")));
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        assertPublishSnapshotForm(listPage, originalDraft, "2.50 元 / 72 小时");
+
+        String editPage = mockMvc.perform(
+                        get("/admin/reconciliation/rules/{ruleId}/edit", ALIPAY_RULE_ID))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        assertPublishSnapshotForm(editPage, originalDraft, "2.50 元 / 72 小时");
+
+        var currentDraft = reconciliationRulesApi.saveDraft(
+                ALIPAY_RULE_ID, new ReconciliationRuleDraftCommand(300, 48, "later-editor"));
+        assertThat(currentDraft.id()).isEqualTo(originalDraft.id());
 
         mockMvc.perform(post("/admin/reconciliation/rules/{ruleId}/publish", ALIPAY_RULE_ID)
-                        .with(csrf()))
+                        .with(csrf())
+                        .param("expectedDraftId", originalDraft.id().toString())
+                        .param("expectedAmountToleranceCents", "250")
+                        .param("expectedQueryWindowHours", "72"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/admin/reconciliation/rules"))
+                .andExpect(result -> assertThat(result.getFlashMap().get("ruleError"))
+                        .isEqualTo("草稿已更新，请刷新后重新确认"));
+
+        assertThat(reconciliationRulesApi.getRule(ALIPAY_RULE_ID))
+                .satisfies(rule -> {
+                    assertThat(rule.activeVersion()).isNull();
+                    assertThat(rule.draft()).isEqualTo(currentDraft);
+                });
+        assertThat(reconciliationRulesApi.findVersions(ALIPAY_RULE_ID))
+                .singleElement()
+                .satisfies(version -> assertThat(version.status()).isEqualTo(RuleVersionStatus.DRAFT));
+
+        mockMvc.perform(post("/admin/reconciliation/rules/{ruleId}/publish", ALIPAY_RULE_ID)
+                        .with(csrf())
+                        .param("expectedDraftId", currentDraft.id().toString())
+                        .param("expectedAmountToleranceCents", "300")
+                        .param("expectedQueryWindowHours", "48")
+                        .param("operator", "untrusted-user"))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedUrl("/admin/reconciliation/rules"))
                 .andExpect(result -> assertThat(result.getFlashMap().get("ruleSuccess"))
@@ -261,8 +296,8 @@ class ReconciliationWebTest {
                 .andExpect(content().string(containsString("历史版本")))
                 .andExpect(content().string(containsString("已发布")))
                 .andExpect(content().string(containsString("版本 1")))
-                .andExpect(content().string(containsString("2.50 元")))
-                .andExpect(content().string(containsString("72 小时")))
+                .andExpect(content().string(containsString("3.00 元")))
+                .andExpect(content().string(containsString("48 小时")))
                 .andExpect(content().string(containsString("draft-editor")))
                 .andExpect(content().string(containsString("rule-publisher")))
                 .andExpect(content().string(containsString("发布时间")));
@@ -798,6 +833,28 @@ class ReconciliationWebTest {
                 .isEqualTo(releaseVisible);
         assertThat(body.contains("/admin/reconciliation/cases/" + caseId + "/resolve"))
                 .isEqualTo(resolveVisible);
+    }
+
+    private static void assertPublishSnapshotForm(
+            String body, ReconciliationRuleVersionView draft, String pendingSummary) {
+        String action = "action=\"/admin/reconciliation/rules/" + draft.ruleId() + "/publish\"";
+        int actionIndex = body.indexOf(action);
+        assertThat(actionIndex).isGreaterThanOrEqualTo(0);
+        int formStart = body.lastIndexOf("<form", actionIndex);
+        int formEnd = body.indexOf("</form>", actionIndex);
+        assertThat(formStart).isGreaterThanOrEqualTo(0);
+        assertThat(formEnd).isGreaterThan(actionIndex);
+
+        String form = body.substring(formStart, formEnd);
+        assertThat(form)
+                .contains("待发布参数：" + pendingSummary)
+                .contains("name=\"expectedDraftId\"")
+                .contains("value=\"" + draft.id() + "\"")
+                .contains("name=\"expectedAmountToleranceCents\"")
+                .contains("value=\"" + draft.amountToleranceCents() + "\"")
+                .contains("name=\"expectedQueryWindowHours\"")
+                .contains("value=\"" + draft.queryWindowHours() + "\"")
+                .contains("name=\"_csrf\"");
     }
 
     private void insertRun(

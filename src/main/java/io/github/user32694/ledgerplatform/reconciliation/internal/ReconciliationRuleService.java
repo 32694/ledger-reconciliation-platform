@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 class ReconciliationRuleService implements ReconciliationRulesApi {
     private static final String LEGACY_SYNTHETIC = "LEGACY_SYNTHETIC";
+    private static final String STALE_DRAFT_MESSAGE = "草稿已更新，请刷新后重新确认";
 
     private final ReconciliationChannelRepository channelRepository;
     private final ReconciliationRuleRepository ruleRepository;
@@ -126,6 +127,34 @@ class ReconciliationRuleService implements ReconciliationRulesApi {
         var rule = findRuleForUpdate(ruleId);
         var draft = versionRepository.findDraftByRuleId(ruleId)
                 .orElseThrow(() -> new IllegalStateException("没有可发布的规则草稿"));
+        return publish(rule, draft, normalizedOperator);
+    }
+
+    @Override
+    @Transactional
+    public ReconciliationRuleVersionView publish(
+            UUID ruleId,
+            UUID expectedDraftId,
+            long expectedAmountToleranceCents,
+            int expectedQueryWindowHours,
+            String operator) {
+        requireRuleId(ruleId);
+        String normalizedOperator = requireOperator(operator);
+        var rule = findRuleForUpdate(ruleId);
+        var draft = versionRepository.findDraftByRuleId(ruleId)
+                .orElseThrow(() -> new IllegalStateException(STALE_DRAFT_MESSAGE));
+        if (!draft.id().equals(expectedDraftId)
+                || draft.amountToleranceCents() != expectedAmountToleranceCents
+                || draft.queryWindowHours() != expectedQueryWindowHours) {
+            throw new IllegalStateException(STALE_DRAFT_MESSAGE);
+        }
+        return publish(rule, draft, normalizedOperator);
+    }
+
+    private ReconciliationRuleVersionView publish(
+            ReconciliationRuleEntity rule,
+            ReconciliationRuleVersionEntity draft,
+            String normalizedOperator) {
         draft.publish(normalizedOperator, Instant.now());
         versionRepository.flush();
         rule.activate(draft.id());
