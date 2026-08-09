@@ -72,8 +72,10 @@ class MigrationIntegrationTest {
                 """, String.class)).containsExactly(
                         "channel_statement_entry",
                         "reconciliation_batch",
+                        "reconciliation_case_event",
                         "reconciliation_resolution",
-                        "reconciliation_result");
+                        "reconciliation_result",
+                        "reconciliation_run");
 
         assertThatThrownBy(() -> jdbcTemplate.update("""
                 INSERT INTO reconciliation.reconciliation_batch
@@ -81,6 +83,57 @@ class MigrationIntegrationTest {
                 VALUES (?, 'OTHER', 'bad.csv', ?, 'IMPORTED', 'test', CURRENT_TIMESTAMP)
                 """, UUID.randomUUID(), "0".repeat(64)))
                 .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    @Transactional
+    void createsReconciliationOperationsConstraintsAndImmutableEvents() {
+        var resultConstraint = jdbcTemplate.queryForObject("""
+                SELECT pg_get_constraintdef(oid)
+                FROM pg_constraint
+                WHERE conrelid = 'reconciliation.reconciliation_result'::regclass
+                  AND conname = 'ck_reconciliation_result_resolution'
+                """, String.class);
+        var activeRunIndex = jdbcTemplate.queryForMap("""
+                SELECT index_definition.indisunique AS is_unique,
+                       pg_get_expr(index_definition.indpred, index_definition.indrelid) AS predicate
+                FROM pg_index index_definition
+                JOIN pg_class index_name ON index_name.oid = index_definition.indexrelid
+                WHERE index_name.relname = 'uq_reconciliation_run_active'
+                  AND index_definition.indrelid = 'reconciliation.reconciliation_run'::regclass
+                """);
+
+        assertThat(resultConstraint).contains("CLAIMED");
+        assertThat(activeRunIndex.get("is_unique")).isEqualTo(true);
+        assertThat((String) activeRunIndex.get("predicate"))
+                .contains("QUEUED")
+                .contains("RUNNING");
+
+        var batchId = insertReconciliationBatch();
+        var entryId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.channel_statement_entry
+                    (id, batch_id, line_number, channel_transaction_id, amount_cents, occurred_at)
+                VALUES (?, ?, 2, ?, 100, CURRENT_TIMESTAMP)
+                """, entryId, batchId, "MIGRATION-CASE-" + entryId);
+        var resultId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_result
+                    (id, batch_id, statement_entry_id, result_type, resolution_status, created_at)
+                VALUES (?, ?, ?, 'CHANNEL_ONLY', 'OPEN', CURRENT_TIMESTAMP)
+                """, resultId, batchId, entryId);
+        var eventId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_case_event
+                    (id, result_id, action, actor, created_at)
+                VALUES (?, ?, 'CLAIMED', 'admin', CURRENT_TIMESTAMP)
+                """, eventId, resultId);
+
+        assertThatThrownBy(() -> jdbcTemplate.update("""
+                UPDATE reconciliation.reconciliation_case_event
+                SET actor = 'changed'
+                WHERE id = ?
+                """, eventId)).isInstanceOf(DataAccessException.class);
     }
 
     @Test
@@ -113,6 +166,18 @@ class MigrationIntegrationTest {
                 """, String.class)).containsExactly("9", "10", "11");
     }
 
+    private UUID insertReconciliationBatch() {
+        var batchId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_batch
+                    (id, source_type, file_name, file_sha256, period_start, period_end,
+                     status, created_by, created_at)
+                VALUES (?, 'SYNTHETIC_CHANNEL', 'migration.csv', ?, CURRENT_TIMESTAMP,
+                        CURRENT_TIMESTAMP, 'COMPLETED', 'test', CURRENT_TIMESTAMP)
+                """, batchId, UUID.randomUUID().toString().replace("-", "").repeat(2));
+        return batchId;
+    }
+
     @Test
     @Transactional
     void allowsReverseJournalTypesAndRejectsUnknownTypesAfterV11() {
@@ -121,8 +186,8 @@ class MigrationIntegrationTest {
                 FROM flyway_schema_history
                 WHERE success
                 """))
-                .containsEntry("migration_count", 11L)
-                .containsEntry("latest_version", 11);
+                .containsEntry("migration_count", 12L)
+                .containsEntry("latest_version", 12);
 
         var refundId = UUID.randomUUID();
         var reversalId = UUID.randomUUID();

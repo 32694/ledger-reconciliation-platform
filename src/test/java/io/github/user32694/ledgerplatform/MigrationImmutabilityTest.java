@@ -56,6 +56,14 @@ class MigrationImmutabilityTest {
                 "34c99f7b048a42769ee9514d1ab663c661e57758068b02d4e905a32b8f09099f");
     }
 
+    @Test
+    void v12MatchesThePublishedReconciliationOperationsMigration()
+            throws IOException, NoSuchAlgorithmException {
+        assertMigrationDigest(
+                "V12__add_reconciliation_operations.sql",
+                "c0688282edb80c2f5d552bd316fd9112cac3c28d459fdb5fc475acb4927a7a40");
+    }
+
     private void assertMigrationDigest(String name, String expected)
             throws IOException, NoSuchAlgorithmException {
         var digest = MessageDigest.getInstance("SHA-256").digest(readMigration(name));
