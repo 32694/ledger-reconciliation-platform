@@ -71,6 +71,7 @@ public class ReconciliationRuleWebController {
                 model,
                 rule,
                 effective,
+                DraftSnapshot.from(rule.draft()),
                 source == null ? "" : amount(source.amountToleranceCents()),
                 source == null ? "" : Integer.toString(source.queryWindowHours()),
                 null,
@@ -98,6 +99,11 @@ public class ReconciliationRuleWebController {
             redirectAttributes.addFlashAttribute("ruleError", RULE_ERROR);
             return "redirect:" + RULES_URL;
         }
+        var draftSnapshot = new DraftSnapshot(
+                expectedDraftPresent,
+                expectedDraftId,
+                expectedAmountToleranceCents,
+                expectedQueryWindowHours);
 
         DraftInput input = validateDraft(amountTolerance, queryWindowHours);
         if (!input.valid()) {
@@ -105,6 +111,7 @@ public class ReconciliationRuleWebController {
                     model,
                     rule,
                     effectiveVersion(rule),
+                    draftSnapshot,
                     amountTolerance,
                     queryWindowHours,
                     input.amountError(),
@@ -131,6 +138,7 @@ public class ReconciliationRuleWebController {
                     model,
                     rule,
                     effectiveVersion(rule),
+                    draftSnapshot,
                     amountTolerance,
                     queryWindowHours,
                     null,
@@ -220,6 +228,7 @@ public class ReconciliationRuleWebController {
             Model model,
             ReconciliationRuleView rule,
             ReconciliationRuleVersionView effective,
+            DraftSnapshot draftSnapshot,
             String amountTolerance,
             String queryWindowHours,
             String amountError,
@@ -236,6 +245,10 @@ public class ReconciliationRuleWebController {
         model.addAttribute("amountError", amountError);
         model.addAttribute("windowError", windowError);
         model.addAttribute("ruleError", ruleError);
+        model.addAttribute("expectedDraftPresent", draftSnapshot.present());
+        model.addAttribute("expectedDraftId", draftSnapshot.id());
+        model.addAttribute("expectedAmountToleranceCents", draftSnapshot.amountToleranceCents());
+        model.addAttribute("expectedQueryWindowHours", draftSnapshot.queryWindowHours());
         model.addAttribute("pendingSummary", rule.draft() == null ? null : pendingSummary(rule.draft()));
         model.addAttribute("activeNav", "reconciliation-rules");
     }
@@ -390,6 +403,22 @@ public class ReconciliationRuleWebController {
             String windowError) {
         boolean valid() {
             return amountError == null && windowError == null;
+        }
+    }
+
+    private record DraftSnapshot(
+            boolean present,
+            UUID id,
+            Long amountToleranceCents,
+            Integer queryWindowHours) {
+        private static DraftSnapshot from(ReconciliationRuleVersionView draft) {
+            return draft == null
+                    ? new DraftSnapshot(false, null, null, null)
+                    : new DraftSnapshot(
+                            true,
+                            draft.id(),
+                            draft.amountToleranceCents(),
+                            draft.queryWindowHours());
         }
     }
 }

@@ -27,6 +27,8 @@ import java.time.format.DateTimeFormatter;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -41,6 +43,7 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.context.jdbc.Sql.ExecutionPhase;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 @SpringBootTest(properties = {
         "app.admin.username=admin",
@@ -247,19 +250,33 @@ class ReconciliationWebTest {
                 .getResponse()
                 .getContentAsString();
         assertDraftSnapshotForm(editPage, renderedDraft);
+        DraftFormSnapshot renderedSnapshot = draftFormSnapshot(editPage, ALIPAY_RULE_ID);
 
         var currentDraft = reconciliationRulesApi.saveDraft(
                 ALIPAY_RULE_ID, new ReconciliationRuleDraftCommand(300, 48, "later-editor"));
         assertThat(currentDraft.id()).isEqualTo(renderedDraft.id());
 
-        mockMvc.perform(post("/admin/reconciliation/rules/{ruleId}/draft", ALIPAY_RULE_ID)
-                        .with(csrf())
-                        .param("amountTolerance", "4.00")
-                        .param("queryWindowHours", "24")
-                        .param("expectedDraftPresent", "true")
-                        .param("expectedDraftId", renderedDraft.id().toString())
-                        .param("expectedAmountToleranceCents", "250")
-                        .param("expectedQueryWindowHours", "72"))
+        String invalidEditPage = mockMvc.perform(withDraftSnapshot(
+                        post("/admin/reconciliation/rules/{ruleId}/draft", ALIPAY_RULE_ID)
+                                .with(csrf())
+                                .param("amountTolerance", "-0.01")
+                                .param("queryWindowHours", "169"),
+                        renderedSnapshot))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("金额容差不能小于 0")))
+                .andExpect(content().string(containsString("查询窗口必须在 0 到 168 小时之间")))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        DraftFormSnapshot rerenderedSnapshot = draftFormSnapshot(invalidEditPage, ALIPAY_RULE_ID);
+        assertThat(rerenderedSnapshot).isEqualTo(renderedSnapshot);
+
+        mockMvc.perform(withDraftSnapshot(
+                        post("/admin/reconciliation/rules/{ruleId}/draft", ALIPAY_RULE_ID)
+                                .with(csrf())
+                                .param("amountTolerance", "4.00")
+                                .param("queryWindowHours", "24"),
+                        rerenderedSnapshot))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedUrl(
                         "/admin/reconciliation/rules/" + ALIPAY_RULE_ID + "/edit"))
@@ -279,15 +296,32 @@ class ReconciliationWebTest {
                 .getResponse()
                 .getContentAsString();
         assertDraftSnapshotForm(editPage, null);
+        DraftFormSnapshot renderedSnapshot = draftFormSnapshot(editPage, ALIPAY_RULE_ID);
 
         var currentDraft = reconciliationRulesApi.saveDraft(
                 ALIPAY_RULE_ID, new ReconciliationRuleDraftCommand(300, 48, "later-editor"));
 
-        mockMvc.perform(post("/admin/reconciliation/rules/{ruleId}/draft", ALIPAY_RULE_ID)
-                        .with(csrf())
-                        .param("amountTolerance", "4.00")
-                        .param("queryWindowHours", "24")
-                        .param("expectedDraftPresent", "false"))
+        String invalidEditPage = mockMvc.perform(withDraftSnapshot(
+                        post("/admin/reconciliation/rules/{ruleId}/draft", ALIPAY_RULE_ID)
+                                .with(csrf())
+                                .param("amountTolerance", "-0.01")
+                                .param("queryWindowHours", "169"),
+                        renderedSnapshot))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("金额容差不能小于 0")))
+                .andExpect(content().string(containsString("查询窗口必须在 0 到 168 小时之间")))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        DraftFormSnapshot rerenderedSnapshot = draftFormSnapshot(invalidEditPage, ALIPAY_RULE_ID);
+        assertThat(rerenderedSnapshot).isEqualTo(renderedSnapshot);
+
+        mockMvc.perform(withDraftSnapshot(
+                        post("/admin/reconciliation/rules/{ruleId}/draft", ALIPAY_RULE_ID)
+                                .with(csrf())
+                                .param("amountTolerance", "4.00")
+                                .param("queryWindowHours", "24"),
+                        rerenderedSnapshot))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedUrl(
                         "/admin/reconciliation/rules/" + ALIPAY_RULE_ID + "/edit"))
@@ -964,6 +998,16 @@ class ReconciliationWebTest {
     private static void assertDraftSnapshotForm(
             String body, ReconciliationRuleVersionView draft) {
         UUID ruleId = draft == null ? ALIPAY_RULE_ID : draft.ruleId();
+        DraftFormSnapshot actual = draftFormSnapshot(body, ruleId);
+        DraftFormSnapshot expected = draft == null
+                ? new DraftFormSnapshot(false, null, null, null)
+                : new DraftFormSnapshot(
+                        true,
+                        draft.id().toString(),
+                        Long.toString(draft.amountToleranceCents()),
+                        Integer.toString(draft.queryWindowHours()));
+        assertThat(actual).isEqualTo(expected);
+
         String action = "action=\"/admin/reconciliation/rules/" + ruleId + "/draft\"";
         int actionIndex = body.indexOf(action);
         assertThat(actionIndex).isGreaterThanOrEqualTo(0);
@@ -973,25 +1017,55 @@ class ReconciliationWebTest {
         assertThat(formEnd).isGreaterThan(actionIndex);
 
         String form = body.substring(formStart, formEnd);
-        assertThat(form)
-                .contains("name=\"expectedDraftPresent\"")
-                .contains("value=\"" + (draft != null) + "\"")
-                .contains("name=\"_csrf\"");
-        if (draft == null) {
-            assertThat(form)
-                    .doesNotContain("name=\"expectedDraftId\"")
-                    .doesNotContain("name=\"expectedAmountToleranceCents\"")
-                    .doesNotContain("name=\"expectedQueryWindowHours\"");
-        } else {
-            assertThat(form)
-                    .contains("name=\"expectedDraftId\"")
-                    .contains("value=\"" + draft.id() + "\"")
-                    .contains("name=\"expectedAmountToleranceCents\"")
-                    .contains("value=\"" + draft.amountToleranceCents() + "\"")
-                    .contains("name=\"expectedQueryWindowHours\"")
-                    .contains("value=\"" + draft.queryWindowHours() + "\"");
-        }
+        assertThat(form).contains("name=\"_csrf\"");
     }
+
+    private static DraftFormSnapshot draftFormSnapshot(String body, UUID ruleId) {
+        String action = "action=\"/admin/reconciliation/rules/" + ruleId + "/draft\"";
+        int actionIndex = body.indexOf(action);
+        assertThat(actionIndex).isGreaterThanOrEqualTo(0);
+        int formStart = body.lastIndexOf("<form", actionIndex);
+        int formEnd = body.indexOf("</form>", actionIndex);
+        assertThat(formStart).isGreaterThanOrEqualTo(0);
+        assertThat(formEnd).isGreaterThan(actionIndex);
+
+        String form = body.substring(formStart, formEnd);
+        return new DraftFormSnapshot(
+                Boolean.parseBoolean(inputValue(form, "expectedDraftPresent")),
+                optionalInputValue(form, "expectedDraftId"),
+                optionalInputValue(form, "expectedAmountToleranceCents"),
+                optionalInputValue(form, "expectedQueryWindowHours"));
+    }
+
+    private static String inputValue(String form, String name) {
+        String value = optionalInputValue(form, name);
+        assertThat(value).isNotNull();
+        return value;
+    }
+
+    private static String optionalInputValue(String form, String name) {
+        Matcher matcher = Pattern.compile(
+                        "<input[^>]*name=\"" + Pattern.quote(name) + "\"[^>]*value=\"([^\"]*)\"[^>]*>")
+                .matcher(form);
+        return matcher.find() ? matcher.group(1) : null;
+    }
+
+    private static MockHttpServletRequestBuilder withDraftSnapshot(
+            MockHttpServletRequestBuilder request, DraftFormSnapshot snapshot) {
+        request.param("expectedDraftPresent", Boolean.toString(snapshot.present()));
+        if (snapshot.present()) {
+            request.param("expectedDraftId", snapshot.draftId())
+                    .param("expectedAmountToleranceCents", snapshot.amountToleranceCents())
+                    .param("expectedQueryWindowHours", snapshot.queryWindowHours());
+        }
+        return request;
+    }
+
+    private record DraftFormSnapshot(
+            boolean present,
+            String draftId,
+            String amountToleranceCents,
+            String queryWindowHours) {}
 
     private void insertRun(
             UUID batchId,

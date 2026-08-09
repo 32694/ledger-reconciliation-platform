@@ -25,12 +25,12 @@
     </dl>
     <form class="form-surface" method="post"
           th:action="@{/admin/reconciliation/rules/{id}/draft(id=${rule.id})}">
-        <input type="hidden" name="expectedDraftPresent" th:value="${rule.draft != null}">
-        <input type="hidden" name="expectedDraftId" th:if="${rule.draft != null}" th:value="${rule.draft.id}">
-        <input type="hidden" name="expectedAmountToleranceCents" th:if="${rule.draft != null}"
-               th:value="${rule.draft.amountToleranceCents}">
-        <input type="hidden" name="expectedQueryWindowHours" th:if="${rule.draft != null}"
-               th:value="${rule.draft.queryWindowHours}">
+        <input type="hidden" name="expectedDraftPresent" th:value="${expectedDraftPresent}">
+        <input type="hidden" name="expectedDraftId" th:if="${expectedDraftPresent}" th:value="${expectedDraftId}">
+        <input type="hidden" name="expectedAmountToleranceCents" th:if="${expectedDraftPresent}"
+               th:value="${expectedAmountToleranceCents}">
+        <input type="hidden" name="expectedQueryWindowHours" th:if="${expectedDraftPresent}"
+               th:value="${expectedQueryWindowHours}">
         <div class="field" th:classappend="${amountError != null} ? ' field-invalid'">
             <label for="amountTolerance">金额容差（元）</label>
             <input id="amountTolerance" name="amountTolerance" type="text" inputmode="decimal"
