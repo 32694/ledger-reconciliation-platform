@@ -121,7 +121,8 @@ tbody tr:hover { background: #f8fbfa; }
     .workspace { width: 100%; }
     .topbar { padding-inline: 18px; }
     .content { padding: 20px 16px; }
-    .page-heading { align-items: flex-start; }
+    .page-heading { align-items: stretch; flex-direction: column; }
+    .page-heading .actions { justify-content: flex-start; }
     .actions { flex-wrap: wrap; justify-content: flex-end; }
     .metrics, .split-workspace { grid-template-columns: minmax(0, 1fr); }
     .definition-grid { grid-template-columns: minmax(0, 1fr); }
