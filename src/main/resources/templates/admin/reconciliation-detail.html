@@ -60,11 +60,11 @@
             <form class="filter-form" method="get" th:action="@{/admin/reconciliation/{id}(id=${batch.id})}">
                 <select name="resultType" aria-label="结果类型">
                     <option value="">全部结果</option>
-                    <option th:each="type : ${resultTypes}" th:value="${type}" th:text="${type}" th:selected="${selectedResultType == type.name()}">MATCHED</option>
+                    <option th:each="type : ${resultTypes}" th:value="${type.value}" th:text="${type.label}" th:selected="${selectedResultType == type.value}">匹配一致</option>
                 </select>
                 <select name="resolutionStatus" aria-label="处理状态">
                     <option value="">全部状态</option>
-                    <option th:each="status : ${resolutionStatuses}" th:value="${status}" th:text="${status}" th:selected="${selectedResolutionStatus == status.name()}">OPEN</option>
+                    <option th:each="status : ${resolutionStatuses}" th:value="${status.value}" th:text="${status.label}" th:selected="${selectedResolutionStatus == status.value}">待处理</option>
                 </select>
                 <button class="button button-secondary" type="submit">筛选</button>
             </form>

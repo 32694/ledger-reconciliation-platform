@@ -135,8 +135,9 @@ class ReconciliationStore {
     }
 
     @Transactional
-    void recoverAbandonedRuns(String message) {
-        var activeRuns = runRepository.findAllByStatusIn(List.of(RunStatus.QUEUED, RunStatus.RUNNING));
+    void recoverAbandonedRuns(String message, Instant recoveryCutoff) {
+        var activeRuns = runRepository.findAllByStatusInAndRequestedAtLessThanEqual(
+                List.of(RunStatus.QUEUED, RunStatus.RUNNING), recoveryCutoff);
         for (var run : activeRuns) {
             if (!run.fail(message, Instant.now())) {
                 continue;

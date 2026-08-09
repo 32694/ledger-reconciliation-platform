@@ -13,6 +13,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.security.core.Authentication;
@@ -44,7 +45,9 @@ public class ReconciliationWebController {
                     .findFirst()
                     .orElse(null);
             if (runStatus == null || selectedRun != null) {
-                batches.add(toBatchRow(batch, selectedRun == null ? null : toRunRow(selectedRun)));
+                var results = reconciliationApi.findResults(batch.id(), null, null);
+                batches.add(toBatchRow(
+                        batch, selectedRun == null ? null : toRunRow(selectedRun), results));
             }
         }
         model.addAttribute("batches", batches);
@@ -103,8 +106,12 @@ public class ReconciliationWebController {
         model.addAttribute("run", latestRun);
         model.addAttribute("latestRun", latestRun);
         model.addAttribute("results", results);
-        model.addAttribute("resultTypes", ResultType.values());
-        model.addAttribute("resolutionStatuses", ResolutionStatus.values());
+        model.addAttribute("resultTypes", Arrays.stream(ResultType.values())
+                .map(type -> new FilterOption(type.name(), resultTypeLabel(type)))
+                .toList());
+        model.addAttribute("resolutionStatuses", Arrays.stream(ResolutionStatus.values())
+                .map(status -> new FilterOption(status.name(), resolutionFilterLabel(status)))
+                .toList());
         model.addAttribute("selectedResultType", resultType == null ? "" : resultType.name());
         model.addAttribute("selectedResolutionStatus", resolutionStatus == null ? "" : resolutionStatus.name());
         model.addAttribute("canRun", (batch.status() == BatchStatus.IMPORTED
@@ -145,9 +152,17 @@ public class ReconciliationWebController {
     }
 
     private static BatchRow toBatchRow(ReconciliationBatchView batch, RunRow latestRun) {
+        return toBatchRow(batch, latestRun, List.of());
+    }
+
+    private static BatchRow toBatchRow(
+            ReconciliationBatchView batch,
+            RunRow latestRun,
+            List<ReconciliationResultView> results) {
         return new BatchRow(
                 batch.id(), batch.fileName(), batch.status(), statusLabel(batch.status()),
-                batch.totalRows(), batch.matchedRows(), batch.differenceRows(), batch.errorMessage(), latestRun);
+                batch.totalRows(), batch.matchedRows(), batch.differenceRows(), batch.errorMessage(),
+                caseProgressLabel(batch, results), latestRun);
     }
 
     private static ResultRow toResultRow(ReconciliationResultView result) {
@@ -220,6 +235,25 @@ public class ReconciliationWebController {
         };
     }
 
+    private static String resolutionFilterLabel(ResolutionStatus status) {
+        return status == ResolutionStatus.RESOLVED ? "已解决" : resolutionLabel(status);
+    }
+
+    private static String caseProgressLabel(
+            ReconciliationBatchView batch, List<ReconciliationResultView> results) {
+        long total = results.stream()
+                .filter(result -> result.resultType() != ResultType.MATCHED)
+                .count();
+        if (total == 0) {
+            return batch.status() == BatchStatus.COMPLETED ? "无需处理" : "尚无异常";
+        }
+        long resolved = results.stream()
+                .filter(result -> result.resultType() != ResultType.MATCHED)
+                .filter(result -> result.resolutionStatus() == ResolutionStatus.RESOLVED)
+                .count();
+        return "已解决 " + resolved + " / " + total;
+    }
+
     public record BatchRow(
             UUID id,
             String fileName,
@@ -229,7 +263,10 @@ public class ReconciliationWebController {
             int matchedRows,
             int differenceRows,
             String errorMessage,
+            String caseProgressLabel,
             RunRow latestRun) {}
+
+    public record FilterOption(String value, String label) {}
 
     public record ResultRow(
             UUID id,

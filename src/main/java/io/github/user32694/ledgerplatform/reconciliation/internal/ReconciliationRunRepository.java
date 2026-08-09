@@ -19,7 +19,8 @@ interface ReconciliationRunRepository extends JpaRepository<ReconciliationRunEnt
 
     List<ReconciliationRunEntity> findAllByBatchIdOrderByAttemptNumberDesc(UUID batchId);
 
-    List<ReconciliationRunEntity> findAllByStatusIn(Collection<RunStatus> statuses);
+    List<ReconciliationRunEntity> findAllByStatusInAndRequestedAtLessThanEqual(
+            Collection<RunStatus> statuses, java.time.Instant requestedAt);
 
     long countByStatus(RunStatus status);
 

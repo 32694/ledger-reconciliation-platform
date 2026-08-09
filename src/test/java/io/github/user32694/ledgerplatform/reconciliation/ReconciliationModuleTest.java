@@ -351,6 +351,8 @@ class ReconciliationModuleTest {
                 "abandoned-queued.csv", csv("CH-ABANDONED-QUEUED,1,2026-01-15T09:30:00Z\n"), "admin"));
         var runningBatch = reconciliationApi.importStatement(new StatementUpload(
                 "abandoned-running.csv", csv("CH-ABANDONED-RUNNING,1,2026-01-15T09:30:00Z\n"), "admin"));
+        var currentProcessBatch = reconciliationApi.importStatement(new StatementUpload(
+                "current-process.csv", csv("CH-CURRENT-PROCESS,1,2026-01-15T09:30:00Z\n"), "admin"));
         var queuedRunId = UUID.randomUUID();
         var runningRunId = UUID.randomUUID();
         var requestedAt = Instant.parse("2026-01-15T10:00:00Z");
@@ -377,6 +379,16 @@ class ReconciliationModuleTest {
                 runningBatch.id(),
                 Timestamp.from(requestedAt),
                 Timestamp.from(requestedAt));
+        var currentProcessRunId = UUID.randomUUID();
+        jdbcTemplate.update(
+                """
+                INSERT INTO reconciliation.reconciliation_run
+                    (id, batch_id, attempt_number, status, requested_by, requested_at)
+                VALUES (?, ?, 1, 'QUEUED', 'current-process-operator', ?)
+                """,
+                currentProcessRunId,
+                currentProcessBatch.id(),
+                Timestamp.from(Instant.now()));
 
         eventPublisher.publishEvent(new ApplicationReadyEvent(
                 new SpringApplication(), new String[0], applicationContext, Duration.ZERO));
@@ -403,6 +415,11 @@ class ReconciliationModuleTest {
                     assertThat(batch.status()).isEqualTo(BatchStatus.RECONCILIATION_FAILED);
                     assertThat(batch.errorMessage()).isEqualTo("Application restarted before run completion");
                 });
+        assertThat(reconciliationApi.findRuns(currentProcessBatch.id()))
+                .singleElement()
+                .satisfies(run -> assertThat(run.status()).isEqualTo(RunStatus.QUEUED));
+        assertThat(reconciliationApi.getBatch(currentProcessBatch.id()).status())
+                .isEqualTo(BatchStatus.IMPORTED);
     }
 
     @Test

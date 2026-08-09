@@ -264,13 +264,52 @@ class ReconciliationWebTest {
     void listShowsLatestRunSummary() throws Exception {
         var batch = importBatch("list-run.csv", "CH-LIST-RUN");
         insertRun(batch.id(), 1, "FAILED", "list-admin", 0, 0, "timeout");
+        var statementEntryId = jdbcTemplate.queryForObject(
+                "SELECT id FROM reconciliation.channel_statement_entry WHERE batch_id = ?",
+                UUID.class,
+                batch.id());
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_result
+                    (id, batch_id, statement_entry_id, result_type, resolution_status, created_at)
+                VALUES (?, ?, ?, 'CHANNEL_ONLY', 'OPEN', CURRENT_TIMESTAMP)
+                """, UUID.randomUUID(), batch.id(), statementEntryId);
 
         mockMvc.perform(get("/admin/reconciliation"))
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("最近运行")))
                 .andExpect(content().string(containsString("第 1 次")))
                 .andExpect(content().string(containsString("list-admin")))
-                .andExpect(content().string(containsString("执行失败")));
+                .andExpect(content().string(containsString("2026-01-15T10:01:00Z")))
+                .andExpect(content().string(containsString("执行失败")))
+                .andExpect(content().string(containsString("异常处理")))
+                .andExpect(content().string(containsString("已解决 0 / 1")))
+                .andExpect(content().string(containsString("失败原因")))
+                .andExpect(content().string(containsString("timeout")));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void rendersChineseResultAndResolutionFilterOptions() throws Exception {
+        var batch = importBatch("localized-filters.csv", "CH-LOCALIZED-FILTERS");
+
+        mockMvc.perform(get("/admin/reconciliation/{batchId}", batch.id()))
+                .andExpect(status().isOk())
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*<option value=\"MATCHED\"[^>]*>匹配一致</option>.*")))
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*<option value=\"AMOUNT_MISMATCH\"[^>]*>金额不一致</option>.*")))
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*<option value=\"CHANNEL_ONLY\"[^>]*>仅渠道存在</option>.*")))
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*<option value=\"INTERNAL_ONLY\"[^>]*>仅内部存在</option>.*")))
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*<option value=\"NOT_REQUIRED\"[^>]*>无需处理</option>.*")))
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*<option value=\"OPEN\"[^>]*>待处理</option>.*")))
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*<option value=\"CLAIMED\"[^>]*>处理中</option>.*")))
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*<option value=\"RESOLVED\"[^>]*>已解决</option>.*")));
     }
 
     @Test

@@ -336,7 +336,7 @@ class MigrationIntegrationTest {
     }
 
     @Test
-    void upgradesLegacyPaymentsFromV8WithoutRewritingThem() throws SQLException {
+    void upgradesLegacyPaymentsAndResolvedCasesFromV11() throws SQLException {
         var canCreateDatabase = jdbcTemplate.queryForObject("""
                 SELECT rolcreatedb OR rolsuper
                 FROM pg_roles
@@ -344,7 +344,7 @@ class MigrationIntegrationTest {
                 """, Boolean.class);
         assumeTrue(
                 Boolean.TRUE.equals(canCreateDatabase),
-                "V8-to-V11 upgrade test requires a database-creating test role");
+                "V11-to-V13 upgrade test requires a database-creating test role");
 
         var databaseName = "ledger_migration_test_" + UUID.randomUUID().toString().replace("-", "");
         var temporaryDatasourceUrl = datasourceUrlFor(databaseName);
@@ -353,7 +353,7 @@ class MigrationIntegrationTest {
             createTemporaryDatabase(databaseName);
             Flyway.configure()
                     .dataSource(temporaryDatasourceUrl, datasourceUsername, datasourcePassword)
-                    .target("8")
+                    .target("11")
                     .load()
                     .migrate();
 
@@ -364,6 +364,37 @@ class MigrationIntegrationTest {
             var topUpId = insertLegacyPayment(legacyDatabase, "TOP_UP", null, payeeId);
             var transferId = insertLegacyPayment(legacyDatabase, "TRANSFER", payerId, payeeId);
             var legacyRows = paymentSnapshots(legacyDatabase, topUpId, transferId);
+            var legacyBatchId = UUID.randomUUID();
+            var legacyEntryId = UUID.randomUUID();
+            var legacyResultId = UUID.randomUUID();
+            var legacyResolutionId = UUID.randomUUID();
+            legacyDatabase.update("""
+                    INSERT INTO reconciliation.reconciliation_batch
+                        (id, source_type, file_name, file_sha256, period_start, period_end,
+                         status, total_rows, matched_rows, difference_rows, created_by,
+                         created_at, started_at, completed_at)
+                    VALUES (?, 'SYNTHETIC_CHANNEL', 'legacy-resolved.csv', ?,
+                            '2026-01-15T09:30:00Z', '2026-01-15T09:30:00Z',
+                            'COMPLETED', 1, 0, 1, 'legacy-importer',
+                            '2026-01-15T09:31:00Z', '2026-01-15T09:32:00Z',
+                            '2026-01-15T09:33:00Z')
+                    """, legacyBatchId, "a".repeat(64));
+            legacyDatabase.update("""
+                    INSERT INTO reconciliation.channel_statement_entry
+                        (id, batch_id, line_number, channel_transaction_id, amount_cents, occurred_at)
+                    VALUES (?, ?, 2, 'LEGACY-RESOLVED-CASE', 100, '2026-01-15T09:30:00Z')
+                    """, legacyEntryId, legacyBatchId);
+            legacyDatabase.update("""
+                    INSERT INTO reconciliation.reconciliation_result
+                        (id, batch_id, statement_entry_id, result_type, resolution_status, created_at)
+                    VALUES (?, ?, ?, 'CHANNEL_ONLY', 'RESOLVED', '2026-01-15T09:33:00Z')
+                    """, legacyResultId, legacyBatchId, legacyEntryId);
+            legacyDatabase.update("""
+                    INSERT INTO reconciliation.reconciliation_resolution
+                        (id, result_id, action, note, operator, created_at)
+                    VALUES (?, ?, 'RESOLVE', 'legacy resolution note', 'legacy-operator',
+                            '2026-01-15T09:34:00Z')
+                    """, legacyResolutionId, legacyResultId);
 
             Flyway.configure()
                     .dataSource(temporaryDatasourceUrl, datasourceUsername, datasourcePassword)
@@ -378,12 +409,33 @@ class MigrationIntegrationTest {
                       AND original_payment_id IS NULL
                       AND operation_reason IS NULL
                     """, Integer.class, topUpId, transferId)).isEqualTo(2);
+            assertThat(legacyDatabase.queryForMap("""
+                    SELECT result.assigned_to,
+                           result.claimed_at = resolution.created_at AS claimed_at_matches,
+                           resolution.resolution_code
+                    FROM reconciliation.reconciliation_result result
+                    JOIN reconciliation.reconciliation_resolution resolution
+                      ON resolution.result_id = result.id
+                    WHERE result.id = ?
+                    """, legacyResultId)).containsEntry("assigned_to", "legacy-operator")
+                    .containsEntry("claimed_at_matches", true)
+                    .containsEntry("resolution_code", "OTHER");
+            assertThat(legacyDatabase.queryForMap("""
+                    SELECT action, actor, resolution_code, note,
+                           created_at = '2026-01-15T09:34:00Z'::timestamptz AS created_at_matches
+                    FROM reconciliation.reconciliation_case_event
+                    WHERE result_id = ?
+                    """, legacyResultId)).containsEntry("action", "RESOLVED")
+                    .containsEntry("actor", "legacy-operator")
+                    .containsEntry("resolution_code", "OTHER")
+                    .containsEntry("note", "legacy resolution note")
+                    .containsEntry("created_at_matches", true);
             assertThat(legacyDatabase.queryForList("""
                     SELECT version
                     FROM flyway_schema_history
-                    WHERE version IN ('9', '10', '11') AND success
+                    WHERE version IN ('9', '10', '11', '12', '13') AND success
                     ORDER BY installed_rank
-                    """, String.class)).containsExactly("9", "10", "11");
+                    """, String.class)).containsExactly("9", "10", "11", "12", "13");
         } finally {
             dropTemporaryDatabase(databaseName);
         }
