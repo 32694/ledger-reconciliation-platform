@@ -10,8 +10,10 @@ import io.github.user32694.ledgerplatform.reconciliation.ReconciliationRuleVersi
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationRuleView;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationRulesApi;
 import io.github.user32694.ledgerplatform.reconciliation.RuleScopeType;
+import io.github.user32694.ledgerplatform.reconciliation.StaleReconciliationRuleDraftException;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,7 +21,6 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 class ReconciliationRuleService implements ReconciliationRulesApi {
     private static final String LEGACY_SYNTHETIC = "LEGACY_SYNTHETIC";
-    private static final String STALE_DRAFT_MESSAGE = "草稿已更新，请刷新后重新确认";
 
     private final ReconciliationChannelRepository channelRepository;
     private final ReconciliationRuleRepository ruleRepository;
@@ -89,17 +90,51 @@ class ReconciliationRuleService implements ReconciliationRulesApi {
         validate(command);
         String operator = requireOperator(command.operator());
         var rule = findRuleForUpdate(ruleId);
+        return saveDraft(
+                rule, versionRepository.findDraftByRuleId(ruleId), command, operator);
+    }
+
+    @Override
+    @Transactional
+    public ReconciliationRuleVersionView saveDraft(
+            UUID ruleId,
+            ReconciliationRuleDraftCommand command,
+            boolean expectedDraftPresent,
+            UUID expectedDraftId,
+            Long expectedAmountToleranceCents,
+            Integer expectedQueryWindowHours) {
+        requireRuleId(ruleId);
+        validate(command);
+        String operator = requireOperator(command.operator());
+        var rule = findRuleForUpdate(ruleId);
+        var currentDraft = versionRepository.findDraftByRuleId(ruleId);
+        if (!matchesExpectedDraft(
+                currentDraft,
+                expectedDraftPresent,
+                expectedDraftId,
+                expectedAmountToleranceCents,
+                expectedQueryWindowHours)) {
+            throw new StaleReconciliationRuleDraftException();
+        }
+        return saveDraft(rule, currentDraft, command, operator);
+    }
+
+    private ReconciliationRuleVersionView saveDraft(
+            ReconciliationRuleEntity rule,
+            Optional<ReconciliationRuleVersionEntity> currentDraft,
+            ReconciliationRuleDraftCommand command,
+            String operator) {
         Instant now = Instant.now();
-        var draft = versionRepository.findDraftByRuleId(ruleId).orElseGet(() -> {
+        var draft = currentDraft.orElseGet(() -> {
             var base = findDraftBase(rule);
             int nextVersionNumber = versionRepository
-                            .findAllByRuleIdOrderByVersionNumberDesc(ruleId)
+                            .findAllByRuleIdOrderByVersionNumberDesc(rule.id())
                             .stream()
                             .findFirst()
                             .map(version -> version.versionNumber() + 1)
                             .orElse(1);
             return ReconciliationRuleVersionEntity.draft(
-                    ruleId,
+                    rule.id(),
                     nextVersionNumber,
                     base.amountToleranceCents(),
                     base.queryWindowHours(),
@@ -117,6 +152,30 @@ class ReconciliationRuleService implements ReconciliationRulesApi {
                 "对账规则草稿已保存",
                 draft.id().toString()));
         return toVersionView(draft, rule);
+    }
+
+    private static boolean matchesExpectedDraft(
+            Optional<ReconciliationRuleVersionEntity> currentDraft,
+            boolean expectedDraftPresent,
+            UUID expectedDraftId,
+            Long expectedAmountToleranceCents,
+            Integer expectedQueryWindowHours) {
+        if (!expectedDraftPresent) {
+            return currentDraft.isEmpty()
+                    && expectedDraftId == null
+                    && expectedAmountToleranceCents == null
+                    && expectedQueryWindowHours == null;
+        }
+        if (expectedDraftId == null
+                || expectedAmountToleranceCents == null
+                || expectedQueryWindowHours == null) {
+            return false;
+        }
+        return currentDraft
+                .filter(draft -> draft.id().equals(expectedDraftId)
+                        && draft.amountToleranceCents() == expectedAmountToleranceCents
+                        && draft.queryWindowHours() == expectedQueryWindowHours)
+                .isPresent();
     }
 
     @Override
@@ -142,11 +201,11 @@ class ReconciliationRuleService implements ReconciliationRulesApi {
         String normalizedOperator = requireOperator(operator);
         var rule = findRuleForUpdate(ruleId);
         var draft = versionRepository.findDraftByRuleId(ruleId)
-                .orElseThrow(() -> new IllegalStateException(STALE_DRAFT_MESSAGE));
+                .orElseThrow(StaleReconciliationRuleDraftException::new);
         if (!draft.id().equals(expectedDraftId)
                 || draft.amountToleranceCents() != expectedAmountToleranceCents
                 || draft.queryWindowHours() != expectedQueryWindowHours) {
-            throw new IllegalStateException(STALE_DRAFT_MESSAGE);
+            throw new StaleReconciliationRuleDraftException();
         }
         return publish(rule, draft, normalizedOperator);
     }

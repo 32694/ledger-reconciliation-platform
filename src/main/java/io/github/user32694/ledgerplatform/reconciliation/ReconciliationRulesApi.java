@@ -15,6 +15,14 @@ public interface ReconciliationRulesApi {
     ReconciliationRuleVersionView saveDraft(
             UUID ruleId, ReconciliationRuleDraftCommand command);
 
+    ReconciliationRuleVersionView saveDraft(
+            UUID ruleId,
+            ReconciliationRuleDraftCommand command,
+            boolean expectedDraftPresent,
+            UUID expectedDraftId,
+            Long expectedAmountToleranceCents,
+            Integer expectedQueryWindowHours);
+
     ReconciliationRuleVersionView publish(UUID ruleId, String operator);
 
     ReconciliationRuleVersionView publish(

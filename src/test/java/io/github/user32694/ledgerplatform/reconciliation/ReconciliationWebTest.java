@@ -236,6 +236,110 @@ class ReconciliationWebTest {
     }
 
     @Test
+    @WithMockUser(username = "rule-editor", roles = "ADMIN")
+    void rejectsSaveWhenExistingDraftChangedAfterEditPageRendered() throws Exception {
+        var renderedDraft = reconciliationRulesApi.saveDraft(
+                ALIPAY_RULE_ID, new ReconciliationRuleDraftCommand(250, 72, "first-editor"));
+        String editPage = mockMvc.perform(
+                        get("/admin/reconciliation/rules/{ruleId}/edit", ALIPAY_RULE_ID))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        assertDraftSnapshotForm(editPage, renderedDraft);
+
+        var currentDraft = reconciliationRulesApi.saveDraft(
+                ALIPAY_RULE_ID, new ReconciliationRuleDraftCommand(300, 48, "later-editor"));
+        assertThat(currentDraft.id()).isEqualTo(renderedDraft.id());
+
+        mockMvc.perform(post("/admin/reconciliation/rules/{ruleId}/draft", ALIPAY_RULE_ID)
+                        .with(csrf())
+                        .param("amountTolerance", "4.00")
+                        .param("queryWindowHours", "24")
+                        .param("expectedDraftPresent", "true")
+                        .param("expectedDraftId", renderedDraft.id().toString())
+                        .param("expectedAmountToleranceCents", "250")
+                        .param("expectedQueryWindowHours", "72"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl(
+                        "/admin/reconciliation/rules/" + ALIPAY_RULE_ID + "/edit"))
+                .andExpect(result -> assertThat(result.getFlashMap().get("ruleError"))
+                        .isEqualTo("草稿已更新，请刷新后重新编辑"));
+
+        assertThat(reconciliationRulesApi.getRule(ALIPAY_RULE_ID).draft()).isEqualTo(currentDraft);
+    }
+
+    @Test
+    @WithMockUser(username = "rule-editor", roles = "ADMIN")
+    void rejectsSaveWhenDraftCreatedAfterEmptyEditPageRendered() throws Exception {
+        String editPage = mockMvc.perform(
+                        get("/admin/reconciliation/rules/{ruleId}/edit", ALIPAY_RULE_ID))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        assertDraftSnapshotForm(editPage, null);
+
+        var currentDraft = reconciliationRulesApi.saveDraft(
+                ALIPAY_RULE_ID, new ReconciliationRuleDraftCommand(300, 48, "later-editor"));
+
+        mockMvc.perform(post("/admin/reconciliation/rules/{ruleId}/draft", ALIPAY_RULE_ID)
+                        .with(csrf())
+                        .param("amountTolerance", "4.00")
+                        .param("queryWindowHours", "24")
+                        .param("expectedDraftPresent", "false"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl(
+                        "/admin/reconciliation/rules/" + ALIPAY_RULE_ID + "/edit"))
+                .andExpect(result -> assertThat(result.getFlashMap().get("ruleError"))
+                        .isEqualTo("草稿已更新，请刷新后重新编辑"));
+
+        assertThat(reconciliationRulesApi.getRule(ALIPAY_RULE_ID).draft()).isEqualTo(currentDraft);
+    }
+
+    @Test
+    @WithMockUser(username = "rule-editor", roles = "ADMIN")
+    void rejectsNegativeOverflowAndNegativeWindowWithoutChangingDraft() throws Exception {
+        var originalDraft = reconciliationRulesApi.saveDraft(
+                DEFAULT_RULE_ID, new ReconciliationRuleDraftCommand(125, 24, "fixture-editor"));
+
+        mockMvc.perform(post("/admin/reconciliation/rules/{ruleId}/draft", DEFAULT_RULE_ID)
+                        .with(csrf())
+                        .param("amountTolerance", "-0.01")
+                        .param("queryWindowHours", "24")
+                        .param("expectedDraftPresent", "true")
+                        .param("expectedDraftId", originalDraft.id().toString())
+                        .param("expectedAmountToleranceCents", "125")
+                        .param("expectedQueryWindowHours", "24"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("金额容差不能小于 0")));
+
+        mockMvc.perform(post("/admin/reconciliation/rules/{ruleId}/draft", DEFAULT_RULE_ID)
+                        .with(csrf())
+                        .param("amountTolerance", "92233720368547758.08")
+                        .param("queryWindowHours", "24")
+                        .param("expectedDraftPresent", "true")
+                        .param("expectedDraftId", originalDraft.id().toString())
+                        .param("expectedAmountToleranceCents", "125")
+                        .param("expectedQueryWindowHours", "24"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("金额容差超出支持范围")));
+
+        mockMvc.perform(post("/admin/reconciliation/rules/{ruleId}/draft", DEFAULT_RULE_ID)
+                        .with(csrf())
+                        .param("amountTolerance", "1.25")
+                        .param("queryWindowHours", "-1")
+                        .param("expectedDraftPresent", "true")
+                        .param("expectedDraftId", originalDraft.id().toString())
+                        .param("expectedAmountToleranceCents", "125")
+                        .param("expectedQueryWindowHours", "24"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("查询窗口必须在 0 到 168 小时之间")));
+
+        assertThat(reconciliationRulesApi.getRule(DEFAULT_RULE_ID).draft()).isEqualTo(originalDraft);
+    }
+
+    @Test
     @WithMockUser(username = "rule-publisher", roles = "ADMIN")
     void rejectsStalePublishConfirmationAndPublishesCurrentExactDraft() throws Exception {
         var originalDraft = reconciliationRulesApi.saveDraft(
@@ -855,6 +959,38 @@ class ReconciliationWebTest {
                 .contains("name=\"expectedQueryWindowHours\"")
                 .contains("value=\"" + draft.queryWindowHours() + "\"")
                 .contains("name=\"_csrf\"");
+    }
+
+    private static void assertDraftSnapshotForm(
+            String body, ReconciliationRuleVersionView draft) {
+        UUID ruleId = draft == null ? ALIPAY_RULE_ID : draft.ruleId();
+        String action = "action=\"/admin/reconciliation/rules/" + ruleId + "/draft\"";
+        int actionIndex = body.indexOf(action);
+        assertThat(actionIndex).isGreaterThanOrEqualTo(0);
+        int formStart = body.lastIndexOf("<form", actionIndex);
+        int formEnd = body.indexOf("</form>", actionIndex);
+        assertThat(formStart).isGreaterThanOrEqualTo(0);
+        assertThat(formEnd).isGreaterThan(actionIndex);
+
+        String form = body.substring(formStart, formEnd);
+        assertThat(form)
+                .contains("name=\"expectedDraftPresent\"")
+                .contains("value=\"" + (draft != null) + "\"")
+                .contains("name=\"_csrf\"");
+        if (draft == null) {
+            assertThat(form)
+                    .doesNotContain("name=\"expectedDraftId\"")
+                    .doesNotContain("name=\"expectedAmountToleranceCents\"")
+                    .doesNotContain("name=\"expectedQueryWindowHours\"");
+        } else {
+            assertThat(form)
+                    .contains("name=\"expectedDraftId\"")
+                    .contains("value=\"" + draft.id() + "\"")
+                    .contains("name=\"expectedAmountToleranceCents\"")
+                    .contains("value=\"" + draft.amountToleranceCents() + "\"")
+                    .contains("name=\"expectedQueryWindowHours\"")
+                    .contains("value=\"" + draft.queryWindowHours() + "\"");
+        }
     }
 
     private void insertRun(

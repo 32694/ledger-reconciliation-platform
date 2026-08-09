@@ -7,6 +7,7 @@ import io.github.user32694.ledgerplatform.reconciliation.ReconciliationRuleView;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationRulesApi;
 import io.github.user32694.ledgerplatform.reconciliation.RuleScopeType;
 import io.github.user32694.ledgerplatform.reconciliation.RuleVersionStatus;
+import io.github.user32694.ledgerplatform.reconciliation.StaleReconciliationRuleDraftException;
 import java.math.BigDecimal;
 import java.util.Comparator;
 import java.util.Map;
@@ -83,13 +84,17 @@ public class ReconciliationRuleWebController {
             @PathVariable UUID ruleId,
             @RequestParam(required = false) String amountTolerance,
             @RequestParam(required = false) String queryWindowHours,
+            @RequestParam(defaultValue = "false") boolean expectedDraftPresent,
+            @RequestParam(required = false) UUID expectedDraftId,
+            @RequestParam(required = false) Long expectedAmountToleranceCents,
+            @RequestParam(required = false) Integer expectedQueryWindowHours,
             Authentication authentication,
             Model model,
             RedirectAttributes redirectAttributes) {
         ReconciliationRuleView rule;
         try {
             rule = rulesApi.getRule(ruleId);
-        } catch (RuntimeException exception) {
+        } catch (IllegalArgumentException exception) {
             redirectAttributes.addFlashAttribute("ruleError", RULE_ERROR);
             return "redirect:" + RULES_URL;
         }
@@ -109,9 +114,19 @@ public class ReconciliationRuleWebController {
         }
 
         try {
-            rulesApi.saveDraft(ruleId, new ReconciliationRuleDraftCommand(
-                    input.amountToleranceCents(), input.queryWindowHours(), operator(authentication)));
-        } catch (RuntimeException exception) {
+            rulesApi.saveDraft(
+                    ruleId,
+                    new ReconciliationRuleDraftCommand(
+                            input.amountToleranceCents(), input.queryWindowHours(), operator(authentication)),
+                    expectedDraftPresent,
+                    expectedDraftId,
+                    expectedAmountToleranceCents,
+                    expectedQueryWindowHours);
+        } catch (StaleReconciliationRuleDraftException exception) {
+            redirectAttributes.addFlashAttribute(
+                    "ruleError", "草稿已更新，请刷新后重新编辑");
+            return "redirect:" + RULES_URL + "/" + ruleId + "/edit";
+        } catch (IllegalArgumentException exception) {
             addEditModel(
                     model,
                     rule,
@@ -144,13 +159,10 @@ public class ReconciliationRuleWebController {
                     expectedQueryWindowHours,
                     operator(authentication));
             redirectAttributes.addFlashAttribute("ruleSuccess", "对账规则版本已发布");
-        } catch (IllegalStateException exception) {
-            if ("草稿已更新，请刷新后重新确认".equals(exception.getMessage())) {
-                redirectAttributes.addFlashAttribute("ruleError", exception.getMessage());
-            } else {
-                redirectAttributes.addFlashAttribute("ruleError", "发布失败，请确认已保存待发布草稿");
-            }
-        } catch (RuntimeException exception) {
+        } catch (StaleReconciliationRuleDraftException exception) {
+            redirectAttributes.addFlashAttribute(
+                    "ruleError", "草稿已更新，请刷新后重新确认");
+        } catch (IllegalArgumentException exception) {
             redirectAttributes.addFlashAttribute("ruleError", "发布失败，请确认已保存待发布草稿");
         }
         return "redirect:" + RULES_URL;
@@ -179,7 +191,7 @@ public class ReconciliationRuleWebController {
                     rulesApi.setChannelActive(channelCode, active, operator(authentication));
             redirectAttributes.addFlashAttribute(
                     "ruleSuccess", channel.displayName() + (channel.active() ? "已启用" : "已停用"));
-        } catch (RuntimeException exception) {
+        } catch (IllegalArgumentException exception) {
             redirectAttributes.addFlashAttribute("ruleError", RULE_ERROR);
         }
         return "redirect:" + RULES_URL;
