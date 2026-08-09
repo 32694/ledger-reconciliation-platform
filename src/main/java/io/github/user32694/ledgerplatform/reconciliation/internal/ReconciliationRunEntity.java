@@ -83,6 +83,50 @@ class ReconciliationRunEntity {
                 errorMessage);
     }
 
+    UUID id() {
+        return id;
+    }
+
+    UUID batchId() {
+        return batchId;
+    }
+
+    RunStatus status() {
+        return status;
+    }
+
+    String requestedBy() {
+        return requestedBy;
+    }
+
+    void start(Instant now) {
+        if (status != RunStatus.QUEUED) {
+            throw new IllegalStateException("Run cannot start from " + status);
+        }
+        status = RunStatus.RUNNING;
+        startedAt = normalize(now);
+    }
+
+    void succeed(int matchedRows, int differenceRows, Instant now) {
+        if (status != RunStatus.RUNNING) {
+            throw new IllegalStateException("Run cannot succeed from " + status);
+        }
+        status = RunStatus.SUCCEEDED;
+        this.matchedRows = matchedRows;
+        this.differenceRows = differenceRows;
+        completedAt = normalize(now);
+    }
+
+    boolean fail(String message, Instant now) {
+        if (status != RunStatus.QUEUED && status != RunStatus.RUNNING) {
+            return false;
+        }
+        status = RunStatus.FAILED;
+        errorMessage = message;
+        completedAt = normalize(now);
+        return true;
+    }
+
     private static Instant normalize(Instant value) {
         return value.truncatedTo(ChronoUnit.MICROS);
     }

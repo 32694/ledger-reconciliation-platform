@@ -41,14 +41,19 @@ class ReconciliationStore {
     }
 
     @Transactional
-    ReconciliationRunView queueRun(UUID batchId, String operator) {
+    QueuedRun queueRun(UUID batchId, String operator) {
         var batch = batchRepository.findByIdForUpdate(batchId)
                 .orElseThrow(() -> new IllegalArgumentException("Batch does not exist: " + batchId));
         var activeStatuses = List.of(RunStatus.QUEUED, RunStatus.RUNNING);
         var activeRun = runRepository.findFirstByBatchIdAndStatusInOrderByAttemptNumberDesc(
                 batchId, activeStatuses);
         if (activeRun.isPresent()) {
-            return activeRun.get().toView();
+            return new QueuedRun(activeRun.get().toView(), false);
+        }
+        if (batch.status() == BatchStatus.COMPLETED) {
+            return runRepository.findFirstByBatchIdOrderByAttemptNumberDesc(batchId)
+                    .map(run -> new QueuedRun(run.toView(), false))
+                    .orElseThrow(() -> new IllegalStateException("Completed batch has no run history"));
         }
         if (batch.status() != BatchStatus.IMPORTED
                 && batch.status() != BatchStatus.RECONCILIATION_FAILED) {
@@ -57,9 +62,92 @@ class ReconciliationStore {
         int attemptNumber = runRepository.findFirstByBatchIdOrderByAttemptNumberDesc(batchId)
                 .map(previous -> previous.toView().attemptNumber() + 1)
                 .orElse(1);
-        return runRepository.saveAndFlush(
-                ReconciliationRunEntity.queued(batchId, attemptNumber, operator, Instant.now()))
-                .toView();
+        var queued = runRepository.saveAndFlush(
+                ReconciliationRunEntity.queued(batchId, attemptNumber, operator, Instant.now()));
+        return new QueuedRun(queued.toView(), true);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    ReconciliationRunView markRunRunning(UUID runId) {
+        var run = findRunForUpdate(runId);
+        run.start(Instant.now());
+        var batch = findEntity(run.batchId());
+        batch.start(Instant.now());
+        return run.toView();
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    ReconciliationBatchView completeRun(
+            UUID runId, List<ReconciliationMatcher.ResultDraft> drafts) {
+        var run = findRunForUpdate(runId);
+        var batch = findEntity(run.batchId());
+        resultRepository.deleteAllByBatchId(batch.id());
+        resultRepository.flush();
+        resultRepository.saveAllAndFlush(drafts.stream()
+                .map(draft -> ReconciliationResultEntity.from(batch.id(), draft, Instant.now()))
+                .toList());
+        int matchedRows = (int) drafts.stream()
+                .filter(draft -> draft.resultType().name().equals("MATCHED"))
+                .count();
+        int differenceRows = drafts.size() - matchedRows;
+        var now = Instant.now();
+        batch.complete(matchedRows, differenceRows, now);
+        run.succeed(matchedRows, differenceRows, now);
+        auditApi.record(reconciliationAudit(
+                run.requestedBy(),
+                AuditAction.RECONCILIATION_RUN,
+                "RECONCILIATION_BATCH",
+                batch.id(),
+                AuditOutcome.SUCCEEDED,
+                "对账运行成功",
+                run.id().toString()));
+        return batch.toView();
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    void failRun(UUID runId, String message) {
+        var run = findRunForUpdate(runId);
+        if (!run.fail(message, Instant.now())) {
+            return;
+        }
+        var batch = findEntity(run.batchId());
+        if (batch.status() == BatchStatus.RUNNING) {
+            batch.failReconciliation(message, Instant.now());
+        } else {
+            batch.failQueuedReconciliation(message, Instant.now());
+        }
+        auditApi.record(reconciliationAudit(
+                run.requestedBy(),
+                AuditAction.RECONCILIATION_RUN,
+                "RECONCILIATION_BATCH",
+                batch.id(),
+                AuditOutcome.FAILED,
+                "对账运行失败",
+                run.id().toString()));
+    }
+
+    @Transactional
+    void recoverAbandonedRuns(String message) {
+        var activeRuns = runRepository.findAllByStatusIn(List.of(RunStatus.QUEUED, RunStatus.RUNNING));
+        for (var run : activeRuns) {
+            if (!run.fail(message, Instant.now())) {
+                continue;
+            }
+            var batch = findEntity(run.batchId());
+            if (batch.status() == BatchStatus.RUNNING) {
+                batch.failReconciliation(message, Instant.now());
+            } else {
+                batch.failQueuedReconciliation(message, Instant.now());
+            }
+            auditApi.record(reconciliationAudit(
+                    run.requestedBy(),
+                    AuditAction.RECONCILIATION_RUN,
+                    "RECONCILIATION_BATCH",
+                    batch.id(),
+                    AuditOutcome.FAILED,
+                    "对账运行因应用重启失败",
+                    run.id().toString()));
+        }
     }
 
     @Transactional(readOnly = true)
@@ -140,7 +228,13 @@ class ReconciliationStore {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     ReconciliationBatchView markRunningOrReturnCompleted(UUID batchId) {
-        var batch = findEntity(batchId);
+        var batch = batchRepository.findByIdForUpdate(batchId)
+                .orElseThrow(() -> new IllegalArgumentException("Batch does not exist: " + batchId));
+        var activeRun = runRepository.findFirstByBatchIdAndStatusInOrderByAttemptNumberDesc(
+                batchId, List.of(RunStatus.QUEUED, RunStatus.RUNNING));
+        if (activeRun.isPresent()) {
+            throw new IllegalStateException("Batch has an active reconciliation run");
+        }
         if (batch.status() == BatchStatus.COMPLETED) {
             return batch.toView();
         }
@@ -235,6 +329,11 @@ class ReconciliationStore {
                 .orElseThrow(() -> new IllegalArgumentException("Batch does not exist: " + batchId));
     }
 
+    private ReconciliationRunEntity findRunForUpdate(UUID runId) {
+        return runRepository.findByIdForUpdate(runId)
+                .orElseThrow(() -> new IllegalArgumentException("Run does not exist: " + runId));
+    }
+
     private static AuditCommand reconciliationAudit(
             String actor,
             AuditAction action,
@@ -252,4 +351,6 @@ class ReconciliationStore {
                 summary,
                 correlationReference);
     }
+
+    record QueuedRun(ReconciliationRunView run, boolean created) {}
 }

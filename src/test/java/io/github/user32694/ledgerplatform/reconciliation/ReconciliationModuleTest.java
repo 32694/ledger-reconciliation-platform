@@ -11,11 +11,17 @@ import io.github.user32694.ledgerplatform.payments.PaymentView;
 import io.github.user32694.ledgerplatform.payments.PaymentsApi;
 import io.github.user32694.ledgerplatform.payments.TopUpCommand;
 import java.nio.charset.StandardCharsets;
+import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.jdbc.Sql;
@@ -63,9 +69,11 @@ class ReconciliationModuleTest {
     @Autowired AccountsApi accountsApi;
     @Autowired AuditApi auditApi;
     @Autowired JdbcTemplate jdbcTemplate;
+    @Autowired ApplicationEventPublisher eventPublisher;
+    @Autowired ConfigurableApplicationContext applicationContext;
 
     @Test
-    void queuesOneActiveRunAndListsItAsTheFirstAttempt() {
+    void queuesOneActiveRunAndListsItAsTheFirstAttempt() throws InterruptedException {
         var batch = reconciliationApi.importStatement(new StatementUpload(
                 "queued.csv", csv("CH-QUEUED,1,2026-01-15T09:30:00Z\n"), "admin"));
 
@@ -78,11 +86,36 @@ class ReconciliationModuleTest {
         assertThat(repeated.id()).isEqualTo(first.id());
         assertThat(reconciliationApi.findRuns(batch.id()))
                 .singleElement()
-                .isEqualTo(first);
+                .satisfies(run -> {
+                    assertThat(run.id()).isEqualTo(first.id());
+                    assertThat(run.attemptNumber()).isOne();
+                    assertThat(run.requestedBy()).isEqualTo("operator-1");
+                });
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM reconciliation.reconciliation_run WHERE batch_id = ?",
                 Integer.class,
                 batch.id())).isOne();
+        awaitRunStatus(batch.id(), RunStatus.SUCCEEDED);
+        assertThat(auditApi.findRecent(AuditAction.RECONCILIATION_RUN, AuditOutcome.SUCCEEDED, 100))
+                .hasSize(1);
+    }
+
+    @Test
+    void completesQueuedRunAsynchronouslyAndAuditsTheRequester() throws InterruptedException {
+        var batch = reconciliationApi.importStatement(new StatementUpload(
+                "async.csv", csv("CH-ASYNC,1,2026-01-15T09:30:00Z\n"), "admin"));
+
+        var queued = reconciliationApi.startRun(batch.id(), "operator-async");
+        var completed = awaitRunStatus(batch.id(), RunStatus.SUCCEEDED);
+
+        assertThat(queued.status()).isEqualTo(RunStatus.QUEUED);
+        assertThat(completed.requestedBy()).isEqualTo("operator-async");
+        assertThat(reconciliationApi.getBatch(batch.id()).status()).isEqualTo(BatchStatus.COMPLETED);
+        assertThat(reconciliationApi.findResults(batch.id(), ResultType.CHANNEL_ONLY, ResolutionStatus.OPEN))
+                .hasSize(1);
+        assertThat(auditApi.findRecent(AuditAction.RECONCILIATION_RUN, AuditOutcome.SUCCEEDED, 100))
+                .singleElement()
+                .satisfies(event -> assertThat(event.actor()).isEqualTo("operator-async"));
     }
 
     @Test
@@ -220,6 +253,34 @@ class ReconciliationModuleTest {
     }
 
     @Test
+    void synchronousRunRejectsAnActiveAsyncAttemptWithoutChangingState() {
+        var batch = reconciliationApi.importStatement(new StatementUpload(
+                "sync-active.csv", csv("CH-SYNC-ACTIVE,1,2026-01-15T09:30:00Z\n"), "admin"));
+        var runId = UUID.randomUUID();
+        jdbcTemplate.update(
+                """
+                INSERT INTO reconciliation.reconciliation_run
+                    (id, batch_id, attempt_number, status, requested_by, requested_at)
+                VALUES (?, ?, 1, 'QUEUED', 'operator-async', ?)
+                """,
+                runId,
+                batch.id(),
+                Timestamp.from(Instant.parse("2026-01-15T10:00:00Z")));
+
+        assertThatThrownBy(() -> reconciliationApi.run(batch.id()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Batch has an active reconciliation run");
+
+        assertThat(reconciliationApi.getBatch(batch.id()).status()).isEqualTo(BatchStatus.IMPORTED);
+        assertThat(reconciliationApi.findRuns(batch.id()))
+                .singleElement()
+                .satisfies(run -> {
+                    assertThat(run.id()).isEqualTo(runId);
+                    assertThat(run.status()).isEqualTo(RunStatus.QUEUED);
+                });
+    }
+
+    @Test
     @Sql(statements = {
         "ALTER TABLE reconciliation.reconciliation_result DROP CONSTRAINT IF EXISTS ck_test_result_insert_failure",
         "ALTER TABLE reconciliation.reconciliation_result ADD CONSTRAINT ck_test_result_insert_failure CHECK (FALSE)"
@@ -242,6 +303,96 @@ class ReconciliationModuleTest {
                 .satisfies(event -> {
                     assertThat(event.actor()).isEqualTo("SYSTEM");
                     assertThat(event.aggregateId()).isEqualTo(batch.id().toString());
+                });
+    }
+
+    @Test
+    @Sql(statements = {
+        "ALTER TABLE reconciliation.reconciliation_result DROP CONSTRAINT IF EXISTS ck_test_async_result_failure",
+        "ALTER TABLE reconciliation.reconciliation_result ADD CONSTRAINT ck_test_async_result_failure CHECK (FALSE)"
+    }, executionPhase = ExecutionPhase.BEFORE_TEST_METHOD)
+    @Sql(statements = {
+        "ALTER TABLE reconciliation.reconciliation_result DROP CONSTRAINT IF EXISTS ck_test_async_result_failure"
+    }, executionPhase = ExecutionPhase.AFTER_TEST_METHOD)
+    void failedAsyncRunCanBeRetriedWithoutLosingAttemptHistory() throws InterruptedException {
+        var batch = reconciliationApi.importStatement(new StatementUpload(
+                "failed-async.csv", csv("CH-FAILED-ASYNC,1,2026-01-15T09:30:00Z\n"), "admin"));
+
+        reconciliationApi.startRun(batch.id(), "operator-first");
+        var first = awaitRunStatus(batch.id(), RunStatus.FAILED);
+        var retry = reconciliationApi.startRun(batch.id(), "operator-retry");
+        var second = awaitRunStatus(batch.id(), RunStatus.FAILED);
+
+        assertThat(first.attemptNumber()).isOne();
+        assertThat(retry.attemptNumber()).isEqualTo(2);
+        assertThat(second.attemptNumber()).isEqualTo(2);
+        assertThat(reconciliationApi.findRuns(batch.id()))
+                .extracting(ReconciliationRunView::attemptNumber)
+                .containsExactly(2, 1);
+        assertThat(reconciliationApi.getBatch(batch.id()).status())
+                .isEqualTo(BatchStatus.RECONCILIATION_FAILED);
+        assertThat(auditApi.findRecent(AuditAction.RECONCILIATION_RUN, AuditOutcome.FAILED, 100))
+                .extracting(event -> event.actor())
+                .containsExactly("operator-retry", "operator-first");
+    }
+
+    @Test
+    void startupRecoveryFailsQueuedAndRunningRuns() {
+        var queuedBatch = reconciliationApi.importStatement(new StatementUpload(
+                "abandoned-queued.csv", csv("CH-ABANDONED-QUEUED,1,2026-01-15T09:30:00Z\n"), "admin"));
+        var runningBatch = reconciliationApi.importStatement(new StatementUpload(
+                "abandoned-running.csv", csv("CH-ABANDONED-RUNNING,1,2026-01-15T09:30:00Z\n"), "admin"));
+        var queuedRunId = UUID.randomUUID();
+        var runningRunId = UUID.randomUUID();
+        var requestedAt = Instant.parse("2026-01-15T10:00:00Z");
+        jdbcTemplate.update(
+                """
+                INSERT INTO reconciliation.reconciliation_run
+                    (id, batch_id, attempt_number, status, requested_by, requested_at)
+                VALUES (?, ?, 1, 'QUEUED', 'operator-queued', ?)
+                """,
+                queuedRunId,
+                queuedBatch.id(),
+                Timestamp.from(requestedAt));
+        jdbcTemplate.update(
+                "UPDATE reconciliation.reconciliation_batch SET status = 'RUNNING', started_at = ? WHERE id = ?",
+                Timestamp.from(requestedAt),
+                runningBatch.id());
+        jdbcTemplate.update(
+                """
+                INSERT INTO reconciliation.reconciliation_run
+                    (id, batch_id, attempt_number, status, requested_by, requested_at, started_at)
+                VALUES (?, ?, 1, 'RUNNING', 'operator-running', ?, ?)
+                """,
+                runningRunId,
+                runningBatch.id(),
+                Timestamp.from(requestedAt),
+                Timestamp.from(requestedAt));
+
+        eventPublisher.publishEvent(new ApplicationReadyEvent(
+                new SpringApplication(), new String[0], applicationContext, Duration.ZERO));
+
+        assertThat(reconciliationApi.findRuns(queuedBatch.id()))
+                .singleElement()
+                .satisfies(run -> {
+                    assertThat(run.status()).isEqualTo(RunStatus.FAILED);
+                    assertThat(run.errorMessage()).isEqualTo("Application restarted before run completion");
+                });
+        assertThat(reconciliationApi.findRuns(runningBatch.id()))
+                .singleElement()
+                .satisfies(run -> {
+                    assertThat(run.status()).isEqualTo(RunStatus.FAILED);
+                    assertThat(run.errorMessage()).isEqualTo("Application restarted before run completion");
+                });
+        assertThat(reconciliationApi.getBatch(queuedBatch.id()))
+                .satisfies(batch -> {
+                    assertThat(batch.status()).isEqualTo(BatchStatus.RECONCILIATION_FAILED);
+                    assertThat(batch.errorMessage()).isEqualTo("Application restarted before run completion");
+                });
+        assertThat(reconciliationApi.getBatch(runningBatch.id()))
+                .satisfies(batch -> {
+                    assertThat(batch.status()).isEqualTo(BatchStatus.RECONCILIATION_FAILED);
+                    assertThat(batch.errorMessage()).isEqualTo("Application restarted before run completion");
                 });
     }
 
@@ -301,6 +452,21 @@ class ReconciliationModuleTest {
 
     private static String row(String channelReference, long amountCents, Instant occurredAt) {
         return channelReference + "," + amountCents + "," + occurredAt;
+    }
+
+    private ReconciliationRunView awaitRunStatus(UUID batchId, RunStatus expected)
+            throws InterruptedException {
+        long deadline = System.nanoTime() + java.time.Duration.ofSeconds(5).toNanos();
+        ReconciliationRunView latest = null;
+        while (System.nanoTime() < deadline) {
+            latest = reconciliationApi.findRuns(batchId).get(0);
+            if (latest.status() == expected) {
+                return latest;
+            }
+            Thread.sleep(20);
+        }
+        throw new AssertionError("Expected run status " + expected + " but was "
+                + (latest == null ? "missing" : latest.status()));
     }
 
     private static byte[] csv(String rows) {

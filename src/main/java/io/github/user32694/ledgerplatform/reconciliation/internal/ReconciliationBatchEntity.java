@@ -152,6 +152,15 @@ class ReconciliationBatchEntity {
         completedAt = normalize(now);
     }
 
+    void failQueuedReconciliation(String message, Instant now) {
+        if (status != BatchStatus.IMPORTED && status != BatchStatus.RECONCILIATION_FAILED) {
+            throw new IllegalStateException("Batch cannot fail queued run from " + status);
+        }
+        status = BatchStatus.RECONCILIATION_FAILED;
+        errorMessage = message;
+        completedAt = normalize(now);
+    }
+
     private void requireRunning() {
         if (status != BatchStatus.RUNNING) {
             throw new IllegalStateException("Batch is not running");

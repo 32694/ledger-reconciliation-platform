@@ -6,6 +6,10 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
+import jakarta.persistence.LockModeType;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 interface ReconciliationRunRepository extends JpaRepository<ReconciliationRunEntity, UUID> {
     Optional<ReconciliationRunEntity> findFirstByBatchIdAndStatusInOrderByAttemptNumberDesc(
@@ -14,4 +18,10 @@ interface ReconciliationRunRepository extends JpaRepository<ReconciliationRunEnt
     Optional<ReconciliationRunEntity> findFirstByBatchIdOrderByAttemptNumberDesc(UUID batchId);
 
     List<ReconciliationRunEntity> findAllByBatchIdOrderByAttemptNumberDesc(UUID batchId);
+
+    List<ReconciliationRunEntity> findAllByStatusIn(Collection<RunStatus> statuses);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT run FROM ReconciliationRunEntity run WHERE run.id = :id")
+    Optional<ReconciliationRunEntity> findByIdForUpdate(@Param("id") UUID id);
 }

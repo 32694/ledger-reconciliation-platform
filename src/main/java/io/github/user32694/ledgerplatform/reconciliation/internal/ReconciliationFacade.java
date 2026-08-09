@@ -21,16 +21,19 @@ public class ReconciliationFacade implements ReconciliationApi {
     private final ReconciliationImportService importService;
     private final ReconciliationStore store;
     private final ReconciliationRunner runner;
+    private final ReconciliationTaskDispatcher taskDispatcher;
     private final PaymentsApi paymentsApi;
 
     public ReconciliationFacade(
             ReconciliationImportService importService,
             ReconciliationStore store,
             ReconciliationRunner runner,
+            ReconciliationTaskDispatcher taskDispatcher,
             PaymentsApi paymentsApi) {
         this.importService = importService;
         this.store = store;
         this.runner = runner;
+        this.taskDispatcher = taskDispatcher;
         this.paymentsApi = paymentsApi;
     }
 
@@ -79,7 +82,11 @@ public class ReconciliationFacade implements ReconciliationApi {
         if (operator == null || operator.isBlank()) {
             throw new IllegalArgumentException("Operator is required");
         }
-        return store.queueRun(batchId, operator.strip());
+        var queued = store.queueRun(batchId, operator.strip());
+        if (queued.created()) {
+            taskDispatcher.submit(queued.run().id());
+        }
+        return queued.run();
     }
 
     @Override
