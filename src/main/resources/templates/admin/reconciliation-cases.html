@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{admin/layout :: shell('异常工作台', ${activeNav}, ~{::main})}">
+<main class="content">
+    <div class="page-heading">
+        <div>
+            <p class="eyebrow">对账案件</p>
+            <h1>异常工作台</h1>
+        </div>
+        <a class="button button-secondary" th:href="@{/admin/reconciliation}">查看对账批次</a>
+    </div>
+    <section class="table-section">
+        <div class="section-heading case-list-heading">
+            <div>
+                <h2>异常案件</h2>
+                <p>默认展示待处理和处理中的案件</p>
+            </div>
+            <form class="filter-form" method="get" th:action="@{/admin/reconciliation/cases}">
+                <select name="resultType" aria-label="结果类型">
+                    <option value="">全部结果</option>
+                    <option th:each="option : ${resultTypes}" th:value="${option.value}"
+                            th:text="${option.label}" th:selected="${selectedResultType == option.value}">金额不一致</option>
+                </select>
+                <select name="resolutionStatus" aria-label="处理状态">
+                    <option value="">进行中</option>
+                    <option th:each="option : ${resolutionStatuses}" th:value="${option.value}"
+                            th:text="${option.label}" th:selected="${selectedResolutionStatus == option.value}">待处理</option>
+                </select>
+                <input name="assignee" th:value="${selectedAssignee}" placeholder="负责人" aria-label="负责人">
+                <label class="checkbox-field">
+                    <input type="checkbox" name="onlyMine" value="true" th:checked="${onlyMine}">
+                    仅看我的
+                </label>
+                <button class="button button-secondary" type="submit">筛选</button>
+            </form>
+        </div>
+        <div class="table-scroll">
+            <table>
+                <thead>
+                <tr><th>渠道流水号</th><th>发生时间</th><th>批次文件</th><th>结果</th><th class="numeric">渠道金额（分）</th><th class="numeric">内部金额（分）</th><th class="numeric">差额（分）</th><th>状态</th><th>负责人</th><th>操作</th></tr>
+                </thead>
+                <tbody>
+                <tr th:each="row : ${cases}">
+                    <td class="mono" th:text="${row.caseView.channelTransactionId != null ? row.caseView.channelTransactionId : row.caseView.paymentId}">CH-001</td>
+                    <td th:text="${row.caseView.occurredAt != null ? #temporals.format(row.caseView.occurredAt, 'yyyy-MM-dd HH:mm:ss') : '--'}">2026-01-01 12:00:00</td>
+                    <td th:text="${row.caseView.batchFileName}">statement.csv</td>
+                    <td th:text="${row.resultTypeLabel}">金额不一致</td>
+                    <td class="numeric" th:text="${row.caseView.channelAmountCents != null ? row.caseView.channelAmountCents : '-'}">-</td>
+                    <td class="numeric" th:text="${row.caseView.internalAmountCents != null ? row.caseView.internalAmountCents : '-'}">-</td>
+                    <td class="numeric" th:text="${row.caseView.differenceAmountCents != null ? row.caseView.differenceAmountCents : '-'}">-</td>
+                    <td><span class="status" th:text="${row.statusLabel}">待处理</span></td>
+                    <td th:text="${row.caseView.assignedTo != null ? row.caseView.assignedTo : '-'}">-</td>
+                    <td><a class="text-link" th:href="@{/admin/reconciliation/cases/{id}(id=${row.caseView.id})}">查看详情</a></td>
+                </tr>
+                <tr th:if="${#lists.isEmpty(cases)}"><td colspan="10" class="empty-state">暂无符合条件的异常案件</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+</main>
+</html>

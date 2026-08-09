@@ -64,7 +64,7 @@ public class AuditWebController {
             case RECONCILIATION_CASE_CLAIM -> "认领差异";
             case RECONCILIATION_CASE_RELEASE -> "取消认领";
             case RECONCILIATION_CASE_RESOLVE -> "解决差异";
-            case RECONCILIATION_RESOLVE -> "处理差异";
+            case RECONCILIATION_RESOLVE -> "处理差异（旧版）";
         };
     }
 

@@ -2,6 +2,7 @@ package io.github.user32694.ledgerplatform.reconciliation;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.matchesPattern;
 import static org.hamcrest.Matchers.not;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -21,6 +22,8 @@ import java.nio.charset.StandardCharsets;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -271,24 +274,191 @@ class ReconciliationWebTest {
     }
 
     @Test
-    @WithMockUser(roles = "ADMIN")
-    void runsBatchAndResolvesDifferenceThroughPostRoutes() throws Exception {
-        var batch = reconciliationApi.importStatement(new StatementUpload(
-                "resolve-route.csv",
-                "channel_transaction_id,amount_cents,occurred_at\nCH-RESOLVE-ROUTE,1,2026-01-15T09:30:00Z\n"
-                        .getBytes(StandardCharsets.UTF_8),
-                "admin"));
+    @WithMockUser(username = "case-admin", roles = "ADMIN")
+    void rendersChineseActiveCaseWorkbenchAndSupportsFilters() throws Exception {
+        var open = createChannelOnlyCase("web-open");
+        var mismatch = createAmountMismatchCase("web-mismatch", 100, 150);
+        var mine = createChannelOnlyCase("web-mine");
+        reconciliationApi.claim(mine.id(), "case-admin");
+        var others = createChannelOnlyCase("web-others");
+        reconciliationApi.claim(others.id(), "other-admin");
+        var resolved = createChannelOnlyCase("web-resolved");
+        reconciliationApi.claim(resolved.id(), "case-admin");
+        reconciliationApi.resolve(
+                resolved.id(), ResolutionCode.CHANNEL_CONFIRMED, "渠道记录正确", "case-admin");
+        String openOccurredAt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+                .withZone(ZoneId.systemDefault())
+                .format(open.occurredAt());
 
-        mockMvc.perform(post("/admin/reconciliation/{batchId}/run", batch.id()).with(csrf()))
+        mockMvc.perform(get("/admin/reconciliation/cases"))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/reconciliation-cases"))
+                .andExpect(content().string(containsString("异常工作台")))
+                .andExpect(content().string(containsString("发生时间")))
+                .andExpect(content().string(containsString(openOccurredAt)))
+                .andExpect(content().string(containsString(open.channelTransactionId())))
+                .andExpect(content().string(containsString(mismatch.channelTransactionId())))
+                .andExpect(content().string(containsString(mine.channelTransactionId())))
+                .andExpect(content().string(containsString(others.channelTransactionId())))
+                .andExpect(content().string(not(containsString(resolved.channelTransactionId()))));
+
+        mockMvc.perform(get("/admin/reconciliation/cases")
+                        .param("resultType", "AMOUNT_MISMATCH"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString(mismatch.channelTransactionId())))
+                .andExpect(content().string(not(containsString(open.channelTransactionId()))));
+        mockMvc.perform(get("/admin/reconciliation/cases")
+                        .param("resolutionStatus", "RESOLVED"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString(resolved.channelTransactionId())))
+                .andExpect(content().string(not(containsString(open.channelTransactionId()))));
+        mockMvc.perform(get("/admin/reconciliation/cases")
+                        .param("assignee", "other-admin"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString(others.channelTransactionId())))
+                .andExpect(content().string(not(containsString(mine.channelTransactionId()))));
+        mockMvc.perform(get("/admin/reconciliation/cases")
+                        .param("onlyMine", "true"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString(mine.channelTransactionId())))
+                .andExpect(content().string(not(containsString(others.channelTransactionId()))));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void rejectsInvalidCaseEnumFilters() throws Exception {
+        mockMvc.perform(get("/admin/reconciliation/cases")
+                        .param("resultType", "NOT_A_RESULT_TYPE"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(get("/admin/reconciliation/cases")
+                        .param("resolutionStatus", "NOT_A_STATUS"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void redirectsAnonymousCaseWorkbenchRequestsToLogin() throws Exception {
+        mockMvc.perform(get("/admin/reconciliation/cases"))
                 .andExpect(status().is3xxRedirection())
-                .andExpect(redirectedUrlPattern("/admin/reconciliation/*"));
-        awaitRunStatus(batch.id(), RunStatus.SUCCEEDED);
-        var result = reconciliationApi.findResults(batch.id(), ResultType.CHANNEL_ONLY, ResolutionStatus.OPEN)
-                .get(0);
-        mockMvc.perform(post("/admin/reconciliation/results/{resultId}/resolve", result.id())
-                        .with(csrf()).param("note", "已核对"))
+                .andExpect(redirectedUrlPattern("**/login"));
+        mockMvc.perform(get("/admin/reconciliation/cases/{caseId}", UUID.randomUUID()))
                 .andExpect(status().is3xxRedirection())
-                .andExpect(redirectedUrlPattern("/admin/reconciliation/*"));
+                .andExpect(redirectedUrlPattern("**/login"));
+    }
+
+    @Test
+    @WithMockUser(username = "case-owner", roles = "ADMIN")
+    void rendersCaseDetailsAmountsOwnershipResolutionAndNewestFirstTimeline() throws Exception {
+        var caseView = createAmountMismatchCase("web-detail", 100, 150);
+        reconciliationApi.claim(caseView.id(), "case-owner");
+        reconciliationApi.release(caseView.id(), "case-owner");
+        reconciliationApi.claim(caseView.id(), "case-owner");
+        reconciliationApi.resolve(
+                caseView.id(), ResolutionCode.CHANNEL_CONFIRMED, "以渠道凭证为准", "case-owner");
+
+        mockMvc.perform(get("/admin/reconciliation/cases/{caseId}", caseView.id()))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/reconciliation-case-detail"))
+                .andExpect(content().string(containsString("异常详情")))
+                .andExpect(content().string(containsString("web-detail.csv")))
+                .andExpect(content().string(containsString(caseView.channelTransactionId())))
+                .andExpect(content().string(containsString("渠道金额（分）")))
+                .andExpect(content().string(containsString(">150<")))
+                .andExpect(content().string(containsString("内部金额（分）")))
+                .andExpect(content().string(containsString(">100<")))
+                .andExpect(content().string(containsString("差额（分）")))
+                .andExpect(content().string(containsString(">-50<")))
+                .andExpect(content().string(containsString("case-owner")))
+                .andExpect(content().string(containsString("渠道账单为准")))
+                .andExpect(content().string(containsString("以渠道凭证为准")))
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*data-event-action=\"RESOLVED\".*data-event-action=\"CLAIMED\""
+                                + ".*data-event-action=\"RELEASED\".*data-event-action=\"CLAIMED\".*")));
+    }
+
+    @Test
+    @WithMockUser(username = "case-owner", roles = "ADMIN")
+    void showsActionsOnlyForAllowedCaseStateAndOwner() throws Exception {
+        var open = createChannelOnlyCase("action-open");
+        var mine = createChannelOnlyCase("action-mine");
+        reconciliationApi.claim(mine.id(), "case-owner");
+        var others = createChannelOnlyCase("action-others");
+        reconciliationApi.claim(others.id(), "other-owner");
+        var resolved = createChannelOnlyCase("action-resolved");
+        reconciliationApi.claim(resolved.id(), "case-owner");
+        reconciliationApi.resolve(resolved.id(), ResolutionCode.OTHER, "已核对", "case-owner");
+
+        assertCaseActions(open.id(), true, false, false);
+        assertCaseActions(mine.id(), false, true, true);
+        assertCaseActions(others.id(), false, false, false);
+        assertCaseActions(resolved.id(), false, false, false);
+    }
+
+    @Test
+    @WithMockUser(username = "case-owner", roles = "ADMIN")
+    void casePostActionsRequireCsrfAndUseAuthenticatedOwner() throws Exception {
+        var caseView = createChannelOnlyCase("post-actions");
+
+        mockMvc.perform(post("/admin/reconciliation/cases/{caseId}/claim", caseView.id()))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/admin/reconciliation/cases/{caseId}/release", caseView.id()))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/admin/reconciliation/cases/{caseId}/resolve", caseView.id())
+                        .param("resolutionCode", "INTERNAL_CONFIRMED")
+                        .param("note", "内部账务正确"))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(post("/admin/reconciliation/cases/{caseId}/claim", caseView.id()).with(csrf()))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/admin/reconciliation/cases/" + caseView.id()));
+        assertThat(reconciliationApi.getResult(caseView.id()).caseView().assignedTo())
+                .isEqualTo("case-owner");
+        mockMvc.perform(post("/admin/reconciliation/cases/{caseId}/release", caseView.id()).with(csrf()))
+                .andExpect(status().is3xxRedirection());
+        mockMvc.perform(post("/admin/reconciliation/cases/{caseId}/claim", caseView.id()).with(csrf()))
+                .andExpect(status().is3xxRedirection());
+        mockMvc.perform(post("/admin/reconciliation/cases/{caseId}/resolve", caseView.id())
+                        .with(csrf())
+                        .param("resolutionCode", "INTERNAL_CONFIRMED")
+                        .param("note", "内部账务正确"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/admin/reconciliation/cases/" + caseView.id()));
+
+        assertThat(reconciliationApi.getResult(caseView.id()).caseView())
+                .satisfies(resolved -> {
+                    assertThat(resolved.resolutionStatus()).isEqualTo(ResolutionStatus.RESOLVED);
+                    assertThat(resolved.resolutionCode()).isEqualTo(ResolutionCode.INTERNAL_CONFIRMED);
+                    assertThat(resolved.resolutionNote()).isEqualTo("内部账务正确");
+                    assertThat(resolved.resolvedBy()).isEqualTo("case-owner");
+                });
+    }
+
+    @Test
+    @WithMockUser(username = "other-owner", roles = "ADMIN")
+    void ownerConflictReturnsStableChineseFlash() throws Exception {
+        var caseView = createChannelOnlyCase("owner-conflict");
+        reconciliationApi.claim(caseView.id(), "case-owner");
+
+        mockMvc.perform(post("/admin/reconciliation/cases/{caseId}/release", caseView.id()).with(csrf()))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/admin/reconciliation/cases/" + caseView.id()))
+                .andExpect(result -> assertThat(result.getFlashMap().get("caseError"))
+                        .isEqualTo("操作失败，案件状态或负责人可能已变更"));
+        assertThat(reconciliationApi.getResult(caseView.id()).caseView().assignedTo())
+                .isEqualTo("case-owner");
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void rendersChineseResolutionCodeOptions() throws Exception {
+        var caseView = createChannelOnlyCase("resolution-options");
+        reconciliationApi.claim(caseView.id(), "user");
+
+        mockMvc.perform(get("/admin/reconciliation/cases/{caseId}", caseView.id()))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("内部账务为准")))
+                .andExpect(content().string(containsString("渠道账单为准")))
+                .andExpect(content().string(containsString("忽略测试数据")))
+                .andExpect(content().string(containsString("其他")));
     }
 
     private ReconciliationBatchView importBatch(String fileName, String transactionId) {
@@ -298,6 +468,52 @@ class ReconciliationWebTest {
                         + transactionId + ",1,2026-01-15T09:30:00Z\n")
                         .getBytes(StandardCharsets.UTF_8),
                 "admin"));
+    }
+
+    private ReconciliationCaseView createChannelOnlyCase(String suffix) throws InterruptedException {
+        var batch = importBatch(suffix + ".csv", "CH-" + suffix.toUpperCase());
+        reconciliationApi.startRun(batch.id(), "case-fixture");
+        awaitRunStatus(batch.id(), RunStatus.SUCCEEDED);
+        return reconciliationApi.findCases(ResultType.CHANNEL_ONLY, ResolutionStatus.OPEN, null).stream()
+                .filter(caseView -> caseView.batchId().equals(batch.id()))
+                .findFirst()
+                .orElseThrow();
+    }
+
+    private ReconciliationCaseView createAmountMismatchCase(
+            String suffix, long internalAmountCents, long channelAmountCents)
+            throws InterruptedException {
+        var account = accountsApi.create("Case " + suffix);
+        var payment = paymentsApi.topUp(new TopUpCommand(
+                "case-" + suffix, account.id(), internalAmountCents));
+        var batch = reconciliationApi.importStatement(new StatementUpload(
+                suffix + ".csv",
+                ("channel_transaction_id,amount_cents,occurred_at\n"
+                        + payment.channelReference() + "," + channelAmountCents + ","
+                        + payment.occurredAt() + "\n").getBytes(StandardCharsets.UTF_8),
+                "case-fixture"));
+        reconciliationApi.startRun(batch.id(), "case-fixture");
+        awaitRunStatus(batch.id(), RunStatus.SUCCEEDED);
+        return reconciliationApi.findCases(ResultType.AMOUNT_MISMATCH, ResolutionStatus.OPEN, null).stream()
+                .filter(caseView -> caseView.batchId().equals(batch.id()))
+                .findFirst()
+                .orElseThrow();
+    }
+
+    private void assertCaseActions(
+            UUID caseId, boolean claimVisible, boolean releaseVisible, boolean resolveVisible)
+            throws Exception {
+        String body = mockMvc.perform(get("/admin/reconciliation/cases/{caseId}", caseId))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        assertThat(body.contains("/admin/reconciliation/cases/" + caseId + "/claim"))
+                .isEqualTo(claimVisible);
+        assertThat(body.contains("/admin/reconciliation/cases/" + caseId + "/release"))
+                .isEqualTo(releaseVisible);
+        assertThat(body.contains("/admin/reconciliation/cases/" + caseId + "/resolve"))
+                .isEqualTo(resolveVisible);
     }
 
     private void insertRun(

@@ -24,8 +24,6 @@ public interface ReconciliationApi {
     ReconciliationResultView resolve(
             UUID resultId, ResolutionCode resolutionCode, String note, String operator);
 
-    ReconciliationResultView resolve(UUID resultId, String note, String operator);
-
     List<ReconciliationCaseEventView> findCaseEvents(UUID resultId);
 
     List<ReconciliationCaseView> findCases(

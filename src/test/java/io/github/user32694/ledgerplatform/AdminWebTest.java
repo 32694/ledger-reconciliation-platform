@@ -950,7 +950,7 @@ class AdminWebTest {
         String marker = "audit-columns-" + UUID.randomUUID();
         auditApi.record(new AuditCommand(
                 null,
-                AuditAction.RECONCILIATION_RESOLVE,
+                AuditAction.RECONCILIATION_CASE_RESOLVE,
                 "RECONCILIATION_DIFFERENCE",
                 marker,
                 AuditOutcome.SUCCEEDED,
@@ -958,7 +958,7 @@ class AdminWebTest {
                 null));
 
         mockMvc.perform(get("/admin/audit")
-                        .param("action", "RECONCILIATION_RESOLVE"))
+                        .param("action", "RECONCILIATION_CASE_RESOLVE"))
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("时间")))
                 .andExpect(content().string(containsString("操作人")))
@@ -967,7 +967,7 @@ class AdminWebTest {
                 .andExpect(content().string(containsString("<th>结果</th>")))
                 .andExpect(content().string(containsString("摘要")))
                 .andExpect(content().string(containsString("关联标识")))
-                .andExpect(content().string(containsString("处理差异")))
+                .andExpect(content().string(containsString("解决差异")))
                 .andExpect(content().string(containsString(marker)))
                 .andExpect(content().string(containsString("已安全处理")))
                 .andExpect(content().string(containsString("—")));

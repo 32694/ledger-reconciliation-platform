@@ -12,7 +12,6 @@ import io.github.user32694.ledgerplatform.reconciliation.ResolutionCode;
 import io.github.user32694.ledgerplatform.reconciliation.ResolutionStatus;
 import io.github.user32694.ledgerplatform.reconciliation.RunStatus;
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.Collection;
 import java.util.Map;
 import java.util.List;
@@ -323,37 +322,6 @@ class ReconciliationStore {
         caseEventRepository.saveAndFlush(ReconciliationCaseEventEntity.resolved(
                 result.id(), actor, resolutionCode, note.strip(), now));
         recordCaseAudit(result, actor, AuditAction.RECONCILIATION_CASE_RESOLVE, "对账差异已解决");
-        return result;
-    }
-
-    @Transactional
-    ReconciliationResultEntity resolveResult(UUID resultId, String note, String operator) {
-        var result = findResultForUpdate(resultId);
-        if (result.resolutionStatus() == ResolutionStatus.RESOLVED) {
-            throw new IllegalStateException("Result is already resolved");
-        }
-        var claimTime = Instant.now();
-        if (result.claim(operator, claimTime)) {
-            String actor = operator.strip();
-            caseEventRepository.saveAndFlush(
-                    ReconciliationCaseEventEntity.claimed(result.id(), actor, claimTime));
-            recordCaseAudit(result, actor, AuditAction.RECONCILIATION_CASE_CLAIM, "对账差异已认领");
-        }
-        var resolveTime = claimTime.plus(1, ChronoUnit.MICROS);
-        var resolution = result.resolve(ResolutionCode.OTHER, note, operator, resolveTime);
-        resolutionRepository.saveAndFlush(resolution);
-        String actor = operator.strip();
-        caseEventRepository.saveAndFlush(ReconciliationCaseEventEntity.resolved(
-                result.id(), actor, ResolutionCode.OTHER, note.strip(), resolveTime));
-        recordCaseAudit(result, actor, AuditAction.RECONCILIATION_CASE_RESOLVE, "对账差异已解决");
-        auditApi.record(reconciliationAudit(
-                actor,
-                AuditAction.RECONCILIATION_RESOLVE,
-                "RECONCILIATION_RESULT",
-                result.id(),
-                AuditOutcome.SUCCEEDED,
-                "对账差异处理成功",
-                result.batchId().toString()));
         return result;
     }
 

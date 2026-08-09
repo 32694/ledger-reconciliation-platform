@@ -574,14 +574,16 @@ class ReconciliationModuleTest {
     }
 
     @Test
-    void resolvesDifferenceOnceWithAnAuditRecord() {
+    void resolvesClaimedDifferenceOnceWithAnAuditRecord() {
         var batch = reconciliationApi.importStatement(new StatementUpload(
                 "resolve.csv", csv("CH-RESOLVE,1,2026-01-15T09:30:00Z\n"), "admin"));
         runToCompletion(batch.id(), "operator-resolve");
         var difference = reconciliationApi.findResults(batch.id(), ResultType.CHANNEL_ONLY, ResolutionStatus.OPEN)
                 .get(0);
 
-        var resolved = reconciliationApi.resolve(difference.id(), " 已核对渠道凭证 ", "operator-1");
+        reconciliationApi.claim(difference.id(), "operator-1");
+        var resolved = reconciliationApi.resolve(
+                difference.id(), ResolutionCode.OTHER, " 已核对渠道凭证 ", "operator-1");
 
         assertThat(resolved.resolutionStatus()).isEqualTo(ResolutionStatus.RESOLVED);
         assertThat(resolved.resolutionNote()).isEqualTo("已核对渠道凭证");
@@ -594,10 +596,10 @@ class ReconciliationModuleTest {
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM reconciliation.reconciliation_resolution", Integer.class)).isOne();
         assertThatThrownBy(() -> reconciliationApi.resolve(
-                difference.id(), "second", "operator-2"))
+                difference.id(), ResolutionCode.OTHER, "second", "operator-2"))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("already resolved");
-        assertThat(auditApi.findRecent(AuditAction.RECONCILIATION_RESOLVE, null, 100))
+                .hasMessageContaining("RESOLVED");
+        assertThat(auditApi.findRecent(AuditAction.RECONCILIATION_CASE_RESOLVE, null, 100))
                 .singleElement()
                 .satisfies(event -> {
                     assertThat(event.actor()).isEqualTo("operator-1");
@@ -616,7 +618,8 @@ class ReconciliationModuleTest {
         runToCompletion(batch.id(), "operator-matched");
         var matched = reconciliationApi.findResults(batch.id(), ResultType.MATCHED, null).get(0);
 
-        assertThatThrownBy(() -> reconciliationApi.resolve(matched.id(), "not needed", "operator"))
+        assertThatThrownBy(() -> reconciliationApi.resolve(
+                matched.id(), ResolutionCode.OTHER, "not needed", "operator"))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("MATCHED");
     }

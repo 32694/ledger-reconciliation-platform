@@ -136,15 +136,6 @@ public class ReconciliationWebController {
         return "admin/fragments/reconciliation-run-status :: status";
     }
 
-    @PostMapping("/results/{resultId}/resolve")
-    String resolve(
-            @PathVariable UUID resultId,
-            @RequestParam("note") String note,
-            Authentication authentication) {
-        var resolved = reconciliationApi.resolve(resultId, note, authentication.getName());
-        return "redirect:/admin/reconciliation/" + resolved.batchId();
-    }
-
     private static BatchRow toBatchRow(ReconciliationBatchView batch, RunRow latestRun) {
         return new BatchRow(
                 batch.id(), batch.fileName(), batch.status(), statusLabel(batch.status()),

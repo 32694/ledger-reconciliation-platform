@@ -143,12 +143,6 @@ public class ReconciliationFacade implements ReconciliationApi {
     }
 
     @Override
-    public ReconciliationResultView resolve(UUID resultId, String note, String operator) {
-        requireResultId(resultId);
-        return toResultView(store.resolveResult(resultId, note, operator));
-    }
-
-    @Override
     public List<ReconciliationCaseEventView> findCaseEvents(UUID resultId) {
         requireResultId(resultId);
         return store.findCaseEvents(resultId);

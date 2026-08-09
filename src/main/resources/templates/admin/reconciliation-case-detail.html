@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{admin/layout :: shell('异常详情', ${activeNav}, ~{::main})}">
+<main class="content content-narrow">
+    <div class="page-heading">
+        <div>
+            <p class="eyebrow">对账案件</p>
+            <h1>异常详情</h1>
+        </div>
+        <a class="button button-secondary" th:href="@{/admin/reconciliation/cases}">返回工作台</a>
+    </div>
+    <p class="alert alert-error" th:if="${caseError}" th:text="${caseError}">操作失败</p>
+
+    <dl class="definition-grid">
+        <div><dt>批次文件</dt><dd th:text="${caseView.batchFileName}">statement.csv</dd></div>
+        <div><dt>渠道流水号</dt><dd class="mono" th:text="${caseView.channelTransactionId != null ? caseView.channelTransactionId : '-'}">-</dd></div>
+        <div><dt>结果类型</dt><dd th:text="${resultTypeLabel}">金额不一致</dd></div>
+        <div><dt>处理状态</dt><dd th:text="${resolutionStatusLabel}">待处理</dd></div>
+        <div><dt>渠道金额（分）</dt><dd th:text="${caseView.channelAmountCents != null ? caseView.channelAmountCents : '-'}">-</dd></div>
+        <div><dt>内部金额（分）</dt><dd th:text="${caseView.internalAmountCents != null ? caseView.internalAmountCents : '-'}">-</dd></div>
+        <div><dt>差额（分）</dt><dd th:text="${caseView.differenceAmountCents != null ? caseView.differenceAmountCents : '-'}">-</dd></div>
+        <div><dt>发生时间</dt><dd th:text="${caseView.occurredAt != null ? caseView.occurredAt : '-'}">-</dd></div>
+        <div><dt>负责人</dt><dd th:text="${caseView.assignedTo != null ? caseView.assignedTo : '-'}">-</dd></div>
+        <div><dt>解决方式</dt><dd th:text="${resolutionCodeLabel != null ? resolutionCodeLabel : '-'}">-</dd></div>
+        <div><dt>解决人</dt><dd th:text="${caseView.resolvedBy != null ? caseView.resolvedBy : '-'}">-</dd></div>
+        <div><dt>解决备注</dt><dd th:text="${caseView.resolutionNote != null ? caseView.resolutionNote : '-'}">-</dd></div>
+    </dl>
+
+    <section class="case-actions" th:if="${canClaim || canRelease || canResolve}">
+        <div class="section-heading">
+            <div><h2>案件操作</h2></div>
+        </div>
+        <form th:if="${canClaim}" method="post" th:action="@{/admin/reconciliation/cases/{id}/claim(id=${caseView.id})}">
+            <input type="hidden" th:name="${_csrf.parameterName}" th:value="${_csrf.token}">
+            <button class="button button-primary" type="submit">认领案件</button>
+        </form>
+        <div class="case-owner-actions" th:if="${canRelease || canResolve}">
+            <form th:if="${canRelease}" method="post" th:action="@{/admin/reconciliation/cases/{id}/release(id=${caseView.id})}">
+                <input type="hidden" th:name="${_csrf.parameterName}" th:value="${_csrf.token}">
+                <button class="button button-secondary" type="submit">取消认领</button>
+            </form>
+            <form class="resolve-form" th:if="${canResolve}" method="post" th:action="@{/admin/reconciliation/cases/{id}/resolve(id=${caseView.id})}">
+                <div class="field">
+                    <label for="resolutionCode">解决方式</label>
+                    <select id="resolutionCode" name="resolutionCode" required>
+                        <option th:each="option : ${resolutionCodes}" th:value="${option.value}" th:text="${option.label}">其他</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label for="note">解决备注</label>
+                    <textarea id="note" name="note" rows="3" maxlength="2000" required></textarea>
+                </div>
+                <input type="hidden" th:name="${_csrf.parameterName}" th:value="${_csrf.token}">
+                <button class="button button-primary" type="submit">解决案件</button>
+            </form>
+        </div>
+    </section>
+
+    <section class="table-section">
+        <div class="section-heading">
+            <div><h2>处理记录</h2><p>最新操作在前</p></div>
+        </div>
+        <div class="table-scroll">
+            <table>
+                <thead><tr><th>操作</th><th>操作人</th><th>时间</th><th>解决方式</th><th>备注</th></tr></thead>
+                <tbody>
+                <tr th:each="row : ${timeline}" th:attr="data-event-action=${row.event.action}">
+                    <td th:text="${row.actionLabel}">已认领</td>
+                    <td th:text="${row.event.actor}">admin</td>
+                    <td th:text="${row.event.createdAt}">-</td>
+                    <td th:text="${row.resolutionCodeLabel != null ? row.resolutionCodeLabel : '-'}">-</td>
+                    <td th:text="${row.event.note != null ? row.event.note : '-'}">-</td>
+                </tr>
+                <tr th:if="${#lists.isEmpty(timeline)}"><td colspan="5" class="empty-state">暂无处理记录</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+</main>
+</html>

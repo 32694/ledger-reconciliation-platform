@@ -117,6 +117,22 @@ class AuditModuleTest {
     }
 
     @Test
+    void preservesLegacyReconciliationResolveAuditEvents() {
+        var recorded = auditApi.record(new AuditCommand(
+                "legacy-operator",
+                AuditAction.RECONCILIATION_RESOLVE,
+                "RECONCILIATION_RESULT",
+                "legacy-result",
+                AuditOutcome.SUCCEEDED,
+                "legacy resolution",
+                "legacy-batch"));
+
+        assertThat(auditApi.findRecent(AuditAction.RECONCILIATION_RESOLVE, null, 100))
+                .singleElement()
+                .isEqualTo(recorded);
+    }
+
+    @Test
     void usesIdDescendingToBreakEqualTimestampTies() {
         var first = auditApi.record(command(
                 AuditAction.ACCOUNT_CREATE, "ACCOUNT", "a-1", "first", null));
