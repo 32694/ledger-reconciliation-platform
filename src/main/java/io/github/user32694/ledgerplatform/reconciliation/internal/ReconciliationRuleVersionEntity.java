@@ -106,15 +106,12 @@ class ReconciliationRuleVersionEntity {
         return publishedAt;
     }
 
-    void updateDraft(
-            long amountToleranceCents, int queryWindowHours, String operator, Instant now) {
+    void updateDraft(long amountToleranceCents, int queryWindowHours) {
         if (status != RuleVersionStatus.DRAFT) {
             throw new IllegalStateException("已发布的规则版本不能修改");
         }
         this.amountToleranceCents = amountToleranceCents;
         this.queryWindowHours = queryWindowHours;
-        this.createdBy = operator;
-        this.createdAt = normalize(now);
     }
 
     void publish(String operator, Instant now) {

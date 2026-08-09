@@ -84,6 +84,8 @@ public class AuditWebController {
             case "PAYMENT" -> "资金操作";
             case "RECONCILIATION_BATCH" -> "对账批次";
             case "RECONCILIATION_RESULT", "RECONCILIATION_DIFFERENCE" -> "对账差异";
+            case "RECONCILIATION_RULE" -> "对账规则";
+            case "RECONCILIATION_CHANNEL" -> "对账渠道";
             default -> "业务对象";
         };
     }

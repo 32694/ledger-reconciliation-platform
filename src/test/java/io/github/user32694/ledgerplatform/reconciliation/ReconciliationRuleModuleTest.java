@@ -120,7 +120,8 @@ class ReconciliationRuleModuleTest {
         assertThat(updatedDraft.status()).isEqualTo(RuleVersionStatus.DRAFT);
         assertThat(updatedDraft.amountToleranceCents()).isEqualTo(30);
         assertThat(updatedDraft.queryWindowHours()).isEqualTo(72);
-        assertThat(updatedDraft.createdBy()).isEqualTo("rule-editor-2");
+        assertThat(updatedDraft.createdBy()).isEqualTo(firstDraft.createdBy()).isEqualTo("rule-editor");
+        assertThat(updatedDraft.createdAt()).isEqualTo(firstDraft.createdAt());
         assertThat(rulesApi.findVersions(ALIPAY_RULE_ID))
                 .singleElement()
                 .isEqualTo(updatedDraft);

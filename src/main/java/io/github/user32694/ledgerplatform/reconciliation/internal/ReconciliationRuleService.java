@@ -105,8 +105,7 @@ class ReconciliationRuleService implements ReconciliationRulesApi {
                     operator,
                     now);
         });
-        draft.updateDraft(
-                command.amountToleranceCents(), command.queryWindowHours(), operator, now);
+        draft.updateDraft(command.amountToleranceCents(), command.queryWindowHours());
         versionRepository.saveAndFlush(draft);
         auditApi.record(new AuditCommand(
                 operator,
