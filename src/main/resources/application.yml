@@ -11,10 +11,16 @@ spring:
       ddl-auto: validate
   flyway:
     enabled: true
+  batch:
+    job:
+      enabled: false
+    jdbc:
+      initialize-schema: never
+      table-prefix: batch.BATCH_
   servlet:
     multipart:
-      max-file-size: 2MB
-      max-request-size: 2MB
+      max-file-size: 20MB
+      max-request-size: 20MB
 
 management:
   endpoints:

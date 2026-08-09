@@ -73,8 +73,12 @@ class MigrationIntegrationTest {
                         "channel_statement_entry",
                         "reconciliation_batch",
                         "reconciliation_case_event",
+                        "reconciliation_channel",
                         "reconciliation_resolution",
                         "reconciliation_result",
+                        "reconciliation_result_work",
+                        "reconciliation_rule",
+                        "reconciliation_rule_version",
                         "reconciliation_run");
 
         assertThatThrownBy(() -> jdbcTemplate.update("""
@@ -83,6 +87,101 @@ class MigrationIntegrationTest {
                 VALUES (?, 'OTHER', 'bad.csv', ?, 'IMPORTED', 'test', CURRENT_TIMESTAMP)
                 """, UUID.randomUUID(), "0".repeat(64)))
                 .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    @Transactional
+    void createsVersionedReconciliationRulesAndWorkResultConstraints() {
+        assertThat(jdbcTemplate.queryForList("""
+                SELECT code
+                FROM reconciliation.reconciliation_channel
+                ORDER BY code
+                """, String.class)).containsExactly(
+                        "ALIPAY", "LEGACY_SYNTHETIC", "UNION_PAY", "WECHAT_PAY");
+        assertThat(columnsFor("reconciliation_batch")).contains(
+                "channel_id", "rule_version_id");
+        assertThat(columnsFor("reconciliation_run")).contains(
+                "batch_job_instance_id",
+                "batch_job_execution_id",
+                "current_step",
+                "processed_items",
+                "total_items",
+                "restart_count");
+        assertThat(partialUniqueIndex("uq_reconciliation_result_work_statement"))
+                .containsEntry("is_unique", true)
+                .containsEntry("predicate", "(statement_entry_id IS NOT NULL)");
+        assertThat((String) partialUniqueIndex("uq_reconciliation_result_work_statement")
+                .get("index_definition")).contains("(run_id, statement_entry_id)");
+        assertThat(partialUniqueIndex("uq_reconciliation_result_work_payment"))
+                .containsEntry("is_unique", true)
+                .containsEntry("predicate", "(payment_id IS NOT NULL)");
+        assertThat((String) partialUniqueIndex("uq_reconciliation_result_work_payment")
+                .get("index_definition")).contains("(run_id, payment_id)");
+
+        var ruleId = insertTestChannelRule();
+        var draftId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_rule_version
+                    (id, rule_id, version_number, status, amount_tolerance_cents,
+                     query_window_hours, created_by, created_at)
+                VALUES (?, ?, 1, 'DRAFT', 0, 0, 'test', CURRENT_TIMESTAMP)
+                """, draftId, ruleId);
+
+        assertThatThrownBy(() -> jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_rule_version
+                    (id, rule_id, version_number, status, amount_tolerance_cents,
+                     query_window_hours, created_by, created_at)
+                VALUES (?, ?, 2, 'DRAFT', 0, 0, 'test', CURRENT_TIMESTAMP)
+                """, UUID.randomUUID(), ruleId))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    @Transactional
+    void rejectsUpdatesToPublishedReconciliationRuleVersions() {
+        var publishedVersionId = insertPublishedTestRuleVersion();
+
+        assertThatThrownBy(() -> jdbcTemplate.update("""
+                UPDATE reconciliation.reconciliation_rule_version
+                SET amount_tolerance_cents = 1
+                WHERE id = ?
+                """, publishedVersionId)).isInstanceOf(DataAccessException.class);
+    }
+
+    @Test
+    @Transactional
+    void rejectsDeletesOfPublishedReconciliationRuleVersions() {
+        var publishedVersionId = insertPublishedTestRuleVersion();
+
+        assertThatThrownBy(() -> jdbcTemplate.update("""
+                DELETE FROM reconciliation.reconciliation_rule_version
+                WHERE id = ?
+                """, publishedVersionId)).isInstanceOf(DataAccessException.class);
+    }
+
+    @Test
+    void createsSpringBatchMetadataTables() {
+        assertThat(jdbcTemplate.queryForList("""
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = 'batch'
+                ORDER BY table_name
+                """, String.class)).containsExactly(
+                        "batch_job_execution",
+                        "batch_job_execution_context",
+                        "batch_job_execution_params",
+                        "batch_job_instance",
+                        "batch_step_execution",
+                        "batch_step_execution_context");
+        assertThat(jdbcTemplate.queryForList("""
+                SELECT sequence_name
+                FROM information_schema.sequences
+                WHERE sequence_schema = 'batch'
+                ORDER BY sequence_name
+                """, String.class)).containsExactly(
+                        "batch_job_execution_seq",
+                        "batch_job_seq",
+                        "batch_step_execution_seq");
     }
 
     @Test
@@ -214,6 +313,59 @@ class MigrationIntegrationTest {
                         CURRENT_TIMESTAMP, 'COMPLETED', 'test', CURRENT_TIMESTAMP)
                 """, batchId, UUID.randomUUID().toString().replace("-", "").repeat(2));
         return batchId;
+    }
+
+    private List<String> columnsFor(String tableName) {
+        return jdbcTemplate.queryForList("""
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'reconciliation' AND table_name = ?
+                ORDER BY ordinal_position
+                """, String.class, tableName);
+    }
+
+    private Map<String, Object> partialUniqueIndex(String indexName) {
+        return jdbcTemplate.queryForMap("""
+                SELECT index_definition.indisunique AS is_unique,
+                       pg_get_indexdef(index_definition.indexrelid) AS index_definition,
+                       pg_get_expr(index_definition.indpred, index_definition.indrelid) AS predicate
+                FROM pg_index index_definition
+                JOIN pg_class index_name ON index_name.oid = index_definition.indexrelid
+                WHERE index_name.relname = ?
+                  AND index_definition.indrelid = 'reconciliation.reconciliation_result_work'::regclass
+                """, indexName);
+    }
+
+    private UUID insertTestChannelRule() {
+        var channelId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_channel
+                    (id, code, display_name, active, created_at)
+                VALUES (?, ?, 'Test channel', true, CURRENT_TIMESTAMP)
+                """, channelId, "TEST_" + channelId.toString().replace("-", "").substring(0, 27));
+        var ruleId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_rule (id, scope_type, channel_id)
+                VALUES (?, 'CHANNEL', ?)
+                """, ruleId, channelId);
+        return ruleId;
+    }
+
+    private UUID insertPublishedTestRuleVersion() {
+        var ruleId = insertTestChannelRule();
+        var versionId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_rule_version
+                    (id, rule_id, version_number, status, amount_tolerance_cents,
+                     query_window_hours, created_by, created_at)
+                VALUES (?, ?, 1, 'DRAFT', 0, 0, 'test', CURRENT_TIMESTAMP)
+                """, versionId, ruleId);
+        jdbcTemplate.update("""
+                UPDATE reconciliation.reconciliation_rule_version
+                SET status = 'PUBLISHED', published_by = 'test', published_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """, versionId);
+        return versionId;
     }
 
     @Test
