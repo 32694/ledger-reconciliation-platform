@@ -65,6 +65,7 @@ class DocumentationTest {
     void documentsReversePaymentAndAuditWorkflows() throws IOException {
         String readme = Files.readString(Path.of("README.md"));
         String guide = Files.readString(Path.of("docs/USER_GUIDE.md"));
+        String migrationGuide = Files.readString(Path.of("docs/MIGRATION.md"));
 
         assertThat(readme)
                 .contains("全额退款")
@@ -76,9 +77,18 @@ class DocumentationTest {
                 .contains("全额冲正")
                 .contains("INSUFFICIENT_FUNDS")
                 .contains("审计日志")
+                .contains("应用接口只追加")
+                .contains("不提供修改或删除入口")
+                .contains("数据库层未禁止直接修改")
                 .contains("使用新幂等键重试")
                 .contains("两份不可变 journal")
                 .contains("唯一幂等键");
+        assertThat(readme)
+                .contains("应用接口只追加")
+                .contains("不提供修改或删除入口")
+                .doesNotContain("只追加、不可修改的审计事件");
+        assertThat(migrationGuide)
+                .contains("不包含禁止 `UPDATE` 或 `DELETE` 的数据库触发器");
     }
 
     @org.junit.jupiter.api.Test

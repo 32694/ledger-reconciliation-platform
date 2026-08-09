@@ -8,7 +8,7 @@
 - `V1-V8` 及后续 migration 已发布且不可修改；**不可直接修改已执行**的 Flyway migration。任何新结构必须新增更大的版本号。
 - 本里程碑新增：
   - `V9__add_payment_refunds_and_reversals.sql`：为 payment instruction 增加反向支付关联字段、操作原因和反向类型约束。
-  - `V10__create_audit_events.sql`：创建只追加的 `audit.audit_event` 表，保存 action/outcome 字段并添加时间查询索引。
+  - `V10__create_audit_events.sql`：创建 `audit.audit_event` 表，保存 action/outcome 字段并添加时间查询索引。应用审计接口只提供追加能力；该迁移不包含禁止 `UPDATE` 或 `DELETE` 的数据库触发器。
   - `V11__allow_reverse_journal_types.sql`：允许账本 journal 使用 `REFUND` 和 `REVERSAL` 类型，不改变应用已有的借贷平衡校验。
   - `V12__add_reconciliation_operations.sql`：增加异步运行 attempt、差异负责人、解决方式和不可变案件时间线，并迁移已有解决记录。
   - `V13__allow_claimed_reconciliation_status.sql`：修复 V12 未替换完全的旧约束，使 `reconciliation_result.resolution_status` 合法接受 `CLAIMED`。
