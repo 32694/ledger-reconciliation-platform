@@ -13,6 +13,8 @@ import io.github.user32694.ledgerplatform.reconciliation.ResolutionStatus;
 import io.github.user32694.ledgerplatform.reconciliation.RunStatus;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Collection;
+import java.util.Map;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -309,6 +311,40 @@ class ReconciliationStore {
         return resultRepository.findAllByBatchId(batchId);
     }
 
+    @Transactional(readOnly = true)
+    List<ReconciliationResultEntity> findCases(
+            io.github.user32694.ledgerplatform.reconciliation.ResultType type,
+            ResolutionStatus status,
+            String assignee) {
+        return resultRepository.findCases(
+                io.github.user32694.ledgerplatform.reconciliation.ResultType.MATCHED,
+                type,
+                status,
+                assignee);
+    }
+
+    @Transactional(readOnly = true)
+    ReconciliationResultEntity getResult(UUID resultId) {
+        return resultRepository.findById(resultId)
+                .orElseThrow(() -> new IllegalArgumentException("Result does not exist: " + resultId));
+    }
+
+    @Transactional(readOnly = true)
+    Optional<ReconciliationBatchView> findLatestCompletedBatch() {
+        return batchRepository.findFirstByStatusOrderByCompletedAtDescIdDesc(BatchStatus.COMPLETED)
+                .map(ReconciliationBatchEntity::toView);
+    }
+
+    @Transactional(readOnly = true)
+    long countResults(ResolutionStatus status) {
+        return resultRepository.countByResolutionStatus(status);
+    }
+
+    @Transactional(readOnly = true)
+    long countFailedRuns() {
+        return runRepository.countByStatus(RunStatus.FAILED);
+    }
+
     @Transactional
     ReconciliationResultEntity claimResult(UUID resultId, String operator) {
         var result = findResultForUpdate(resultId);
@@ -393,6 +429,14 @@ class ReconciliationStore {
     @Transactional(readOnly = true)
     Optional<ReconciliationResolutionEntity> findResolution(UUID resultId) {
         return resolutionRepository.findByResultId(resultId);
+    }
+
+    @Transactional(readOnly = true)
+    Map<UUID, ReconciliationResolutionEntity> findResolutions(Collection<UUID> resultIds) {
+        return resolutionRepository.findAllByResultIdIn(resultIds).stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        ReconciliationResolutionEntity::resultId,
+                        java.util.function.Function.identity()));
     }
 
     private ReconciliationBatchEntity findEntity(UUID batchId) {

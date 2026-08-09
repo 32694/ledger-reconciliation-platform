@@ -21,6 +21,8 @@ interface ReconciliationRunRepository extends JpaRepository<ReconciliationRunEnt
 
     List<ReconciliationRunEntity> findAllByStatusIn(Collection<RunStatus> statuses);
 
+    long countByStatus(RunStatus status);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT run FROM ReconciliationRunEntity run WHERE run.id = :id")
     Optional<ReconciliationRunEntity> findByIdForUpdate(@Param("id") UUID id);

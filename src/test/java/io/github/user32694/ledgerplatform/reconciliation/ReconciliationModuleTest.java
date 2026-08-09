@@ -617,6 +617,79 @@ class ReconciliationModuleTest {
                 .hasMessageContaining("MATCHED");
     }
 
+    @Test
+    void returnsCaseWorkbenchRowsWithFiltersAndDetailsTimeline() {
+        var older = createChannelOnlyDifference("query-older");
+        reconciliationApi.claim(older.id(), "operator-older");
+        var newer = createChannelOnlyDifference("query-newer");
+        reconciliationApi.claim(newer.id(), "operator-newer");
+        reconciliationApi.release(newer.id(), "operator-newer");
+        reconciliationApi.claim(newer.id(), "operator-newer");
+        reconciliationApi.resolve(newer.id(), ResolutionCode.CHANNEL_CONFIRMED, "confirmed", "operator-newer");
+
+        assertThat(reconciliationApi.findCases(null, null, null))
+                .extracting(ReconciliationCaseView::id)
+                .containsExactly(newer.id(), older.id());
+        assertThat(reconciliationApi.findCases(ResultType.CHANNEL_ONLY, ResolutionStatus.OPEN, null))
+                .isEmpty();
+        assertThat(reconciliationApi.findCases(null, ResolutionStatus.CLAIMED, "operator-older"))
+                .singleElement()
+                .satisfies(view -> {
+                    assertThat(view.id()).isEqualTo(older.id());
+                    assertThat(view.batchFileName()).isEqualTo("query-older.csv");
+                    assertThat(view.channelAmountCents()).isEqualTo(1L);
+                    assertThat(view.internalAmountCents()).isNull();
+                    assertThat(view.differenceAmountCents()).isNull();
+                    assertThat(view.assignedTo()).isEqualTo("operator-older");
+                });
+
+        var details = reconciliationApi.getResult(newer.id());
+        assertThat(details.caseView().id()).isEqualTo(newer.id());
+        assertThat(details.timeline())
+                .extracting(ReconciliationCaseEventView::action)
+                .containsExactly("RESOLVED", "CLAIMED", "RELEASED", "CLAIMED");
+    }
+
+    @Test
+    void reportsEmptyOperationsSummaryWithoutCompletedBatches() {
+        var summary = reconciliationApi.getOperationsSummary();
+
+        assertThat(summary.completedMatchRate()).isNull();
+        assertThat(summary.openCount()).isZero();
+        assertThat(summary.claimedCount()).isZero();
+        assertThat(summary.failedRunCount()).isZero();
+    }
+
+    @Test
+    void reportsLatestMatchRateOpenClaimedAndFailedCounts() {
+        var account = accountsApi.create("Summary Customer");
+        var payment = paymentsApi.topUp(new TopUpCommand("summary-match", account.id(), 100));
+        var batch = reconciliationApi.importStatement(new StatementUpload(
+                "summary.csv",
+                csv(row(payment.channelReference(), 100, payment.occurredAt())
+                        + "\nSUMMARY-DIFF,50,2026-01-15T10:00:00Z\n"),
+                "admin"));
+        reconciliationApi.run(batch.id());
+        var difference = reconciliationApi.findResults(batch.id(), ResultType.CHANNEL_ONLY, ResolutionStatus.OPEN)
+                .get(0);
+        reconciliationApi.claim(difference.id(), "summary-operator");
+
+        var failedRunId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_run
+                    (id, batch_id, attempt_number, status, requested_by, requested_at,
+                     completed_at, error_message)
+                VALUES (?, ?, 2, 'FAILED', 'summary-operator', CURRENT_TIMESTAMP,
+                        CURRENT_TIMESTAMP, 'failed for summary')
+                """, failedRunId, batch.id());
+
+        var summary = reconciliationApi.getOperationsSummary();
+        assertThat(summary.completedMatchRate()).isEqualTo(50.0);
+        assertThat(summary.openCount()).isZero();
+        assertThat(summary.claimedCount()).isOne();
+        assertThat(summary.failedRunCount()).isOne();
+    }
+
     private static String row(String channelReference, long amountCents, Instant occurredAt) {
         return channelReference + "," + amountCents + "," + occurredAt;
     }

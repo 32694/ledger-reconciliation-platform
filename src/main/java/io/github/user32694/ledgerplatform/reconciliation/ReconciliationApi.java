@@ -29,4 +29,11 @@ public interface ReconciliationApi {
     ReconciliationResultView resolve(UUID resultId, String note, String operator);
 
     List<ReconciliationCaseEventView> findCaseEvents(UUID resultId);
+
+    List<ReconciliationCaseView> findCases(
+            ResultType type, ResolutionStatus status, String assignee);
+
+    ReconciliationCaseDetailsView getResult(UUID resultId);
+
+    ReconciliationOperationsSummary getOperationsSummary();
 }

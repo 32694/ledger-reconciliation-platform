@@ -59,6 +59,14 @@ class ReconciliationResolutionEntity {
         return note;
     }
 
+    ResolutionCode resolutionCode() {
+        return resolutionCode;
+    }
+
+    UUID resultId() {
+        return resultId;
+    }
+
     String operator() {
         return operator;
     }

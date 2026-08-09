@@ -1,5 +1,6 @@
 package io.github.user32694.ledgerplatform.reconciliation.internal;
 
+import io.github.user32694.ledgerplatform.reconciliation.BatchStatus;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -13,6 +14,9 @@ interface ReconciliationBatchRepository extends JpaRepository<ReconciliationBatc
     Optional<ReconciliationBatchEntity> findByFileSha256(String fileSha256);
 
     List<ReconciliationBatchEntity> findAllByOrderByCreatedAtDescIdDesc();
+
+    Optional<ReconciliationBatchEntity> findFirstByStatusOrderByCompletedAtDescIdDesc(
+            BatchStatus status);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT batch FROM ReconciliationBatchEntity batch WHERE batch.id = :id")

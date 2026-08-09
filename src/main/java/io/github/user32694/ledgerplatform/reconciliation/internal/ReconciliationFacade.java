@@ -2,7 +2,10 @@ package io.github.user32694.ledgerplatform.reconciliation.internal;
 
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationApi;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationBatchView;
+import io.github.user32694.ledgerplatform.reconciliation.ReconciliationCaseDetailsView;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationCaseEventView;
+import io.github.user32694.ledgerplatform.reconciliation.ReconciliationCaseView;
+import io.github.user32694.ledgerplatform.reconciliation.ReconciliationOperationsSummary;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationResultView;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationRunView;
 import io.github.user32694.ledgerplatform.reconciliation.ResolutionCode;
@@ -11,9 +14,12 @@ import io.github.user32694.ledgerplatform.reconciliation.StatementUpload;
 import io.github.user32694.ledgerplatform.reconciliation.ResultType;
 import io.github.user32694.ledgerplatform.payments.PaymentView;
 import io.github.user32694.ledgerplatform.payments.PaymentsApi;
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.List;
+import java.util.Collections;
 import java.util.UUID;
 import java.util.function.Function;
 import org.springframework.stereotype.Service;
@@ -159,6 +165,90 @@ public class ReconciliationFacade implements ReconciliationApi {
         return store.findCaseEvents(resultId);
     }
 
+    @Override
+    public List<ReconciliationCaseView> findCases(
+            ResultType type, ResolutionStatus status, String assignee) {
+        String normalizedAssignee = assignee == null ? null : assignee.strip();
+        if (normalizedAssignee != null && normalizedAssignee.isBlank()) {
+            throw new IllegalArgumentException("Assignee is required");
+        }
+        var results = store.findCases(type, status, normalizedAssignee);
+        var lookup = loadCaseLookup(results);
+        return results.stream()
+                .map(result -> toCaseView(result, lookup))
+                .toList();
+    }
+
+    @Override
+    public ReconciliationCaseDetailsView getResult(UUID resultId) {
+        requireResultId(resultId);
+        var result = store.getResult(resultId);
+        var lookup = loadCaseLookup(List.of(result));
+        var timeline = new ArrayList<>(store.findCaseEvents(resultId));
+        Collections.reverse(timeline);
+        return new ReconciliationCaseDetailsView(toCaseView(result, lookup), timeline);
+    }
+
+    @Override
+    public ReconciliationOperationsSummary getOperationsSummary() {
+        var latestBatch = store.findLatestCompletedBatch().orElse(null);
+        Double matchRate = null;
+        if (latestBatch != null) {
+            int total = latestBatch.matchedRows() + latestBatch.differenceRows();
+            if (total > 0) {
+                matchRate = latestBatch.matchedRows() * 100.0 / total;
+            }
+        }
+        return new ReconciliationOperationsSummary(
+                matchRate,
+                store.countResults(ResolutionStatus.OPEN),
+                store.countResults(ResolutionStatus.CLAIMED),
+                store.countFailedRuns());
+    }
+
+    private CaseLookup loadCaseLookup(List<ReconciliationResultEntity> results) {
+        var batches = new HashMap<UUID, ReconciliationBatchView>();
+        var entries = new HashMap<UUID, ReconciliationMatcher.StatementEntrySnapshot>();
+        var payments = new HashMap<UUID, PaymentView>();
+        var batchIds = results.stream().map(ReconciliationResultEntity::batchId).collect(java.util.stream.Collectors.toSet());
+        for (UUID batchId : batchIds) {
+            var batch = store.getBatch(batchId);
+            batches.put(batchId, batch);
+            store.findStatementEntries(batchId).forEach(entry -> entries.put(entry.id(), entry));
+            if (batch.periodStart() != null && batch.periodEnd() != null) {
+                paymentsApi.findSucceededTopUps(batch.periodStart(), batch.periodEnd())
+                        .forEach(payment -> payments.put(payment.id(), payment));
+            }
+        }
+        var resolutions = store.findResolutions(results.stream()
+                .map(ReconciliationResultEntity::id)
+                .collect(java.util.stream.Collectors.toSet()));
+        return new CaseLookup(batches, entries, payments, resolutions);
+    }
+
+    private ReconciliationCaseView toCaseView(ReconciliationResultEntity result, CaseLookup lookup) {
+        var batch = lookup.batches().get(result.batchId());
+        var view = toResultView(result, lookup.entries(), lookup.payments(),
+                lookup.resolutions().get(result.id()));
+        Long difference = view.channelAmountCents() == null || view.internalAmountCents() == null
+                ? null
+                : view.internalAmountCents() - view.channelAmountCents();
+        return new ReconciliationCaseView(
+                view.id(), view.batchId(), batch.fileName(), view.statementEntryId(), view.paymentId(),
+                view.channelTransactionId(), view.channelAmountCents(), view.internalAmountCents(),
+                difference, view.occurredAt(), view.resultType(), view.resolutionStatus(),
+                view.assignedTo(), view.claimedAt(),
+                lookup.resolutions().get(result.id()) == null
+                        ? null : lookup.resolutions().get(result.id()).resolutionCode(),
+                view.resolutionNote(), view.resolvedBy(), view.resolvedAt());
+    }
+
+    private record CaseLookup(
+            Map<UUID, ReconciliationBatchView> batches,
+            Map<UUID, ReconciliationMatcher.StatementEntrySnapshot> entries,
+            Map<UUID, PaymentView> payments,
+            Map<UUID, ReconciliationResolutionEntity> resolutions) {}
+
     private ReconciliationResultView toResultView(ReconciliationResultEntity result) {
         var batch = store.getBatch(result.batchId());
         var entries = store.findStatementEntries(result.batchId()).stream()
@@ -173,7 +263,14 @@ public class ReconciliationFacade implements ReconciliationApi {
             ReconciliationResultEntity result,
             Map<UUID, ReconciliationMatcher.StatementEntrySnapshot> entries,
             Map<UUID, PaymentView> payments) {
-        var resolution = store.findResolution(result.id());
+        return toResultView(result, entries, payments, store.findResolution(result.id()).orElse(null));
+    }
+
+    private ReconciliationResultView toResultView(
+            ReconciliationResultEntity result,
+            Map<UUID, ReconciliationMatcher.StatementEntrySnapshot> entries,
+            Map<UUID, PaymentView> payments,
+            ReconciliationResolutionEntity resolution) {
         var entry = result.statementEntryId() == null ? null : entries.get(result.statementEntryId());
         var payment = result.paymentId() == null ? null : payments.get(result.paymentId());
         return new ReconciliationResultView(
@@ -189,9 +286,9 @@ public class ReconciliationFacade implements ReconciliationApi {
                 result.resolutionStatus(),
                 result.assignedTo(),
                 result.claimedAt(),
-                resolution.map(ReconciliationResolutionEntity::note).orElse(null),
-                resolution.map(ReconciliationResolutionEntity::operator).orElse(null),
-                resolution.map(ReconciliationResolutionEntity::createdAt).orElse(null));
+                resolution == null ? null : resolution.note(),
+                resolution == null ? null : resolution.operator(),
+                resolution == null ? null : resolution.createdAt());
     }
 
     private static void requireResultId(UUID resultId) {
