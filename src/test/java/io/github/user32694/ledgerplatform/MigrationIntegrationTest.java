@@ -160,6 +160,63 @@ class MigrationIntegrationTest {
     }
 
     @Test
+    @Transactional
+    void rejectsActiveVersionsOwnedByAnotherRule() {
+        var versionId = insertPublishedTestRuleVersion(insertTestChannelRule());
+        var otherRuleId = insertTestChannelRule();
+
+        assertThatThrownBy(() -> jdbcTemplate.update("""
+                UPDATE reconciliation.reconciliation_rule
+                SET active_version_id = ?
+                WHERE id = ?
+                """, versionId, otherRuleId)).isInstanceOf(DataAccessException.class);
+    }
+
+    @Test
+    @Transactional
+    void rejectsDraftVersionsAsActiveVersions() {
+        var ruleId = insertTestChannelRule();
+        var draftVersionId = insertDraftTestRuleVersion(ruleId);
+
+        assertThatThrownBy(() -> jdbcTemplate.update("""
+                UPDATE reconciliation.reconciliation_rule
+                SET active_version_id = ?
+                WHERE id = ?
+                """, draftVersionId, ruleId)).isInstanceOf(DataAccessException.class);
+    }
+
+    @Test
+    @Transactional
+    void rejectsWorkRowsWhenRunDoesNotBelongToTheBatch() {
+        var runBatchId = insertReconciliationBatch();
+        var workBatchId = insertReconciliationBatch();
+        var runId = insertReconciliationRun(runBatchId);
+
+        assertThatThrownBy(() -> jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_result_work
+                    (id, run_id, batch_id, payment_id, result_type, resolution_status, created_at)
+                VALUES (?, ?, ?, ?, 'INTERNAL_ONLY', 'OPEN', CURRENT_TIMESTAMP)
+                """, UUID.randomUUID(), runId, workBatchId, UUID.randomUUID()))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    @Transactional
+    void rejectsWorkRowsWhenStatementDoesNotBelongToTheBatch() {
+        var statementBatchId = insertReconciliationBatch();
+        var workBatchId = insertReconciliationBatch();
+        var statementEntryId = insertStatementEntry(statementBatchId);
+        var runId = insertReconciliationRun(workBatchId);
+
+        assertThatThrownBy(() -> jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_result_work
+                    (id, run_id, batch_id, statement_entry_id, result_type, resolution_status, created_at)
+                VALUES (?, ?, ?, ?, 'CHANNEL_ONLY', 'OPEN', CURRENT_TIMESTAMP)
+                """, UUID.randomUUID(), runId, workBatchId, statementEntryId))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
     void createsSpringBatchMetadataTables() {
         assertThat(jdbcTemplate.queryForList("""
                 SELECT table_name
@@ -315,6 +372,26 @@ class MigrationIntegrationTest {
         return batchId;
     }
 
+    private UUID insertReconciliationRun(UUID batchId) {
+        var runId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_run
+                    (id, batch_id, attempt_number, status, requested_by, requested_at)
+                VALUES (?, ?, 1, 'QUEUED', 'test', CURRENT_TIMESTAMP)
+                """, runId, batchId);
+        return runId;
+    }
+
+    private UUID insertStatementEntry(UUID batchId) {
+        var entryId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.channel_statement_entry
+                    (id, batch_id, line_number, channel_transaction_id, amount_cents, occurred_at)
+                VALUES (?, ?, 2, ?, 100, CURRENT_TIMESTAMP)
+                """, entryId, batchId, "MIGRATION-WORK-" + entryId);
+        return entryId;
+    }
+
     private List<String> columnsFor(String tableName) {
         return jdbcTemplate.queryForList("""
                 SELECT column_name
@@ -353,6 +430,20 @@ class MigrationIntegrationTest {
 
     private UUID insertPublishedTestRuleVersion() {
         var ruleId = insertTestChannelRule();
+        return insertPublishedTestRuleVersion(ruleId);
+    }
+
+    private UUID insertPublishedTestRuleVersion(UUID ruleId) {
+        var versionId = insertDraftTestRuleVersion(ruleId);
+        jdbcTemplate.update("""
+                UPDATE reconciliation.reconciliation_rule_version
+                SET status = 'PUBLISHED', published_by = 'test', published_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """, versionId);
+        return versionId;
+    }
+
+    private UUID insertDraftTestRuleVersion(UUID ruleId) {
         var versionId = UUID.randomUUID();
         jdbcTemplate.update("""
                 INSERT INTO reconciliation.reconciliation_rule_version
@@ -360,11 +451,6 @@ class MigrationIntegrationTest {
                      query_window_hours, created_by, created_at)
                 VALUES (?, ?, 1, 'DRAFT', 0, 0, 'test', CURRENT_TIMESTAMP)
                 """, versionId, ruleId);
-        jdbcTemplate.update("""
-                UPDATE reconciliation.reconciliation_rule_version
-                SET status = 'PUBLISHED', published_by = 'test', published_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-                """, versionId);
         return versionId;
     }
 

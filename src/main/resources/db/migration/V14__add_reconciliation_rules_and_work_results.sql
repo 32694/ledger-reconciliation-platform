@@ -54,6 +54,7 @@ CREATE TABLE reconciliation.reconciliation_rule_version (
     published_by VARCHAR(128),
     published_at TIMESTAMPTZ,
     UNIQUE (rule_id, version_number),
+    UNIQUE (rule_id, id),
     CONSTRAINT ck_reconciliation_rule_version_publish_audit CHECK (
         (status = 'DRAFT' AND published_by IS NULL AND published_at IS NULL)
         OR (status = 'PUBLISHED' AND published_by IS NOT NULL
@@ -66,7 +67,8 @@ CREATE UNIQUE INDEX uq_reconciliation_rule_version_draft
 
 ALTER TABLE reconciliation.reconciliation_rule
     ADD CONSTRAINT fk_reconciliation_rule_active_version
-    FOREIGN KEY (active_version_id) REFERENCES reconciliation.reconciliation_rule_version(id);
+    FOREIGN KEY (id, active_version_id)
+    REFERENCES reconciliation.reconciliation_rule_version(rule_id, id);
 
 CREATE FUNCTION reconciliation.protect_published_reconciliation_rule_version()
 RETURNS TRIGGER
@@ -95,13 +97,35 @@ CREATE TRIGGER trg_reconciliation_rule_version_immutable
 BEFORE UPDATE OR DELETE ON reconciliation.reconciliation_rule_version
 FOR EACH ROW EXECUTE FUNCTION reconciliation.protect_published_reconciliation_rule_version();
 
+CREATE FUNCTION reconciliation.require_published_active_rule_version()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW.active_version_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1
+        FROM reconciliation.reconciliation_rule_version rule_version
+        WHERE rule_version.id = NEW.active_version_id
+          AND rule_version.rule_id = NEW.id
+          AND rule_version.status = 'PUBLISHED'
+    ) THEN
+        RAISE EXCEPTION 'active reconciliation rule version must be published and owned by its rule';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_reconciliation_rule_active_version_published
+BEFORE INSERT OR UPDATE OF active_version_id ON reconciliation.reconciliation_rule
+FOR EACH ROW EXECUTE FUNCTION reconciliation.require_published_active_rule_version();
+
 INSERT INTO reconciliation.reconciliation_channel
     (id, code, display_name, active, created_at)
 VALUES
-    ('00000000-0000-0000-0000-000000000001', 'ALIPAY', 'Alipay', true, CURRENT_TIMESTAMP),
-    ('00000000-0000-0000-0000-000000000002', 'WECHAT_PAY', 'WeChat Pay', true, CURRENT_TIMESTAMP),
-    ('00000000-0000-0000-0000-000000000003', 'UNION_PAY', 'UnionPay', true, CURRENT_TIMESTAMP),
-    ('00000000-0000-0000-0000-000000000004', 'LEGACY_SYNTHETIC', 'Legacy synthetic', false, CURRENT_TIMESTAMP);
+    ('00000000-0000-0000-0000-000000000001', 'ALIPAY', '支付宝', true, CURRENT_TIMESTAMP),
+    ('00000000-0000-0000-0000-000000000002', 'WECHAT_PAY', '微信支付', true, CURRENT_TIMESTAMP),
+    ('00000000-0000-0000-0000-000000000003', 'UNION_PAY', '银联', true, CURRENT_TIMESTAMP),
+    ('00000000-0000-0000-0000-000000000004', 'LEGACY_SYNTHETIC', '历史兼容渠道', false, CURRENT_TIMESTAMP);
 
 INSERT INTO reconciliation.reconciliation_rule (id, scope_type)
 VALUES ('00000000-0000-0000-0000-000000000101', 'DEFAULT');
@@ -150,11 +174,17 @@ ALTER TABLE reconciliation.reconciliation_run
     ADD COLUMN total_items INTEGER NOT NULL DEFAULT 0 CHECK (total_items >= 0),
     ADD COLUMN restart_count INTEGER NOT NULL DEFAULT 0 CHECK (restart_count >= 0);
 
+ALTER TABLE reconciliation.reconciliation_run
+    ADD CONSTRAINT uq_reconciliation_run_id_batch UNIQUE (id, batch_id);
+
+ALTER TABLE reconciliation.channel_statement_entry
+    ADD CONSTRAINT uq_channel_statement_entry_id_batch UNIQUE (id, batch_id);
+
 CREATE TABLE reconciliation.reconciliation_result_work (
     id UUID PRIMARY KEY,
-    run_id UUID NOT NULL REFERENCES reconciliation.reconciliation_run(id),
+    run_id UUID NOT NULL,
     batch_id UUID NOT NULL REFERENCES reconciliation.reconciliation_batch(id),
-    statement_entry_id UUID REFERENCES reconciliation.channel_statement_entry(id),
+    statement_entry_id UUID,
     payment_id UUID,
     result_type VARCHAR(32) NOT NULL CHECK (result_type IN
         ('MATCHED', 'AMOUNT_MISMATCH', 'CHANNEL_ONLY', 'INTERNAL_ONLY')),
@@ -167,7 +197,13 @@ CREATE TABLE reconciliation.reconciliation_result_work (
             AND statement_entry_id IS NOT NULL AND payment_id IS NOT NULL)),
     CONSTRAINT ck_reconciliation_result_work_resolution CHECK (
         (result_type = 'MATCHED' AND resolution_status = 'NOT_REQUIRED')
-        OR (result_type <> 'MATCHED' AND resolution_status = 'OPEN'))
+        OR (result_type <> 'MATCHED' AND resolution_status = 'OPEN')),
+    CONSTRAINT fk_reconciliation_result_work_run_batch
+        FOREIGN KEY (run_id, batch_id)
+        REFERENCES reconciliation.reconciliation_run(id, batch_id),
+    CONSTRAINT fk_reconciliation_result_work_statement_batch
+        FOREIGN KEY (statement_entry_id, batch_id)
+        REFERENCES reconciliation.channel_statement_entry(id, batch_id)
 );
 
 CREATE UNIQUE INDEX uq_reconciliation_result_work_statement
