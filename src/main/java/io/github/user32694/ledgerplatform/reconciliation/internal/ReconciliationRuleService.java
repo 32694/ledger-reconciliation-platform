@@ -158,10 +158,11 @@ class ReconciliationRuleService implements ReconciliationRulesApi {
         if (!channel.active()) {
             throw new IllegalStateException("对账渠道未启用: " + channel.code());
         }
-        var channelRule = ruleRepository.findByChannelId(channel.id())
-                .orElseThrow(() -> new IllegalStateException("对账渠道未配置规则: " + channel.code()));
-        if (channelRule.activeVersionId() != null) {
-            return toVersionView(findVersion(channelRule.activeVersionId()), channelRule);
+        var channelVersion = ruleRepository.findByChannelId(channel.id())
+                .filter(rule -> rule.activeVersionId() != null)
+                .map(rule -> toVersionView(findVersion(rule.activeVersionId()), rule));
+        if (channelVersion.isPresent()) {
+            return channelVersion.get();
         }
         var defaultRule = findDefaultRule();
         if (defaultRule.activeVersionId() == null) {

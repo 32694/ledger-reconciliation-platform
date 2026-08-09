@@ -80,6 +80,25 @@ class ReconciliationRuleModuleTest {
         assertThatThrownBy(() -> rulesApi.resolvePublishedVersion("ALIPAY"))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("对账渠道未启用: ALIPAY");
+
+        var enabled = rulesApi.setChannelActive("ALIPAY", true, "channel-enabler");
+
+        assertThat(enabled.active()).isTrue();
+        assertThat(enabled.version()).isEqualTo(2);
+        assertThat(rulesApi.findChannels(false))
+                .extracting(ReconciliationChannelView::code)
+                .containsExactly("ALIPAY", "UNION_PAY", "WECHAT_PAY");
+        assertThat(auditApi.findRecent(
+                        AuditAction.RECONCILIATION_CHANNEL_STATUS_CHANGE,
+                        AuditOutcome.SUCCEEDED,
+                        10))
+                .hasSize(2)
+                .anySatisfy(event -> {
+                    assertThat(event.actor()).isEqualTo("channel-enabler");
+                    assertThat(event.aggregateId()).isEqualTo(enabled.id().toString());
+                    assertThat(event.summary()).isEqualTo("对账渠道已启用");
+                    assertThat(event.correlationReference()).isEqualTo("ALIPAY");
+                });
     }
 
     @Test
@@ -129,6 +148,20 @@ class ReconciliationRuleModuleTest {
     }
 
     @Test
+    void resolvesDefaultWhenAnActiveChannelHasNoRuleDefinition() {
+        assertThat(jdbcTemplate.update(
+                        "DELETE FROM reconciliation.reconciliation_rule WHERE id = ?",
+                        ALIPAY_RULE_ID))
+                .isOne();
+
+        var resolved = rulesApi.resolvePublishedVersion("ALIPAY");
+
+        assertThat(resolved.ruleId()).isEqualTo(DEFAULT_RULE_ID);
+        assertThat(resolved.sourceScope()).isEqualTo(RuleScopeType.DEFAULT);
+        assertThat(resolved.status()).isEqualTo(RuleVersionStatus.PUBLISHED);
+    }
+
+    @Test
     void keepsPublishedVersionsImmutableAndOnlyTheLatestDraftMutable() {
         var firstDraft = rulesApi.saveDraft(
                 WECHAT_RULE_ID, new ReconciliationRuleDraftCommand(10, 24, "editor-1"));
@@ -156,6 +189,11 @@ class ReconciliationRuleModuleTest {
 
     @Test
     void validatesDraftAndAdministrationInputs() {
+        assertThat(rulesApi.saveDraft(
+                                DEFAULT_RULE_ID,
+                                new ReconciliationRuleDraftCommand(0, 168, "operator"))
+                        .queryWindowHours())
+                .isEqualTo(168);
         assertThatThrownBy(() -> rulesApi.saveDraft(
                         DEFAULT_RULE_ID,
                         new ReconciliationRuleDraftCommand(-1, 0, "operator")))
