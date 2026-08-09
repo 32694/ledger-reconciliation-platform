@@ -65,6 +65,9 @@ public class AuditWebController {
             case RECONCILIATION_CASE_RELEASE -> "取消认领";
             case RECONCILIATION_CASE_RESOLVE -> "解决差异";
             case RECONCILIATION_RESOLVE -> "处理差异（旧版）";
+            case RECONCILIATION_RULE_DRAFT_SAVE -> "保存对账规则草稿";
+            case RECONCILIATION_RULE_PUBLISH -> "发布对账规则";
+            case RECONCILIATION_CHANNEL_STATUS_CHANGE -> "变更对账渠道状态";
         };
     }
 

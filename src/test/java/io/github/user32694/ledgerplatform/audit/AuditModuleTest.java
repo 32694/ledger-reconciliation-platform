@@ -47,7 +47,10 @@ class AuditModuleTest {
                         AuditAction.RECONCILIATION_CASE_CLAIM,
                         AuditAction.RECONCILIATION_CASE_RELEASE,
                         AuditAction.RECONCILIATION_CASE_RESOLVE,
-                        AuditAction.RECONCILIATION_RESOLVE);
+                        AuditAction.RECONCILIATION_RESOLVE,
+                        AuditAction.RECONCILIATION_RULE_DRAFT_SAVE,
+                        AuditAction.RECONCILIATION_RULE_PUBLISH,
+                        AuditAction.RECONCILIATION_CHANNEL_STATUS_CHANGE);
         assertThat(AuditOutcome.values())
                 .containsExactly(AuditOutcome.SUCCEEDED, AuditOutcome.FAILED);
     }
