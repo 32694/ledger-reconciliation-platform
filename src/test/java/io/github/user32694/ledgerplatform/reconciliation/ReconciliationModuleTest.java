@@ -217,7 +217,8 @@ class ReconciliationModuleTest {
 
         var batch = reconciliationApi.importStatement(
                 new StatementUpload("matching.csv", csv(rows), "admin"));
-        var completed = reconciliationApi.run(batch.id());
+        runToCompletion(batch.id(), "operator-match");
+        var completed = reconciliationApi.getBatch(batch.id());
 
         assertThat(completed.status()).isEqualTo(BatchStatus.COMPLETED);
         assertThat(completed.matchedRows()).isEqualTo(1);
@@ -232,7 +233,7 @@ class ReconciliationModuleTest {
         assertThat(auditApi.findRecent(AuditAction.RECONCILIATION_RUN, null, 100))
                 .singleElement()
                 .satisfies(event -> {
-                    assertThat(event.actor()).isEqualTo("SYSTEM");
+                    assertThat(event.actor()).isEqualTo("operator-match");
                     assertThat(event.aggregateId()).isEqualTo(batch.id().toString());
                     assertThat(event.outcome()).isEqualTo(AuditOutcome.SUCCEEDED);
                 });
@@ -242,14 +243,16 @@ class ReconciliationModuleTest {
     void completedBatchRunIsIdempotent() {
         var batch = reconciliationApi.importStatement(new StatementUpload(
                 "rerun.csv", csv("CH-RERUN,1,2026-01-15T09:30:00Z\n"), "admin"));
-        var completed = reconciliationApi.run(batch.id());
+        var firstRun = runToCompletion(batch.id(), "operator-first");
+        var completed = reconciliationApi.getBatch(batch.id());
         var firstResultIds = reconciliationApi.findResults(batch.id(), null, null).stream()
                 .map(ReconciliationResultView::id)
                 .toList();
 
-        var repeated = reconciliationApi.run(batch.id());
+        var repeated = reconciliationApi.startRun(batch.id(), "operator-repeat");
 
-        assertThat(repeated).isEqualTo(completed);
+        assertThat(repeated).isEqualTo(firstRun);
+        assertThat(reconciliationApi.getBatch(batch.id())).isEqualTo(completed);
         assertThat(reconciliationApi.findResults(batch.id(), null, null).stream()
                 .map(ReconciliationResultView::id)
                 .toList()).containsExactlyElementsOf(firstResultIds);
@@ -258,7 +261,7 @@ class ReconciliationModuleTest {
     }
 
     @Test
-    void synchronousRunRejectsAnActiveAsyncAttemptWithoutChangingState() {
+    void repeatedStartReturnsActiveAsyncAttemptWithoutChangingState() {
         var batch = reconciliationApi.importStatement(new StatementUpload(
                 "sync-active.csv", csv("CH-SYNC-ACTIVE,1,2026-01-15T09:30:00Z\n"), "admin"));
         var runId = UUID.randomUUID();
@@ -272,11 +275,11 @@ class ReconciliationModuleTest {
                 batch.id(),
                 Timestamp.from(Instant.parse("2026-01-15T10:00:00Z")));
 
-        assertThatThrownBy(() -> reconciliationApi.run(batch.id()))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessage("Batch has an active reconciliation run");
+        var repeated = reconciliationApi.startRun(batch.id(), "operator-repeat");
 
         assertThat(reconciliationApi.getBatch(batch.id()).status()).isEqualTo(BatchStatus.IMPORTED);
+        assertThat(repeated.id()).isEqualTo(runId);
+        assertThat(repeated.requestedBy()).isEqualTo("operator-async");
         assertThat(reconciliationApi.findRuns(batch.id()))
                 .singleElement()
                 .satisfies(run -> {
@@ -293,20 +296,21 @@ class ReconciliationModuleTest {
     @Sql(statements = {
         "ALTER TABLE reconciliation.reconciliation_result DROP CONSTRAINT IF EXISTS ck_test_result_insert_failure"
     }, executionPhase = ExecutionPhase.AFTER_TEST_METHOD)
-    void auditsFailedReconciliationRun() {
+    void auditsFailedReconciliationRun() throws InterruptedException {
         var batch = reconciliationApi.importStatement(new StatementUpload(
                 "failed-run.csv", csv("CH-FAILED-RUN,1,2026-01-15T09:30:00Z\n"), "admin"));
 
-        assertThatThrownBy(() -> reconciliationApi.run(batch.id()))
-                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+        reconciliationApi.startRun(batch.id(), "operator-failed");
+        var failed = awaitRunStatus(batch.id(), RunStatus.FAILED);
 
+        assertThat(failed.errorMessage()).contains("DataIntegrityViolationException");
         assertThat(reconciliationApi.getBatch(batch.id()).status())
                 .isEqualTo(BatchStatus.RECONCILIATION_FAILED);
         assertThat(auditApi.findRecent(
                         AuditAction.RECONCILIATION_RUN, AuditOutcome.FAILED, 100))
                 .singleElement()
                 .satisfies(event -> {
-                    assertThat(event.actor()).isEqualTo("SYSTEM");
+                    assertThat(event.actor()).isEqualTo("operator-failed");
                     assertThat(event.aggregateId()).isEqualTo(batch.id().toString());
                 });
     }
@@ -507,7 +511,7 @@ class ReconciliationModuleTest {
                 "matched-claim.csv",
                 csv(row(payment.channelReference(), 1, payment.occurredAt()) + "\n"),
                 "admin"));
-        reconciliationApi.run(batch.id());
+        runToCompletion(batch.id(), "operator-matched-claim");
         var matched = reconciliationApi.findResults(batch.id(), ResultType.MATCHED, null).get(0);
 
         assertThatThrownBy(() -> reconciliationApi.claim(matched.id(), "operator-1"))
@@ -563,7 +567,7 @@ class ReconciliationModuleTest {
         var batch = reconciliationApi.importStatement(new StatementUpload(
                 "cannot-run.csv", csv("CH-BAD,nope,2026-01-15T09:30:00Z\n"), "admin"));
 
-        assertThatThrownBy(() -> reconciliationApi.run(batch.id()))
+        assertThatThrownBy(() -> reconciliationApi.startRun(batch.id(), "operator-import-failed"))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("IMPORT_FAILED");
         assertThat(reconciliationApi.getBatch(batch.id()).status()).isEqualTo(BatchStatus.IMPORT_FAILED);
@@ -573,7 +577,7 @@ class ReconciliationModuleTest {
     void resolvesDifferenceOnceWithAnAuditRecord() {
         var batch = reconciliationApi.importStatement(new StatementUpload(
                 "resolve.csv", csv("CH-RESOLVE,1,2026-01-15T09:30:00Z\n"), "admin"));
-        reconciliationApi.run(batch.id());
+        runToCompletion(batch.id(), "operator-resolve");
         var difference = reconciliationApi.findResults(batch.id(), ResultType.CHANNEL_ONLY, ResolutionStatus.OPEN)
                 .get(0);
 
@@ -609,7 +613,7 @@ class ReconciliationModuleTest {
         var payment = paymentsApi.topUp(new TopUpCommand("resolve-match", account.id(), 1));
         var batch = reconciliationApi.importStatement(new StatementUpload(
                 "matched.csv", csv(row(payment.channelReference(), 1, payment.occurredAt()) + "\n"), "admin"));
-        reconciliationApi.run(batch.id());
+        runToCompletion(batch.id(), "operator-matched");
         var matched = reconciliationApi.findResults(batch.id(), ResultType.MATCHED, null).get(0);
 
         assertThatThrownBy(() -> reconciliationApi.resolve(matched.id(), "not needed", "operator"))
@@ -669,7 +673,7 @@ class ReconciliationModuleTest {
                 csv(row(payment.channelReference(), 100, payment.occurredAt())
                         + "\nSUMMARY-DIFF,50,2026-01-15T10:00:00Z\n"),
                 "admin"));
-        reconciliationApi.run(batch.id());
+        runToCompletion(batch.id(), "operator-summary");
         var difference = reconciliationApi.findResults(batch.id(), ResultType.CHANNEL_ONLY, ResolutionStatus.OPEN)
                 .get(0);
         reconciliationApi.claim(difference.id(), "summary-operator");
@@ -699,7 +703,7 @@ class ReconciliationModuleTest {
                 suffix + ".csv",
                 csv("CH-" + suffix.toUpperCase() + ",1,2026-01-15T09:30:00Z\n"),
                 "admin"));
-        reconciliationApi.run(batch.id());
+        runToCompletion(batch.id(), "operator-" + suffix);
         return reconciliationApi.findResults(
                 batch.id(), ResultType.CHANNEL_ONLY, ResolutionStatus.OPEN).get(0);
     }
@@ -740,6 +744,16 @@ class ReconciliationModuleTest {
         }
         throw new AssertionError("Expected run status " + expected + " but was "
                 + (latest == null ? "missing" : latest.status()));
+    }
+
+    private ReconciliationRunView runToCompletion(UUID batchId, String operator) {
+        reconciliationApi.startRun(batchId, operator);
+        try {
+            return awaitRunStatus(batchId, RunStatus.SUCCEEDED);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("Interrupted while waiting for reconciliation run", exception);
+        }
     }
 
     private static byte[] csv(String rows) {

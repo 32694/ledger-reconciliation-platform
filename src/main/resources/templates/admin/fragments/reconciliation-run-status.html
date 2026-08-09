@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org">
+<body>
+<div th:fragment="status" th:if="${run != null}" hx-target="this" hx-swap="outerHTML"
+     th:attr="hx-get=${run.active ? '/admin/reconciliation/' + batchId + '/run-status' : null},
+              hx-trigger=${run.active ? 'every 2s' : null}">
+    <span class="status" th:text="${run.statusLabel}">等待执行</span>
+</div>
+</body>
+</html>

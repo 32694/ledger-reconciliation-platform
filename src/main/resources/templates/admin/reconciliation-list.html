@@ -19,17 +19,22 @@
         </div>
         <div class="table-scroll">
             <table>
-                <thead><tr><th>文件名</th><th>状态</th><th class="numeric">总行数</th><th class="numeric">匹配</th><th class="numeric">差异</th><th>操作</th></tr></thead>
+                <thead><tr><th>文件名</th><th>批次状态</th><th>最近运行</th><th class="numeric">总行数</th><th class="numeric">匹配</th><th class="numeric">差异</th><th>操作</th></tr></thead>
                 <tbody>
                 <tr th:each="batch : ${batches}">
                     <td class="mono" th:text="${batch.fileName}">statement.csv</td>
                     <td><span class="status" th:text="${batch.statusLabel}">待对账</span></td>
+                    <td>
+                        <span th:if="${batch.latestRun != null}"
+                              th:text="${'第 ' + batch.latestRun.attemptNumber + ' 次 · ' + batch.latestRun.statusLabel + ' · ' + batch.latestRun.requestedBy}">第 1 次 · 等待执行 · admin</span>
+                        <span th:if="${batch.latestRun == null}">尚未运行</span>
+                    </td>
                     <td class="numeric" th:text="${batch.totalRows}">0</td>
                     <td class="numeric" th:text="${batch.matchedRows}">0</td>
                     <td class="numeric" th:text="${batch.differenceRows}">0</td>
                     <td><a class="text-link" th:href="@{/admin/reconciliation/{id}(id=${batch.id})}">查看详情</a></td>
                 </tr>
-                <tr th:if="${#lists.isEmpty(batches)}"><td colspan="6" class="empty-state">暂无对账批次</td></tr>
+                <tr th:if="${#lists.isEmpty(batches)}"><td colspan="7" class="empty-state">暂无对账批次</td></tr>
                 </tbody>
             </table>
         </div>

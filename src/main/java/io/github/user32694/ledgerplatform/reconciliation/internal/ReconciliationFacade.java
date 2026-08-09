@@ -28,19 +28,16 @@ import org.springframework.stereotype.Service;
 public class ReconciliationFacade implements ReconciliationApi {
     private final ReconciliationImportService importService;
     private final ReconciliationStore store;
-    private final ReconciliationRunner runner;
     private final ReconciliationTaskDispatcher taskDispatcher;
     private final PaymentsApi paymentsApi;
 
     public ReconciliationFacade(
             ReconciliationImportService importService,
             ReconciliationStore store,
-            ReconciliationRunner runner,
             ReconciliationTaskDispatcher taskDispatcher,
             PaymentsApi paymentsApi) {
         this.importService = importService;
         this.store = store;
-        this.runner = runner;
         this.taskDispatcher = taskDispatcher;
         this.paymentsApi = paymentsApi;
     }
@@ -72,14 +69,6 @@ public class ReconciliationFacade implements ReconciliationApi {
             throw new IllegalArgumentException("Batch id is required");
         }
         return store.getBatch(batchId);
-    }
-
-    @Override
-    public ReconciliationBatchView run(UUID batchId) {
-        if (batchId == null) {
-            throw new IllegalArgumentException("Batch id is required");
-        }
-        return runner.run(batchId);
     }
 
     @Override

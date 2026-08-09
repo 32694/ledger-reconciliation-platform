@@ -10,7 +10,8 @@
         <div class="actions">
             <form th:if="${canRun}" method="post" th:action="@{/admin/reconciliation/{id}/run(id=${batch.id})}">
                 <input type="hidden" th:name="${_csrf.parameterName}" th:value="${_csrf.token}">
-                <button class="button button-primary" type="submit">开始对账</button>
+                <button class="button button-primary" type="submit"
+                        th:text="${latestRun != null && latestRun.status.name() == 'FAILED' ? '重新发起对账' : '开始对账'}">开始对账</button>
             </form>
             <a class="button button-secondary" th:href="@{/admin/reconciliation}">返回批次</a>
         </div>
@@ -21,7 +22,38 @@
         <article><span>匹配笔数</span><strong th:text="${batch.matchedRows}">0</strong></article>
         <article><span>差异笔数</span><strong th:text="${batch.differenceRows}">0</strong></article>
     </section>
-    <p class="alert alert-error" th:if="${batch.errorMessage}" th:text="${batch.errorMessage}">批次失败</p>
+    <p class="alert alert-error" th:if="${runError}" th:text="${runError}">无法启动对账，请稍后重试</p>
+    <p class="alert alert-error"
+       th:if="${batch.status.name() == 'IMPORT_FAILED' && batch.errorMessage != null}"
+       th:text="${'渠道账单导入失败：' + batch.errorMessage}">渠道账单导入失败</p>
+    <p class="alert alert-error" th:if="${latestRun != null && latestRun.status.name() == 'FAILED'}">对账任务失败，可重新发起</p>
+    <div th:if="${latestRun != null}"
+         th:replace="~{admin/fragments/reconciliation-run-status :: status}"></div>
+    <section class="table-section">
+        <div class="section-heading">
+            <div><h2>运行历史</h2><p>按发起次数倒序展示</p></div>
+        </div>
+        <div class="table-scroll">
+            <table>
+                <thead><tr><th>次数</th><th>发起人</th><th>请求时间</th><th>开始时间</th><th>完成时间</th><th>耗时</th><th>状态</th><th class="numeric">匹配</th><th class="numeric">差异</th><th>失败原因</th></tr></thead>
+                <tbody>
+                <tr th:each="historyRun : ${runs}">
+                    <td th:text="${'第 ' + historyRun.attemptNumber + ' 次'}">第 1 次</td>
+                    <td th:text="${historyRun.requestedBy}">admin</td>
+                    <td th:text="${historyRun.requestedAt}">-</td>
+                    <td th:text="${historyRun.startedAt != null ? historyRun.startedAt : '-'}">-</td>
+                    <td th:text="${historyRun.completedAt != null ? historyRun.completedAt : '-'}">-</td>
+                    <td th:text="${historyRun.durationLabel}">--</td>
+                    <td><span class="status" th:text="${historyRun.statusLabel}">等待执行</span></td>
+                    <td class="numeric" th:text="${historyRun.matchedRows}">0</td>
+                    <td class="numeric" th:text="${historyRun.differenceRows}">0</td>
+                    <td th:text="${historyRun.errorMessage != null ? historyRun.errorMessage : '-'}">-</td>
+                </tr>
+                <tr th:if="${#lists.isEmpty(runs)}"><td colspan="10" class="empty-state">暂无运行记录</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
     <section class="table-section">
         <div class="section-heading">
             <div><h2>对账结果</h2><p>精确匹配渠道流水号与金额</p></div>

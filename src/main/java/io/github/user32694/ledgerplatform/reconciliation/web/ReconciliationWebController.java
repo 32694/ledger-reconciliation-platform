@@ -4,9 +4,14 @@ import io.github.user32694.ledgerplatform.reconciliation.BatchStatus;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationApi;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationBatchView;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationResultView;
+import io.github.user32694.ledgerplatform.reconciliation.ReconciliationRunView;
 import io.github.user32694.ledgerplatform.reconciliation.ResolutionStatus;
 import io.github.user32694.ledgerplatform.reconciliation.ResultType;
+import io.github.user32694.ledgerplatform.reconciliation.RunStatus;
 import io.github.user32694.ledgerplatform.reconciliation.StatementUpload;
+import jakarta.servlet.http.HttpServletResponse;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.security.core.Authentication;
@@ -17,6 +22,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 import org.springframework.web.multipart.MultipartFile;
 
 @Controller
@@ -31,7 +37,10 @@ public class ReconciliationWebController {
     @GetMapping
     String list(Model model) {
         model.addAttribute("batches", reconciliationApi.findBatches().stream()
-                .map(ReconciliationWebController::toBatchRow)
+                .map(batch -> toBatchRow(batch, reconciliationApi.findRuns(batch.id()).stream()
+                        .findFirst()
+                        .map(ReconciliationWebController::toRunRow)
+                        .orElse(null)))
                 .toList());
         model.addAttribute("activeNav", "reconciliation");
         return "admin/reconciliation-list";
@@ -73,25 +82,58 @@ public class ReconciliationWebController {
             @RequestParam(required = false) ResolutionStatus resolutionStatus,
             Model model) {
         ReconciliationBatchView batch = reconciliationApi.getBatch(batchId);
+        List<RunRow> runs = reconciliationApi.findRuns(batchId).stream()
+                .map(ReconciliationWebController::toRunRow)
+                .toList();
+        RunRow latestRun = runs.isEmpty() ? null : runs.get(0);
         List<ResultRow> results = reconciliationApi.findResults(batchId, resultType, resolutionStatus).stream()
                 .map(ReconciliationWebController::toResultRow)
                 .toList();
-        model.addAttribute("batch", toBatchRow(batch));
+        model.addAttribute("batch", toBatchRow(batch, latestRun));
+        model.addAttribute("batchId", batchId);
+        model.addAttribute("runs", runs);
+        model.addAttribute("run", latestRun);
+        model.addAttribute("latestRun", latestRun);
         model.addAttribute("results", results);
         model.addAttribute("resultTypes", ResultType.values());
         model.addAttribute("resolutionStatuses", ResolutionStatus.values());
         model.addAttribute("selectedResultType", resultType == null ? "" : resultType.name());
         model.addAttribute("selectedResolutionStatus", resolutionStatus == null ? "" : resolutionStatus.name());
-        model.addAttribute("canRun", batch.status() == BatchStatus.IMPORTED
-                || batch.status() == BatchStatus.RECONCILIATION_FAILED);
+        model.addAttribute("canRun", (batch.status() == BatchStatus.IMPORTED
+                || batch.status() == BatchStatus.RECONCILIATION_FAILED)
+                && (latestRun == null || !latestRun.active()));
         model.addAttribute("activeNav", "reconciliation");
         return "admin/reconciliation-detail";
     }
 
     @PostMapping("/{batchId}/run")
-    String run(@PathVariable UUID batchId) {
-        reconciliationApi.run(batchId);
+    String run(
+            @PathVariable UUID batchId,
+            Authentication authentication,
+            RedirectAttributes redirectAttributes) {
+        try {
+            reconciliationApi.startRun(batchId, authentication.getName());
+        } catch (RuntimeException exception) {
+            redirectAttributes.addFlashAttribute("runError", "无法启动对账，请稍后重试");
+        }
         return "redirect:/admin/reconciliation/" + batchId;
+    }
+
+    @GetMapping("/{batchId}/run-status")
+    String runStatus(
+            @PathVariable UUID batchId,
+            Model model,
+            HttpServletResponse response) {
+        var latestRun = reconciliationApi.findRuns(batchId).stream()
+                .findFirst()
+                .map(ReconciliationWebController::toRunRow)
+                .orElse(null);
+        model.addAttribute("batchId", batchId);
+        model.addAttribute("run", latestRun);
+        if (latestRun != null && !latestRun.active()) {
+            response.setHeader("HX-Refresh", "true");
+        }
+        return "admin/fragments/reconciliation-run-status :: status";
     }
 
     @PostMapping("/results/{resultId}/resolve")
@@ -103,10 +145,10 @@ public class ReconciliationWebController {
         return "redirect:/admin/reconciliation/" + resolved.batchId();
     }
 
-    private static BatchRow toBatchRow(ReconciliationBatchView batch) {
+    private static BatchRow toBatchRow(ReconciliationBatchView batch, RunRow latestRun) {
         return new BatchRow(
                 batch.id(), batch.fileName(), batch.status(), statusLabel(batch.status()),
-                batch.totalRows(), batch.matchedRows(), batch.differenceRows(), batch.errorMessage());
+                batch.totalRows(), batch.matchedRows(), batch.differenceRows(), batch.errorMessage(), latestRun);
     }
 
     private static ResultRow toResultRow(ReconciliationResultView result) {
@@ -115,6 +157,22 @@ public class ReconciliationWebController {
                 result.channelTransactionId(), result.channelAmountCents(), result.internalAmountCents(),
                 result.resultType(), resultTypeLabel(result.resultType()), result.resolutionStatus(),
                 resolutionLabel(result.resolutionStatus()), result.resolutionNote(), result.resolvedBy());
+    }
+
+    private static RunRow toRunRow(ReconciliationRunView run) {
+        return new RunRow(
+                run.id(), run.attemptNumber(), run.status(), runStatusLabel(run.status()),
+                run.requestedBy(), run.requestedAt(), run.startedAt(), run.completedAt(),
+                durationLabel(run.startedAt(), run.completedAt()),
+                run.matchedRows(), run.differenceRows(), run.errorMessage(),
+                run.status() == RunStatus.QUEUED || run.status() == RunStatus.RUNNING);
+    }
+
+    private static String durationLabel(Instant startedAt, Instant completedAt) {
+        if (startedAt == null || completedAt == null) {
+            return "--";
+        }
+        return Duration.between(startedAt, completedAt).toSeconds() + " 秒";
     }
 
     private static String statusLabel(BatchStatus status) {
@@ -136,6 +194,15 @@ public class ReconciliationWebController {
         };
     }
 
+    private static String runStatusLabel(RunStatus status) {
+        return switch (status) {
+            case QUEUED -> "等待执行";
+            case RUNNING -> "对账中";
+            case SUCCEEDED -> "已完成";
+            case FAILED -> "执行失败";
+        };
+    }
+
     private static String resolutionLabel(ResolutionStatus status) {
         return switch (status) {
             case NOT_REQUIRED -> "无需处理";
@@ -153,7 +220,8 @@ public class ReconciliationWebController {
             int totalRows,
             int matchedRows,
             int differenceRows,
-            String errorMessage) {}
+            String errorMessage,
+            RunRow latestRun) {}
 
     public record ResultRow(
             UUID id,
@@ -169,4 +237,19 @@ public class ReconciliationWebController {
             String resolutionLabel,
             String resolutionNote,
             String resolvedBy) {}
+
+    public record RunRow(
+            UUID id,
+            int attemptNumber,
+            RunStatus status,
+            String statusLabel,
+            String requestedBy,
+            Instant requestedAt,
+            Instant startedAt,
+            Instant completedAt,
+            String durationLabel,
+            int matchedRows,
+            int differenceRows,
+            String errorMessage,
+            boolean active) {}
 }

@@ -1,11 +1,15 @@
 package io.github.user32694.ledgerplatform.reconciliation;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.not;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrlPattern;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.view;
@@ -14,12 +18,21 @@ import io.github.user32694.ledgerplatform.accounts.AccountsApi;
 import io.github.user32694.ledgerplatform.payments.PaymentsApi;
 import io.github.user32694.ledgerplatform.payments.TopUpCommand;
 import java.nio.charset.StandardCharsets;
+import java.sql.Timestamp;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.test.context.support.WithMockUser;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.context.jdbc.Sql.ExecutionPhase;
@@ -35,6 +48,7 @@ import org.springframework.test.web.servlet.MockMvc;
         "TRUNCATE reconciliation.reconciliation_case_event",
         "DELETE FROM reconciliation.reconciliation_resolution",
         "DELETE FROM reconciliation.reconciliation_result",
+        "DELETE FROM reconciliation.reconciliation_run",
         "DELETE FROM reconciliation.channel_statement_entry",
         "DELETE FROM reconciliation.reconciliation_batch",
         "DELETE FROM payments.payment_instruction",
@@ -48,6 +62,8 @@ class ReconciliationWebTest {
     @Autowired ReconciliationApi reconciliationApi;
     @Autowired AccountsApi accountsApi;
     @Autowired PaymentsApi paymentsApi;
+    @Autowired JdbcTemplate jdbcTemplate;
+    @Autowired @Qualifier("reconciliationTaskExecutor") ThreadPoolTaskExecutor taskExecutor;
 
     @Test
     void redirectsAnonymousUserToLogin() throws Exception {
@@ -86,20 +102,248 @@ class ReconciliationWebTest {
     }
 
     @Test
-    @WithMockUser(roles = "ADMIN")
-    void runsBatchAndResolvesDifferenceThroughPostRoutes() throws Exception {
+    @WithMockUser(username = "run-admin", roles = "ADMIN")
+    void startsBatchForAuthenticatedOperatorWithoutWaitingForExecution() throws Exception {
         var batch = reconciliationApi.importStatement(new StatementUpload(
                 "routes.csv", "channel_transaction_id,amount_cents,occurred_at\nCH-ROUTE,1,2026-01-15T09:30:00Z\n"
                         .getBytes(StandardCharsets.UTF_8), "admin"));
+        var workersStarted = new CountDownLatch(2);
+        var releaseWorkers = new CountDownLatch(1);
+        try {
+            for (int worker = 0; worker < 2; worker++) {
+                taskExecutor.execute(() -> {
+                    workersStarted.countDown();
+                    try {
+                        releaseWorkers.await();
+                    } catch (InterruptedException exception) {
+                        Thread.currentThread().interrupt();
+                    }
+                });
+            }
+            assertThat(workersStarted.await(2, TimeUnit.SECONDS)).isTrue();
+
+            mockMvc.perform(post("/admin/reconciliation/{batchId}/run", batch.id()).with(csrf()))
+                    .andExpect(status().is3xxRedirection())
+                    .andExpect(redirectedUrl("/admin/reconciliation/" + batch.id()));
+
+            assertThat(reconciliationApi.findRuns(batch.id()))
+                    .singleElement()
+                    .satisfies(run -> {
+                        assertThat(run.requestedBy()).isEqualTo("run-admin");
+                        assertThat(run.status()).isEqualTo(RunStatus.QUEUED);
+                    });
+        } finally {
+            releaseWorkers.countDown();
+        }
+        awaitRunStatus(batch.id(), RunStatus.SUCCEEDED);
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void activeRunStatusFragmentPollsEveryTwoSeconds() throws Exception {
+        var activeBatch = importBatch("active.csv", "CH-ACTIVE");
+        insertRun(activeBatch.id(), 1, "QUEUED", "queue-admin", 0, 0, null);
+
+        mockMvc.perform(get("/admin/reconciliation/{batchId}/run-status", activeBatch.id()))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/fragments/reconciliation-run-status :: status"))
+                .andExpect(content().string(containsString(
+                        "hx-get=\"/admin/reconciliation/" + activeBatch.id() + "/run-status\"")))
+                .andExpect(content().string(containsString("hx-trigger=\"every 2s\"")))
+                .andExpect(content().string(containsString("hx-target=\"this\"")))
+                .andExpect(content().string(containsString("hx-swap=\"outerHTML\"")));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void terminalRunStatusFragmentRequestsPageRefreshWithoutPolling() throws Exception {
+        var terminalBatch = importBatch("terminal.csv", "CH-TERMINAL");
+        insertRun(terminalBatch.id(), 1, "FAILED", "failure-admin", 0, 0, "timeout");
+        mockMvc.perform(get("/admin/reconciliation/{batchId}/run-status", terminalBatch.id()))
+                .andExpect(status().isOk())
+                .andExpect(header().string("HX-Refresh", "true"))
+                .andExpect(content().string(containsString("执行失败")))
+                .andExpect(content().string(not(containsString("hx-get"))))
+                .andExpect(content().string(not(containsString("hx-trigger"))));
+    }
+
+    @Test
+    void protectsRunRouteFromAnonymousUsers() throws Exception {
+        mockMvc.perform(post("/admin/reconciliation/{batchId}/run", UUID.randomUUID()).with(csrf()))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrlPattern("**/login"));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void protectsRunRouteWithCsrf() throws Exception {
+        mockMvc.perform(post("/admin/reconciliation/{batchId}/run", UUID.randomUUID()))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void rendersOrderedRunHistoryOnBatchDetail() throws Exception {
+        var batch = importBatch("history.csv", "CH-HISTORY");
+        insertRun(batch.id(), 1, "FAILED", "first-admin", 0, 0, "database unavailable");
+        insertRun(batch.id(), 2, "SUCCEEDED", "retry-admin", 0, 1, null);
+
+        mockMvc.perform(get("/admin/reconciliation/{batchId}", batch.id()))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("运行历史")))
+                .andExpect(content().string(containsString("第 2 次")))
+                .andExpect(content().string(containsString("retry-admin")))
+                .andExpect(content().string(containsString("已完成")))
+                .andExpect(content().string(containsString("耗时")))
+                .andExpect(content().string(containsString("2 秒")))
+                .andExpect(content().string(containsString("第 1 次")))
+                .andExpect(content().string(containsString("first-admin")))
+                .andExpect(content().string(containsString("执行失败")))
+                .andExpect(content().string(containsString("database unavailable")));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void importFailedBatchDetailShowsStableErrorAndSpecificReason() throws Exception {
+        var batch = reconciliationApi.importStatement(new StatementUpload(
+                "invalid-detail.csv",
+                "channel_transaction_id,amount_cents,occurred_at\nCH-INVALID,nope,2026-01-15T09:30:00Z\n"
+                        .getBytes(StandardCharsets.UTF_8),
+                "admin"));
+        assertThat(batch.status()).isEqualTo(BatchStatus.IMPORT_FAILED);
+        assertThat(batch.errorMessage()).isNotBlank();
+
+        mockMvc.perform(get("/admin/reconciliation/{batchId}", batch.id()))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("渠道账单导入失败")))
+                .andExpect(content().string(containsString(batch.errorMessage())));
+    }
+
+    @Test
+    @WithMockUser(username = "retry-admin", roles = "ADMIN")
+    void failedBatchShowsStableMessageAndCanRetry() throws Exception {
+        var batch = importBatch("retry.csv", "CH-RETRY");
+        markBatchFailed(batch.id(), "IllegalStateException: internal detail");
+        insertRun(batch.id(), 1, "FAILED", "first-admin", 0, 0, "IllegalStateException: internal detail");
+
+        mockMvc.perform(get("/admin/reconciliation/{batchId}", batch.id()))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("对账任务失败，可重新发起")));
+
+        mockMvc.perform(post("/admin/reconciliation/{batchId}/run", batch.id()).with(csrf()))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/admin/reconciliation/" + batch.id()));
+        awaitRunStatus(batch.id(), RunStatus.SUCCEEDED);
+        assertThat(reconciliationApi.findRuns(batch.id()).get(0))
+                .satisfies(run -> {
+                    assertThat(run.attemptNumber()).isEqualTo(2);
+                    assertThat(run.requestedBy()).isEqualTo("retry-admin");
+                });
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void showsStableFlashWhenRunCannotStart() throws Exception {
+        var batch = importBatch("invalid-start.csv", "CH-INVALID-START");
+        jdbcTemplate.update("""
+                UPDATE reconciliation.reconciliation_batch SET status = 'RUNNING' WHERE id = ?
+                """, batch.id());
+
+        mockMvc.perform(post("/admin/reconciliation/{batchId}/run", batch.id()).with(csrf()))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/admin/reconciliation/" + batch.id()))
+                .andExpect(result -> assertThat(result.getFlashMap().get("runError"))
+                        .isEqualTo("无法启动对账，请稍后重试"));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void listShowsLatestRunSummary() throws Exception {
+        var batch = importBatch("list-run.csv", "CH-LIST-RUN");
+        insertRun(batch.id(), 1, "FAILED", "list-admin", 0, 0, "timeout");
+
+        mockMvc.perform(get("/admin/reconciliation"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("最近运行")))
+                .andExpect(content().string(containsString("第 1 次")))
+                .andExpect(content().string(containsString("list-admin")))
+                .andExpect(content().string(containsString("执行失败")));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void runsBatchAndResolvesDifferenceThroughPostRoutes() throws Exception {
+        var batch = reconciliationApi.importStatement(new StatementUpload(
+                "resolve-route.csv",
+                "channel_transaction_id,amount_cents,occurred_at\nCH-RESOLVE-ROUTE,1,2026-01-15T09:30:00Z\n"
+                        .getBytes(StandardCharsets.UTF_8),
+                "admin"));
 
         mockMvc.perform(post("/admin/reconciliation/{batchId}/run", batch.id()).with(csrf()))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedUrlPattern("/admin/reconciliation/*"));
+        awaitRunStatus(batch.id(), RunStatus.SUCCEEDED);
         var result = reconciliationApi.findResults(batch.id(), ResultType.CHANNEL_ONLY, ResolutionStatus.OPEN)
                 .get(0);
         mockMvc.perform(post("/admin/reconciliation/results/{resultId}/resolve", result.id())
                         .with(csrf()).param("note", "已核对"))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedUrlPattern("/admin/reconciliation/*"));
+    }
+
+    private ReconciliationBatchView importBatch(String fileName, String transactionId) {
+        return reconciliationApi.importStatement(new StatementUpload(
+                fileName,
+                ("channel_transaction_id,amount_cents,occurred_at\n"
+                        + transactionId + ",1,2026-01-15T09:30:00Z\n")
+                        .getBytes(StandardCharsets.UTF_8),
+                "admin"));
+    }
+
+    private void insertRun(
+            UUID batchId,
+            int attempt,
+            String runStatus,
+            String requestedBy,
+            int matchedRows,
+            int differenceRows,
+            String errorMessage) {
+        Instant requestedAt = Instant.parse("2026-01-15T10:00:00Z").plusSeconds(attempt * 60L);
+        Instant startedAt = runStatus.equals("QUEUED") ? null : requestedAt.plusSeconds(1);
+        Instant completedAt = runStatus.equals("QUEUED") || runStatus.equals("RUNNING")
+                ? null : requestedAt.plusSeconds(3);
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_run
+                    (id, batch_id, attempt_number, status, requested_by, requested_at,
+                     started_at, completed_at, matched_rows, difference_rows, error_message, version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                """,
+                UUID.randomUUID(), batchId, attempt, runStatus, requestedBy, Timestamp.from(requestedAt),
+                startedAt == null ? null : Timestamp.from(startedAt),
+                completedAt == null ? null : Timestamp.from(completedAt),
+                matchedRows, differenceRows, errorMessage);
+    }
+
+    private void markBatchFailed(UUID batchId, String errorMessage) {
+        jdbcTemplate.update("""
+                UPDATE reconciliation.reconciliation_batch
+                SET status = 'RECONCILIATION_FAILED', error_message = ?, completed_at = now()
+                WHERE id = ?
+                """, errorMessage, batchId);
+    }
+
+    private ReconciliationRunView awaitRunStatus(UUID batchId, RunStatus expected)
+            throws InterruptedException {
+        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        ReconciliationRunView latest = null;
+        while (System.nanoTime() < deadline) {
+            latest = reconciliationApi.findRuns(batchId).get(0);
+            if (latest.status() == expected) {
+                return latest;
+            }
+            Thread.sleep(20);
+        }
+        throw new AssertionError("Expected run status " + expected + " but was "
+                + (latest == null ? "missing" : latest.status()));
     }
 }

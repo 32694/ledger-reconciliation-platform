@@ -235,25 +235,6 @@ class ReconciliationStore {
                 .orElseThrow(() -> new IllegalArgumentException("Batch does not exist: " + batchId));
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    ReconciliationBatchView markRunningOrReturnCompleted(UUID batchId) {
-        var batch = batchRepository.findByIdForUpdate(batchId)
-                .orElseThrow(() -> new IllegalArgumentException("Batch does not exist: " + batchId));
-        var activeRun = runRepository.findFirstByBatchIdAndStatusInOrderByAttemptNumberDesc(
-                batchId, List.of(RunStatus.QUEUED, RunStatus.RUNNING));
-        if (activeRun.isPresent()) {
-            throw new IllegalStateException("Batch has an active reconciliation run");
-        }
-        if (batch.status() == BatchStatus.COMPLETED) {
-            return batch.toView();
-        }
-        if (batch.status() == BatchStatus.RUNNING) {
-            throw new IllegalStateException("Batch is already running");
-        }
-        batch.start(Instant.now());
-        return batch.toView();
-    }
-
     @Transactional(readOnly = true)
     List<ReconciliationMatcher.StatementEntrySnapshot> findStatementEntries(UUID batchId) {
         return entryRepository.findAllByBatchIdOrderByLineNumber(batchId).stream()
@@ -264,46 +245,6 @@ class ReconciliationStore {
                         entry.amountCents(),
                         entry.occurredAt()))
                 .toList();
-    }
-
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    ReconciliationBatchView replaceResultsAndComplete(
-            UUID batchId, List<ReconciliationMatcher.ResultDraft> drafts) {
-        var batch = findEntity(batchId);
-        resultRepository.deleteAllByBatchId(batchId);
-        resultRepository.flush();
-        resultRepository.saveAll(drafts.stream()
-                .map(draft -> ReconciliationResultEntity.from(batchId, draft, Instant.now()))
-                .toList());
-        int matchedRows = (int) drafts.stream()
-                .filter(draft -> draft.resultType().name().equals("MATCHED"))
-                .count();
-        batch.complete(matchedRows, drafts.size() - matchedRows, Instant.now());
-        auditApi.record(reconciliationAudit(
-                null,
-                AuditAction.RECONCILIATION_RUN,
-                "RECONCILIATION_BATCH",
-                batch.id(),
-                AuditOutcome.SUCCEEDED,
-                "对账运行成功",
-                null));
-        return batch.toView();
-    }
-
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    void markReconciliationFailed(UUID batchId, String message) {
-        var batch = findEntity(batchId);
-        if (batch.status() == BatchStatus.RUNNING) {
-            batch.failReconciliation(message, Instant.now());
-            auditApi.record(reconciliationAudit(
-                    null,
-                    AuditAction.RECONCILIATION_RUN,
-                    "RECONCILIATION_BATCH",
-                    batch.id(),
-                    AuditOutcome.FAILED,
-                    "对账运行失败",
-                    null));
-        }
     }
 
     @Transactional(readOnly = true)

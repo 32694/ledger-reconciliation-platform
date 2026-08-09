@@ -1,8 +1,6 @@
 package io.github.user32694.ledgerplatform.reconciliation.internal;
 
 import io.github.user32694.ledgerplatform.payments.PaymentsApi;
-import io.github.user32694.ledgerplatform.reconciliation.BatchStatus;
-import io.github.user32694.ledgerplatform.reconciliation.ReconciliationBatchView;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,22 +19,6 @@ class ReconciliationRunner {
         this.store = store;
         this.paymentsApi = paymentsApi;
         this.matcher = matcher;
-    }
-
-    ReconciliationBatchView run(UUID batchId) {
-        var started = store.markRunningOrReturnCompleted(batchId);
-        if (started.status() == BatchStatus.COMPLETED) {
-            return started;
-        }
-        try {
-            var entries = store.findStatementEntries(batchId);
-            var payments = paymentsApi.findSucceededTopUps(started.periodStart(), started.periodEnd());
-            var drafts = matcher.match(entries, payments);
-            return store.replaceResultsAndComplete(batchId, drafts);
-        } catch (RuntimeException exception) {
-            store.markReconciliationFailed(batchId, stableMessage(exception));
-            throw exception;
-        }
     }
 
     void execute(UUID runId) {
