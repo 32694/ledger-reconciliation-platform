@@ -96,6 +96,11 @@ tbody tr:hover { background: #f8fbfa; }
 .filter-form .checkbox-field input { min-width: 0; min-height: 0; width: 16px; height: 16px; }
 .split-workspace { display: grid; grid-template-columns: minmax(320px, 420px) minmax(0, 1fr); gap: 22px; align-items: start; }
 .compact-table td, .compact-table th { height: 40px; padding-inline: 10px; }
+.table-actions, .inline-form, .publish-action { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.inline-form { margin: 6px 0 0; }
+.table-actions .inline-form { margin: 0; }
+.pending-parameters { display: block; margin-top: 5px; color: var(--muted); white-space: normal; }
+.publish-action { justify-content: space-between; margin-top: 16px; padding: 14px 16px; border: 1px solid var(--line); background: var(--surface); }
 
 .alert { margin-bottom: 16px; padding: 10px 12px; border-left: 3px solid; }
 .alert-error { color: #7a1b14; background: #fff0ef; border-color: var(--danger); }

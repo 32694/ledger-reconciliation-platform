@@ -27,6 +27,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -61,18 +62,238 @@ import org.springframework.test.web.servlet.MockMvc;
         "DELETE FROM ledger.ledger_account"
 }, executionPhase = ExecutionPhase.BEFORE_TEST_METHOD)
 class ReconciliationWebTest {
+    private static final UUID DEFAULT_RULE_ID =
+            UUID.fromString("00000000-0000-0000-0000-000000000101");
+    private static final UUID ALIPAY_RULE_ID =
+            UUID.fromString("00000000-0000-0000-0000-000000000102");
+
     @Autowired MockMvc mockMvc;
     @Autowired ReconciliationApi reconciliationApi;
+    @Autowired ReconciliationRulesApi reconciliationRulesApi;
     @Autowired AccountsApi accountsApi;
     @Autowired PaymentsApi paymentsApi;
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired @Qualifier("reconciliationTaskExecutor") ThreadPoolTaskExecutor taskExecutor;
+
+    @BeforeEach
+    void resetReconciliationRuleFixture() {
+        jdbcTemplate.execute(
+                "TRUNCATE reconciliation.reconciliation_rule_version, "
+                        + "reconciliation.reconciliation_rule, "
+                        + "reconciliation.reconciliation_channel CASCADE");
+        jdbcTemplate.update(
+                """
+                INSERT INTO reconciliation.reconciliation_channel
+                    (id, code, display_name, active, created_at, version)
+                VALUES
+                    ('00000000-0000-0000-0000-000000000001', 'ALIPAY', '支付宝', true, CURRENT_TIMESTAMP, 0),
+                    ('00000000-0000-0000-0000-000000000002', 'WECHAT_PAY', '微信支付', true, CURRENT_TIMESTAMP, 0),
+                    ('00000000-0000-0000-0000-000000000003', 'UNION_PAY', '银联', true, CURRENT_TIMESTAMP, 0),
+                    ('00000000-0000-0000-0000-000000000004', 'LEGACY_SYNTHETIC', '历史兼容渠道', false, CURRENT_TIMESTAMP, 0)
+                """);
+        jdbcTemplate.update(
+                """
+                INSERT INTO reconciliation.reconciliation_rule
+                    (id, scope_type, channel_id, version)
+                VALUES
+                    ('00000000-0000-0000-0000-000000000101', 'DEFAULT', NULL, 0),
+                    ('00000000-0000-0000-0000-000000000102', 'CHANNEL', '00000000-0000-0000-0000-000000000001', 0),
+                    ('00000000-0000-0000-0000-000000000103', 'CHANNEL', '00000000-0000-0000-0000-000000000002', 0),
+                    ('00000000-0000-0000-0000-000000000104', 'CHANNEL', '00000000-0000-0000-0000-000000000003', 0)
+                """);
+        jdbcTemplate.update(
+                """
+                INSERT INTO reconciliation.reconciliation_rule_version
+                    (id, rule_id, version_number, status, amount_tolerance_cents,
+                     query_window_hours, created_by, created_at, published_by, published_at)
+                VALUES
+                    ('00000000-0000-0000-0000-000000000201',
+                     '00000000-0000-0000-0000-000000000101', 1, 'PUBLISHED', 0,
+                     0, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP)
+                """);
+        jdbcTemplate.update(
+                """
+                UPDATE reconciliation.reconciliation_rule
+                SET active_version_id = '00000000-0000-0000-0000-000000000201'
+                WHERE id = '00000000-0000-0000-0000-000000000101'
+                """);
+    }
 
     @Test
     void redirectsAnonymousUserToLogin() throws Exception {
         mockMvc.perform(get("/admin/reconciliation"))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedUrlPattern("**/login"));
+    }
+
+    @Test
+    void redirectsAnonymousRuleManagementRequestsToLogin() throws Exception {
+        mockMvc.perform(get("/admin/reconciliation/rules"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrlPattern("**/login"));
+        mockMvc.perform(get("/admin/reconciliation/rules/{ruleId}/edit", DEFAULT_RULE_ID))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrlPattern("**/login"));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void ruleManagementPostsRequireCsrf() throws Exception {
+        mockMvc.perform(post("/admin/reconciliation/rules/{ruleId}/draft", DEFAULT_RULE_ID)
+                        .param("amountTolerance", "1.00")
+                        .param("queryWindowHours", "24"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/admin/reconciliation/rules/{ruleId}/publish", DEFAULT_RULE_ID))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/admin/reconciliation/channels/{channelCode}/status", "ALIPAY")
+                        .param("active", "false"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void rendersChineseRuleListWithDefaultAndChannelSettings() throws Exception {
+        reconciliationRulesApi.saveDraft(
+                ALIPAY_RULE_ID, new ReconciliationRuleDraftCommand(125, 24, "fixture-editor"));
+
+        mockMvc.perform(get("/admin/reconciliation/rules"))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/reconciliation-rules"))
+                .andExpect(content().string(containsString("对账规则")))
+                .andExpect(content().string(containsString("默认规则")))
+                .andExpect(content().string(containsString("支付宝")))
+                .andExpect(content().string(containsString("生效版本")))
+                .andExpect(content().string(containsString("金额容差（元）")))
+                .andExpect(content().string(containsString("查询窗口（小时）")))
+                .andExpect(content().string(containsString("待发布草稿")))
+                .andExpect(content().string(containsString("渠道状态")))
+                .andExpect(content().string(containsString("编辑")))
+                .andExpect(content().string(containsString("发布")))
+                .andExpect(content().string(containsString("历史版本")))
+                .andExpect(content().string(containsString("1.25 元")))
+                .andExpect(content().string(containsString("24 小时")))
+                .andExpect(content().string(containsString("启用")));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void editFormShowsDraftAndEffectiveValues() throws Exception {
+        reconciliationRulesApi.saveDraft(
+                DEFAULT_RULE_ID, new ReconciliationRuleDraftCommand(1234, 48, "fixture-editor"));
+
+        mockMvc.perform(get("/admin/reconciliation/rules/{ruleId}/edit", DEFAULT_RULE_ID))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/reconciliation-rule-edit"))
+                .andExpect(content().string(containsString("编辑对账规则")))
+                .andExpect(content().string(containsString("当前生效值")))
+                .andExpect(content().string(containsString("0.00 元")))
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*name=\"amountTolerance\"[^>]*value=\"12.34\".*")))
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*name=\"queryWindowHours\"[^>]*value=\"48\".*")));
+    }
+
+    @Test
+    @WithMockUser(username = "rule-editor", roles = "ADMIN")
+    void rejectsInvalidToleranceAndWindowWithActionableChineseFeedback() throws Exception {
+        mockMvc.perform(post("/admin/reconciliation/rules/{ruleId}/draft", DEFAULT_RULE_ID)
+                        .with(csrf())
+                        .param("amountTolerance", "12.345")
+                        .param("queryWindowHours", "169"))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/reconciliation-rule-edit"))
+                .andExpect(content().string(containsString("金额容差最多保留两位小数")))
+                .andExpect(content().string(containsString("查询窗口必须在 0 到 168 小时之间")));
+
+        mockMvc.perform(post("/admin/reconciliation/rules/{ruleId}/draft", DEFAULT_RULE_ID)
+                        .with(csrf())
+                        .param("amountTolerance", "不是数字")
+                        .param("queryWindowHours", ""))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("请输入有效的金额容差")))
+                .andExpect(content().string(containsString("请输入查询窗口")));
+    }
+
+    @Test
+    @WithMockUser(username = "rule-editor", roles = "ADMIN")
+    void savesRuleDraftWithAuthenticatedOperatorAndPrgConfirmation() throws Exception {
+        mockMvc.perform(post("/admin/reconciliation/rules/{ruleId}/draft", DEFAULT_RULE_ID)
+                        .with(csrf())
+                        .param("amountTolerance", "1.25")
+                        .param("queryWindowHours", "24")
+                        .param("operator", "untrusted-user"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/admin/reconciliation/rules/" + DEFAULT_RULE_ID + "/edit"))
+                .andExpect(result -> assertThat(result.getFlashMap().get("ruleSuccess"))
+                        .isEqualTo("对账规则草稿已保存"));
+
+        assertThat(reconciliationRulesApi.getRule(DEFAULT_RULE_ID).draft())
+                .satisfies(draft -> {
+                    assertThat(draft.amountToleranceCents()).isEqualTo(125);
+                    assertThat(draft.queryWindowHours()).isEqualTo(24);
+                    assertThat(draft.createdBy()).isEqualTo("rule-editor");
+                });
+    }
+
+    @Test
+    @WithMockUser(username = "rule-publisher", roles = "ADMIN")
+    void publishesExactPendingParametersAndRendersPublishedHistory() throws Exception {
+        reconciliationRulesApi.saveDraft(
+                ALIPAY_RULE_ID, new ReconciliationRuleDraftCommand(250, 72, "draft-editor"));
+
+        mockMvc.perform(get("/admin/reconciliation/rules"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("待发布参数：2.50 元 / 72 小时")))
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*action=\"/admin/reconciliation/rules/" + ALIPAY_RULE_ID
+                                + "/publish\".*name=\"_csrf\".*")));
+
+        mockMvc.perform(post("/admin/reconciliation/rules/{ruleId}/publish", ALIPAY_RULE_ID)
+                        .with(csrf()))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/admin/reconciliation/rules"))
+                .andExpect(result -> assertThat(result.getFlashMap().get("ruleSuccess"))
+                        .isEqualTo("对账规则版本已发布"));
+
+        mockMvc.perform(get("/admin/reconciliation/rules/{ruleId}/history", ALIPAY_RULE_ID))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/reconciliation-rule-history"))
+                .andExpect(content().string(containsString("历史版本")))
+                .andExpect(content().string(containsString("已发布")))
+                .andExpect(content().string(containsString("版本 1")))
+                .andExpect(content().string(containsString("2.50 元")))
+                .andExpect(content().string(containsString("72 小时")))
+                .andExpect(content().string(containsString("draft-editor")))
+                .andExpect(content().string(containsString("rule-publisher")))
+                .andExpect(content().string(containsString("发布时间")));
+    }
+
+    @Test
+    @WithMockUser(username = "channel-admin", roles = "ADMIN")
+    void disablesAndEnablesChannelWithAuthenticatedOperator() throws Exception {
+        mockMvc.perform(post("/admin/reconciliation/channels/{channelCode}/status", "ALIPAY")
+                        .with(csrf())
+                        .param("active", "false")
+                        .param("operator", "untrusted-user"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/admin/reconciliation/rules"))
+                .andExpect(result -> assertThat(result.getFlashMap().get("ruleSuccess"))
+                        .isEqualTo("支付宝已停用"));
+        assertThat(reconciliationRulesApi.findChannels(true))
+                .filteredOn(channel -> channel.code().equals("ALIPAY"))
+                .singleElement()
+                .satisfies(channel -> assertThat(channel.active()).isFalse());
+
+        mockMvc.perform(post("/admin/reconciliation/channels/{channelCode}/status", "ALIPAY")
+                        .with(csrf())
+                        .param("active", "true"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(result -> assertThat(result.getFlashMap().get("ruleSuccess"))
+                        .isEqualTo("支付宝已启用"));
+        assertThat(reconciliationRulesApi.findChannels(true))
+                .filteredOn(channel -> channel.code().equals("ALIPAY"))
+                .singleElement()
+                .satisfies(channel -> assertThat(channel.active()).isTrue());
     }
 
     @Test

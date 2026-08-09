@@ -21,6 +21,7 @@
             <a th:href="@{/admin/payments/top-up}" th:classappend="${activeNav == 'payments'} ? ' active'">资金操作</a>
             <a th:href="@{/admin/ledger}" th:classappend="${activeNav == 'ledger'} ? ' active'">账本流水</a>
             <a th:href="@{/admin/reconciliation}" th:classappend="${activeNav == 'reconciliation'} ? ' active'">自动对账</a>
+            <a th:href="@{/admin/reconciliation/rules}" th:classappend="${activeNav == 'reconciliation-rules'} ? ' active'">对账规则</a>
             <a th:href="@{/admin/reconciliation/cases}" th:classappend="${activeNav == 'reconciliation-cases'} ? ' active'">异常工作台</a>
             <a th:href="@{/admin/audit}" th:classappend="${activeNav == 'audit'} ? ' active'">审计日志</a>
         </nav>
