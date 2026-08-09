@@ -137,6 +137,44 @@ class MigrationIntegrationTest {
     }
 
     @Test
+    @Transactional
+    void allowsClaimedReconciliationStatusAfterV13() {
+        var statusConstraint = jdbcTemplate.queryForObject("""
+                SELECT pg_get_constraintdef(oid)
+                FROM pg_constraint
+                WHERE conrelid = 'reconciliation.reconciliation_result'::regclass
+                  AND conname = 'ck_reconciliation_result_status'
+                """, String.class);
+
+        assertThat(statusConstraint)
+                .contains("NOT_REQUIRED")
+                .contains("OPEN")
+                .contains("CLAIMED")
+                .contains("RESOLVED");
+
+        var batchId = insertReconciliationBatch();
+        var entryId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.channel_statement_entry
+                    (id, batch_id, line_number, channel_transaction_id, amount_cents, occurred_at)
+                VALUES (?, ?, 2, ?, 100, CURRENT_TIMESTAMP)
+                """, entryId, batchId, "MIGRATION-CLAIMED-" + entryId);
+        var resultId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_result
+                    (id, batch_id, statement_entry_id, result_type, resolution_status, created_at)
+                VALUES (?, ?, ?, 'CHANNEL_ONLY', 'OPEN', CURRENT_TIMESTAMP)
+                """, resultId, batchId, entryId);
+
+        assertThat(jdbcTemplate.update("""
+                UPDATE reconciliation.reconciliation_result
+                SET resolution_status = 'CLAIMED', assigned_to = 'operator-1',
+                    claimed_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """, resultId)).isOne();
+    }
+
+    @Test
     void requiresValidPartiesForEachPaymentType() {
         var definition = jdbcTemplate.queryForObject("""
                 SELECT pg_get_constraintdef(oid)
@@ -181,13 +219,11 @@ class MigrationIntegrationTest {
     @Test
     @Transactional
     void allowsReverseJournalTypesAndRejectsUnknownTypesAfterV11() {
-        assertThat(jdbcTemplate.queryForMap("""
-                SELECT COUNT(*) AS migration_count, MAX(version::integer) AS latest_version
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
                 FROM flyway_schema_history
-                WHERE success
-                """))
-                .containsEntry("migration_count", 12L)
-                .containsEntry("latest_version", 12);
+                WHERE version = '11' AND success
+                """, Integer.class)).isOne();
 
         var refundId = UUID.randomUUID();
         var reversalId = UUID.randomUUID();

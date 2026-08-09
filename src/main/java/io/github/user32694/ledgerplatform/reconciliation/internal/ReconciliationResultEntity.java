@@ -1,5 +1,6 @@
 package io.github.user32694.ledgerplatform.reconciliation.internal;
 
+import io.github.user32694.ledgerplatform.reconciliation.ResolutionCode;
 import io.github.user32694.ledgerplatform.reconciliation.ResolutionStatus;
 import io.github.user32694.ledgerplatform.reconciliation.ResultType;
 import jakarta.persistence.Column;
@@ -90,23 +91,80 @@ class ReconciliationResultEntity {
         return resolutionStatus;
     }
 
-    ReconciliationResolutionEntity resolve(String note, String operator, Instant resolvedAt) {
+    String assignedTo() {
+        return assignedTo;
+    }
+
+    Instant claimedAt() {
+        return claimedAt;
+    }
+
+    boolean claim(String operator, Instant now) {
+        String actor = requireOperator(operator);
         if (resultType == ResultType.MATCHED) {
-            throw new IllegalStateException("MATCHED result does not require resolution");
+            throw new IllegalStateException("MATCHED result cannot be claimed");
+        }
+        if (resolutionStatus == ResolutionStatus.RESOLVED) {
+            throw new IllegalStateException("RESOLVED result cannot be claimed");
+        }
+        if (resolutionStatus == ResolutionStatus.CLAIMED) {
+            if (assignedTo.equals(actor)) {
+                return false;
+            }
+            throw new IllegalStateException("Result is assigned to another operator");
         }
         if (resolutionStatus != ResolutionStatus.OPEN) {
-            throw new IllegalStateException("Result is already resolved");
+            throw new IllegalStateException("Result cannot be claimed from " + resolutionStatus);
+        }
+        assignedTo = actor;
+        claimedAt = normalize(now);
+        resolutionStatus = ResolutionStatus.CLAIMED;
+        return true;
+    }
+
+    void release(String operator) {
+        String actor = requireOperator(operator);
+        requireClaimedBy(actor);
+        resolutionStatus = ResolutionStatus.OPEN;
+        assignedTo = null;
+        claimedAt = null;
+    }
+
+    ReconciliationResolutionEntity resolve(
+            ResolutionCode resolutionCode, String note, String operator, Instant resolvedAt) {
+        if (resolutionCode == null) {
+            throw new IllegalArgumentException("Resolution code is required");
         }
         if (note == null || note.isBlank()) {
             throw new IllegalArgumentException("Resolution note is required");
         }
+        String actor = requireOperator(operator);
+        requireClaimedBy(actor);
+        resolutionStatus = ResolutionStatus.RESOLVED;
+        return ReconciliationResolutionEntity.resolve(
+                id, resolutionCode, note.strip(), actor, resolvedAt);
+    }
+
+    private void requireClaimedBy(String actor) {
+        if (resultType == ResultType.MATCHED) {
+            throw new IllegalStateException("MATCHED result does not require resolution");
+        }
+        if (resolutionStatus != ResolutionStatus.CLAIMED) {
+            throw new IllegalStateException("Result cannot transition from " + resolutionStatus);
+        }
+        if (!assignedTo.equals(actor)) {
+            throw new IllegalStateException("Result is assigned to another operator");
+        }
+    }
+
+    private static String requireOperator(String operator) {
         if (operator == null || operator.isBlank()) {
             throw new IllegalArgumentException("Operator is required");
         }
-        assignedTo = operator.strip();
-        claimedAt = resolvedAt.truncatedTo(ChronoUnit.MICROS);
-        resolutionStatus = ResolutionStatus.RESOLVED;
-        return ReconciliationResolutionEntity.resolve(
-                id, note.strip(), assignedTo, resolvedAt);
+        return operator.strip();
+    }
+
+    private static Instant normalize(Instant value) {
+        return value.truncatedTo(ChronoUnit.MICROS);
     }
 }

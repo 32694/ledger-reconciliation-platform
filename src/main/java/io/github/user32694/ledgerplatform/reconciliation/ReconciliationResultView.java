@@ -14,6 +14,8 @@ public record ReconciliationResultView(
         Instant occurredAt,
         ResultType resultType,
         ResolutionStatus resolutionStatus,
+        String assignedTo,
+        Instant claimedAt,
         String resolutionNote,
         String resolvedBy,
         Instant resolvedAt) {}

@@ -14,7 +14,12 @@ import java.nio.charset.StandardCharsets;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringApplication;
@@ -37,7 +42,7 @@ import org.springframework.test.context.jdbc.SqlMergeMode.MergeMode;
 @SqlMergeMode(MergeMode.MERGE)
 @Sql(statements = {
         "DELETE FROM audit.audit_event",
-        "DELETE FROM reconciliation.reconciliation_case_event",
+        "TRUNCATE reconciliation.reconciliation_case_event",
         "DELETE FROM reconciliation.reconciliation_resolution",
         "DELETE FROM reconciliation.reconciliation_result",
         "DELETE FROM reconciliation.reconciliation_run",
@@ -51,7 +56,7 @@ import org.springframework.test.context.jdbc.SqlMergeMode.MergeMode;
 }, executionPhase = ExecutionPhase.BEFORE_TEST_METHOD)
 @Sql(statements = {
         "DELETE FROM audit.audit_event",
-        "DELETE FROM reconciliation.reconciliation_case_event",
+        "TRUNCATE reconciliation.reconciliation_case_event",
         "DELETE FROM reconciliation.reconciliation_resolution",
         "DELETE FROM reconciliation.reconciliation_result",
         "DELETE FROM reconciliation.reconciliation_run",
@@ -397,6 +402,163 @@ class ReconciliationModuleTest {
     }
 
     @Test
+    void managesClaimReleaseAndResolutionWithOrderedEvidence() {
+        var difference = createChannelOnlyDifference("lifecycle");
+
+        var claimed = reconciliationApi.claim(difference.id(), "operator-1");
+        var repeated = reconciliationApi.claim(difference.id(), "operator-1");
+
+        assertThat(claimed.resolutionStatus()).isEqualTo(ResolutionStatus.CLAIMED);
+        assertThat(claimed.assignedTo()).isEqualTo("operator-1");
+        assertThat(claimed.claimedAt()).isNotNull();
+        assertThat(repeated).isEqualTo(claimed);
+        assertThat(reconciliationApi.findCaseEvents(difference.id())).hasSize(1);
+        assertThat(caseAuditCount()).isOne();
+
+        var released = reconciliationApi.release(difference.id(), "operator-1");
+        assertThat(released.resolutionStatus()).isEqualTo(ResolutionStatus.OPEN);
+        assertThat(released.assignedTo()).isNull();
+        assertThat(released.claimedAt()).isNull();
+
+        reconciliationApi.claim(difference.id(), "operator-1");
+        var resolved = reconciliationApi.resolve(
+                difference.id(),
+                ResolutionCode.INTERNAL_CONFIRMED,
+                "  checked against internal records  ",
+                "operator-1");
+
+        assertThat(resolved.resolutionStatus()).isEqualTo(ResolutionStatus.RESOLVED);
+        assertThat(resolved.assignedTo()).isEqualTo("operator-1");
+        assertThat(resolved.resolutionNote()).isEqualTo("checked against internal records");
+        assertThat(resolved.resolvedBy()).isEqualTo("operator-1");
+        assertThatThrownBy(() -> reconciliationApi.claim(difference.id(), "operator-1"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("RESOLVED");
+
+        assertThat(reconciliationApi.findCaseEvents(difference.id()))
+                .extracting(
+                        ReconciliationCaseEventView::action,
+                        ReconciliationCaseEventView::actor,
+                        ReconciliationCaseEventView::resolutionCode,
+                        ReconciliationCaseEventView::note)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple("CLAIMED", "operator-1", null, null),
+                        org.assertj.core.groups.Tuple.tuple("RELEASED", "operator-1", null, null),
+                        org.assertj.core.groups.Tuple.tuple("CLAIMED", "operator-1", null, null),
+                        org.assertj.core.groups.Tuple.tuple(
+                                "RESOLVED",
+                                "operator-1",
+                                ResolutionCode.INTERNAL_CONFIRMED,
+                                "checked against internal records"));
+        assertThat(auditApi.findRecent(null, null, 100).stream()
+                        .filter(event -> event.action().name().startsWith("RECONCILIATION_CASE_")))
+                .extracting(event -> event.action(), event -> event.actor(),
+                        event -> event.aggregateType(), event -> event.aggregateId(),
+                        event -> event.correlationReference())
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple(
+                                AuditAction.RECONCILIATION_CASE_RESOLVE,
+                                "operator-1", "RECONCILIATION_RESULT",
+                                difference.id().toString(), difference.batchId().toString()),
+                        org.assertj.core.groups.Tuple.tuple(
+                                AuditAction.RECONCILIATION_CASE_CLAIM,
+                                "operator-1", "RECONCILIATION_RESULT",
+                                difference.id().toString(), difference.batchId().toString()),
+                        org.assertj.core.groups.Tuple.tuple(
+                                AuditAction.RECONCILIATION_CASE_RELEASE,
+                                "operator-1", "RECONCILIATION_RESULT",
+                                difference.id().toString(), difference.batchId().toString()),
+                        org.assertj.core.groups.Tuple.tuple(
+                                AuditAction.RECONCILIATION_CASE_CLAIM,
+                                "operator-1", "RECONCILIATION_RESULT",
+                                difference.id().toString(), difference.batchId().toString()));
+    }
+
+    @Test
+    void rejectsNonOwnerInvalidAndMatchedTransitionsWithoutEvidence() {
+        var difference = createChannelOnlyDifference("rejected");
+        reconciliationApi.claim(difference.id(), "operator-1");
+
+        assertThatThrownBy(() -> reconciliationApi.claim(difference.id(), "operator-2"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("assigned to another operator");
+        assertThatThrownBy(() -> reconciliationApi.release(difference.id(), "operator-2"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("assigned to another operator");
+        assertThatThrownBy(() -> reconciliationApi.resolve(
+                        difference.id(), ResolutionCode.OTHER, "checked", "operator-2"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("assigned to another operator");
+        assertThatThrownBy(() -> reconciliationApi.resolve(
+                        difference.id(), null, "checked", "operator-1"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Resolution code");
+        assertThatThrownBy(() -> reconciliationApi.resolve(
+                        difference.id(), ResolutionCode.OTHER, "  ", "operator-1"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Resolution note");
+
+        assertThat(reconciliationApi.findCaseEvents(difference.id())).hasSize(1);
+        assertThat(caseAuditCount()).isOne();
+
+        var account = accountsApi.create("Matched Claim Customer");
+        var payment = paymentsApi.topUp(new TopUpCommand("matched-claim-payment", account.id(), 1));
+        var batch = reconciliationApi.importStatement(new StatementUpload(
+                "matched-claim.csv",
+                csv(row(payment.channelReference(), 1, payment.occurredAt()) + "\n"),
+                "admin"));
+        reconciliationApi.run(batch.id());
+        var matched = reconciliationApi.findResults(batch.id(), ResultType.MATCHED, null).get(0);
+
+        assertThatThrownBy(() -> reconciliationApi.claim(matched.id(), "operator-1"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("MATCHED");
+        assertThat(reconciliationApi.findCaseEvents(matched.id())).isEmpty();
+        assertThat(caseAuditCount()).isOne();
+    }
+
+    @Test
+    void concurrentClaimsCannotOverwriteTheOwner() throws Exception {
+        var difference = createChannelOnlyDifference("concurrent-claim");
+        var executor = Executors.newFixedThreadPool(2);
+        var ready = new CountDownLatch(2);
+        var start = new CountDownLatch(1);
+        try {
+            Callable<ClaimAttempt> first = concurrentClaim(
+                    difference.id(), "operator-1", ready, start);
+            Callable<ClaimAttempt> second = concurrentClaim(
+                    difference.id(), "operator-2", ready, start);
+            var firstFuture = executor.submit(first);
+            var secondFuture = executor.submit(second);
+            assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+
+            var attempts = List.of(
+                    firstFuture.get(10, TimeUnit.SECONDS),
+                    secondFuture.get(10, TimeUnit.SECONDS));
+
+            assertThat(attempts).filteredOn(attempt -> attempt.error() == null).hasSize(1);
+            assertThat(attempts).filteredOn(attempt -> attempt.error() != null)
+                    .singleElement()
+                    .extracting(ClaimAttempt::error)
+                    .isInstanceOf(IllegalStateException.class);
+            var winner = attempts.stream()
+                    .filter(attempt -> attempt.result() != null)
+                    .findFirst()
+                    .orElseThrow()
+                    .result();
+            var persisted = reconciliationApi.findResults(
+                    difference.batchId(), difference.resultType(), ResolutionStatus.CLAIMED).get(0);
+            assertThat(persisted.assignedTo()).isEqualTo(winner.assignedTo());
+            assertThat(reconciliationApi.findCaseEvents(difference.id())).hasSize(1);
+            assertThat(caseAuditCount()).isOne();
+        } finally {
+            start.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void importFailedBatchCannotRun() {
         var batch = reconciliationApi.importStatement(new StatementUpload(
                 "cannot-run.csv", csv("CH-BAD,nope,2026-01-15T09:30:00Z\n"), "admin"));
@@ -420,6 +582,11 @@ class ReconciliationModuleTest {
         assertThat(resolved.resolutionStatus()).isEqualTo(ResolutionStatus.RESOLVED);
         assertThat(resolved.resolutionNote()).isEqualTo("已核对渠道凭证");
         assertThat(resolved.resolvedBy()).isEqualTo("operator-1");
+        var caseEvents = reconciliationApi.findCaseEvents(difference.id());
+        assertThat(caseEvents)
+                .extracting(ReconciliationCaseEventView::action)
+                .containsExactly("CLAIMED", "RESOLVED");
+        assertThat(caseEvents.get(0).createdAt()).isBefore(caseEvents.get(1).createdAt());
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM reconciliation.reconciliation_resolution", Integer.class)).isOne();
         assertThatThrownBy(() -> reconciliationApi.resolve(
@@ -454,6 +621,39 @@ class ReconciliationModuleTest {
         return channelReference + "," + amountCents + "," + occurredAt;
     }
 
+    private ReconciliationResultView createChannelOnlyDifference(String suffix) {
+        var batch = reconciliationApi.importStatement(new StatementUpload(
+                suffix + ".csv",
+                csv("CH-" + suffix.toUpperCase() + ",1,2026-01-15T09:30:00Z\n"),
+                "admin"));
+        reconciliationApi.run(batch.id());
+        return reconciliationApi.findResults(
+                batch.id(), ResultType.CHANNEL_ONLY, ResolutionStatus.OPEN).get(0);
+    }
+
+    private Callable<ClaimAttempt> concurrentClaim(
+            UUID resultId, String operator, CountDownLatch ready, CountDownLatch start) {
+        return () -> {
+            ready.countDown();
+            start.await();
+            try {
+                return new ClaimAttempt(reconciliationApi.claim(resultId, operator), null);
+            } catch (RuntimeException exception) {
+                return new ClaimAttempt(null, exception);
+            }
+        };
+    }
+
+    private long caseAuditCount() {
+        return jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM audit.audit_event
+                WHERE action IN (
+                    'RECONCILIATION_CASE_CLAIM',
+                    'RECONCILIATION_CASE_RELEASE',
+                    'RECONCILIATION_CASE_RESOLVE')
+                """, Long.class);
+    }
+
     private ReconciliationRunView awaitRunStatus(UUID batchId, RunStatus expected)
             throws InterruptedException {
         long deadline = System.nanoTime() + java.time.Duration.ofSeconds(5).toNanos();
@@ -473,4 +673,6 @@ class ReconciliationModuleTest {
         return ("channel_transaction_id,amount_cents,occurred_at\n" + rows)
                 .getBytes(StandardCharsets.UTF_8);
     }
+
+    private record ClaimAttempt(ReconciliationResultView result, RuntimeException error) {}
 }

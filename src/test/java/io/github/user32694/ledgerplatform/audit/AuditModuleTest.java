@@ -44,6 +44,9 @@ class AuditModuleTest {
                         AuditAction.PAYMENT_REVERSAL,
                         AuditAction.RECONCILIATION_IMPORT,
                         AuditAction.RECONCILIATION_RUN,
+                        AuditAction.RECONCILIATION_CASE_CLAIM,
+                        AuditAction.RECONCILIATION_CASE_RELEASE,
+                        AuditAction.RECONCILIATION_CASE_RESOLVE,
                         AuditAction.RECONCILIATION_RESOLVE);
         assertThat(AuditOutcome.values())
                 .containsExactly(AuditOutcome.SUCCEEDED, AuditOutcome.FAILED);

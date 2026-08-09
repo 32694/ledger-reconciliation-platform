@@ -32,6 +32,7 @@ import org.springframework.test.web.servlet.MockMvc;
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 @Sql(statements = {
+        "TRUNCATE reconciliation.reconciliation_case_event",
         "DELETE FROM reconciliation.reconciliation_resolution",
         "DELETE FROM reconciliation.reconciliation_result",
         "DELETE FROM reconciliation.channel_statement_entry",

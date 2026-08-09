@@ -140,6 +140,7 @@ public class ReconciliationWebController {
         return switch (status) {
             case NOT_REQUIRED -> "无需处理";
             case OPEN -> "待处理";
+            case CLAIMED -> "处理中";
             case RESOLVED -> "已处理";
         };
     }

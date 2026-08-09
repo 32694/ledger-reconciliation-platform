@@ -41,7 +41,7 @@ import org.springframework.test.context.jdbc.Sql.ExecutionPhase;
 @ExtendWith(OutputCaptureExtension.class)
 @Sql(statements = {
         "DELETE FROM audit.audit_event",
-        "DELETE FROM reconciliation.reconciliation_case_event",
+        "TRUNCATE reconciliation.reconciliation_case_event",
         "DELETE FROM reconciliation.reconciliation_resolution",
         "DELETE FROM reconciliation.reconciliation_result",
         "DELETE FROM reconciliation.reconciliation_run",
@@ -55,7 +55,7 @@ import org.springframework.test.context.jdbc.Sql.ExecutionPhase;
 }, executionPhase = ExecutionPhase.BEFORE_TEST_METHOD)
 @Sql(statements = {
         "DELETE FROM audit.audit_event",
-        "DELETE FROM reconciliation.reconciliation_case_event",
+        "TRUNCATE reconciliation.reconciliation_case_event",
         "DELETE FROM reconciliation.reconciliation_resolution",
         "DELETE FROM reconciliation.reconciliation_result",
         "DELETE FROM reconciliation.reconciliation_run",

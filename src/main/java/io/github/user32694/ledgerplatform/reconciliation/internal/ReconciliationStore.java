@@ -6,9 +6,13 @@ import io.github.user32694.ledgerplatform.audit.AuditCommand;
 import io.github.user32694.ledgerplatform.audit.AuditOutcome;
 import io.github.user32694.ledgerplatform.reconciliation.BatchStatus;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationBatchView;
+import io.github.user32694.ledgerplatform.reconciliation.ReconciliationCaseEventView;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationRunView;
+import io.github.user32694.ledgerplatform.reconciliation.ResolutionCode;
+import io.github.user32694.ledgerplatform.reconciliation.ResolutionStatus;
 import io.github.user32694.ledgerplatform.reconciliation.RunStatus;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -22,6 +26,7 @@ class ReconciliationStore {
     private final ChannelStatementEntryRepository entryRepository;
     private final ReconciliationResultRepository resultRepository;
     private final ReconciliationResolutionRepository resolutionRepository;
+    private final ReconciliationCaseEventRepository caseEventRepository;
     private final ReconciliationRunRepository runRepository;
     private final AuditApi auditApi;
 
@@ -30,12 +35,14 @@ class ReconciliationStore {
             ChannelStatementEntryRepository entryRepository,
             ReconciliationResultRepository resultRepository,
             ReconciliationResolutionRepository resolutionRepository,
+            ReconciliationCaseEventRepository caseEventRepository,
             ReconciliationRunRepository runRepository,
             AuditApi auditApi) {
         this.batchRepository = batchRepository;
         this.entryRepository = entryRepository;
         this.resultRepository = resultRepository;
         this.resolutionRepository = resolutionRepository;
+        this.caseEventRepository = caseEventRepository;
         this.runRepository = runRepository;
         this.auditApi = auditApi;
     }
@@ -303,13 +310,67 @@ class ReconciliationStore {
     }
 
     @Transactional
-    ReconciliationResultEntity resolveResult(UUID resultId, String note, String operator) {
-        var result = resultRepository.findByIdForUpdate(resultId)
-                .orElseThrow(() -> new IllegalArgumentException("Result does not exist: " + resultId));
-        var resolution = result.resolve(note, operator, Instant.now());
+    ReconciliationResultEntity claimResult(UUID resultId, String operator) {
+        var result = findResultForUpdate(resultId);
+        var now = Instant.now();
+        if (!result.claim(operator, now)) {
+            return result;
+        }
+        String actor = operator.strip();
+        caseEventRepository.saveAndFlush(
+                ReconciliationCaseEventEntity.claimed(result.id(), actor, now));
+        recordCaseAudit(result, actor, AuditAction.RECONCILIATION_CASE_CLAIM, "对账差异已认领");
+        return result;
+    }
+
+    @Transactional
+    ReconciliationResultEntity releaseResult(UUID resultId, String operator) {
+        var result = findResultForUpdate(resultId);
+        result.release(operator);
+        String actor = operator.strip();
+        var now = Instant.now();
+        caseEventRepository.saveAndFlush(
+                ReconciliationCaseEventEntity.released(result.id(), actor, now));
+        recordCaseAudit(result, actor, AuditAction.RECONCILIATION_CASE_RELEASE, "对账差异已取消认领");
+        return result;
+    }
+
+    @Transactional
+    ReconciliationResultEntity resolveResult(
+            UUID resultId, ResolutionCode resolutionCode, String note, String operator) {
+        var result = findResultForUpdate(resultId);
+        var now = Instant.now();
+        var resolution = result.resolve(resolutionCode, note, operator, now);
         resolutionRepository.saveAndFlush(resolution);
+        String actor = operator.strip();
+        caseEventRepository.saveAndFlush(ReconciliationCaseEventEntity.resolved(
+                result.id(), actor, resolutionCode, note.strip(), now));
+        recordCaseAudit(result, actor, AuditAction.RECONCILIATION_CASE_RESOLVE, "对账差异已解决");
+        return result;
+    }
+
+    @Transactional
+    ReconciliationResultEntity resolveResult(UUID resultId, String note, String operator) {
+        var result = findResultForUpdate(resultId);
+        if (result.resolutionStatus() == ResolutionStatus.RESOLVED) {
+            throw new IllegalStateException("Result is already resolved");
+        }
+        var claimTime = Instant.now();
+        if (result.claim(operator, claimTime)) {
+            String actor = operator.strip();
+            caseEventRepository.saveAndFlush(
+                    ReconciliationCaseEventEntity.claimed(result.id(), actor, claimTime));
+            recordCaseAudit(result, actor, AuditAction.RECONCILIATION_CASE_CLAIM, "对账差异已认领");
+        }
+        var resolveTime = claimTime.plus(1, ChronoUnit.MICROS);
+        var resolution = result.resolve(ResolutionCode.OTHER, note, operator, resolveTime);
+        resolutionRepository.saveAndFlush(resolution);
+        String actor = operator.strip();
+        caseEventRepository.saveAndFlush(ReconciliationCaseEventEntity.resolved(
+                result.id(), actor, ResolutionCode.OTHER, note.strip(), resolveTime));
+        recordCaseAudit(result, actor, AuditAction.RECONCILIATION_CASE_RESOLVE, "对账差异已解决");
         auditApi.record(reconciliationAudit(
-                operator,
+                actor,
                 AuditAction.RECONCILIATION_RESOLVE,
                 "RECONCILIATION_RESULT",
                 result.id(),
@@ -317,6 +378,16 @@ class ReconciliationStore {
                 "对账差异处理成功",
                 result.batchId().toString()));
         return result;
+    }
+
+    @Transactional(readOnly = true)
+    List<ReconciliationCaseEventView> findCaseEvents(UUID resultId) {
+        if (!resultRepository.existsById(resultId)) {
+            throw new IllegalArgumentException("Result does not exist: " + resultId);
+        }
+        return caseEventRepository.findAllByResultIdOrderByCreatedAtAscIdAsc(resultId).stream()
+                .map(ReconciliationCaseEventEntity::toView)
+                .toList();
     }
 
     @Transactional(readOnly = true)
@@ -332,6 +403,26 @@ class ReconciliationStore {
     private ReconciliationRunEntity findRunForUpdate(UUID runId) {
         return runRepository.findByIdForUpdate(runId)
                 .orElseThrow(() -> new IllegalArgumentException("Run does not exist: " + runId));
+    }
+
+    private ReconciliationResultEntity findResultForUpdate(UUID resultId) {
+        return resultRepository.findByIdForUpdate(resultId)
+                .orElseThrow(() -> new IllegalArgumentException("Result does not exist: " + resultId));
+    }
+
+    private void recordCaseAudit(
+            ReconciliationResultEntity result,
+            String actor,
+            AuditAction action,
+            String summary) {
+        auditApi.record(reconciliationAudit(
+                actor,
+                action,
+                "RECONCILIATION_RESULT",
+                result.id(),
+                AuditOutcome.SUCCEEDED,
+                summary,
+                result.batchId().toString()));
     }
 
     private static AuditCommand reconciliationAudit(

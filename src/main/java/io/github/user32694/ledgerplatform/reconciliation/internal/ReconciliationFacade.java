@@ -2,8 +2,10 @@ package io.github.user32694.ledgerplatform.reconciliation.internal;
 
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationApi;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationBatchView;
+import io.github.user32694.ledgerplatform.reconciliation.ReconciliationCaseEventView;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationResultView;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationRunView;
+import io.github.user32694.ledgerplatform.reconciliation.ResolutionCode;
 import io.github.user32694.ledgerplatform.reconciliation.ResolutionStatus;
 import io.github.user32694.ledgerplatform.reconciliation.StatementUpload;
 import io.github.user32694.ledgerplatform.reconciliation.ResultType;
@@ -127,11 +129,37 @@ public class ReconciliationFacade implements ReconciliationApi {
     }
 
     @Override
+    public ReconciliationResultView claim(UUID resultId, String operator) {
+        requireResultId(resultId);
+        return toResultView(store.claimResult(resultId, operator));
+    }
+
+    @Override
+    public ReconciliationResultView release(UUID resultId, String operator) {
+        requireResultId(resultId);
+        return toResultView(store.releaseResult(resultId, operator));
+    }
+
+    @Override
+    public ReconciliationResultView resolve(
+            UUID resultId, ResolutionCode resolutionCode, String note, String operator) {
+        requireResultId(resultId);
+        return toResultView(store.resolveResult(resultId, resolutionCode, note, operator));
+    }
+
+    @Override
     public ReconciliationResultView resolve(UUID resultId, String note, String operator) {
-        if (resultId == null) {
-            throw new IllegalArgumentException("Result id is required");
-        }
-        var result = store.resolveResult(resultId, note, operator);
+        requireResultId(resultId);
+        return toResultView(store.resolveResult(resultId, note, operator));
+    }
+
+    @Override
+    public List<ReconciliationCaseEventView> findCaseEvents(UUID resultId) {
+        requireResultId(resultId);
+        return store.findCaseEvents(resultId);
+    }
+
+    private ReconciliationResultView toResultView(ReconciliationResultEntity result) {
         var batch = store.getBatch(result.batchId());
         var entries = store.findStatementEntries(result.batchId()).stream()
                 .collect(java.util.stream.Collectors.toMap(
@@ -159,9 +187,17 @@ public class ReconciliationFacade implements ReconciliationApi {
                 entry != null ? entry.occurredAt() : payment == null ? null : payment.occurredAt(),
                 result.resultType(),
                 result.resolutionStatus(),
+                result.assignedTo(),
+                result.claimedAt(),
                 resolution.map(ReconciliationResolutionEntity::note).orElse(null),
                 resolution.map(ReconciliationResolutionEntity::operator).orElse(null),
                 resolution.map(ReconciliationResolutionEntity::createdAt).orElse(null));
+    }
+
+    private static void requireResultId(UUID resultId) {
+        if (resultId == null) {
+            throw new IllegalArgumentException("Result id is required");
+        }
     }
 
     private static byte[] sha256(byte[] content) {
