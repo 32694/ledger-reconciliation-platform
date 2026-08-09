@@ -12,7 +12,33 @@ public record PaymentView(
         long amountCents,
         String status,
         String failureReason,
+        UUID originalPaymentId,
+        String operationReason,
         Instant occurredAt) {
+    public PaymentView(
+            UUID id,
+            String channelReference,
+            String type,
+            UUID payerAccountId,
+            UUID payeeAccountId,
+            long amountCents,
+            String status,
+            String failureReason,
+            Instant occurredAt) {
+        this(
+                id,
+                channelReference,
+                type,
+                payerAccountId,
+                payeeAccountId,
+                amountCents,
+                status,
+                failureReason,
+                null,
+                null,
+                occurredAt);
+    }
+
     public PaymentView(
             UUID id,
             String channelReference,
@@ -30,6 +56,8 @@ public record PaymentView(
                 amountCents,
                 status,
                 failureReason,
+                null,
+                null,
                 occurredAt);
     }
 }

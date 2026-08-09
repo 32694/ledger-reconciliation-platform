@@ -24,12 +24,13 @@ interface PaymentInstructionRepository extends JpaRepository<PaymentInstructionE
             INSERT INTO payments.payment_instruction
                 (id, idempotency_key, request_fingerprint, channel_reference, payment_type,
                  payer_account_id, payee_account_id, amount_cents, currency, status,
-                 failure_reason, version, created_at, completed_at)
+                 failure_reason, version, created_at, completed_at,
+                 original_payment_id, operation_reason)
             VALUES
                 (:id, :idempotencyKey, :requestFingerprint, :channelReference, :paymentType,
                  :payerAccountId, :payeeAccountId, :amountCents, 'CNY', 'PENDING',
-                 NULL, 0, :createdAt, NULL)
-            ON CONFLICT (idempotency_key) DO NOTHING
+                 NULL, 0, :createdAt, NULL, :originalPaymentId, :operationReason)
+            ON CONFLICT DO NOTHING
             """, nativeQuery = true)
     int insertPending(
             @Param("id") UUID id,
@@ -40,9 +41,20 @@ interface PaymentInstructionRepository extends JpaRepository<PaymentInstructionE
             @Param("payerAccountId") UUID payerAccountId,
             @Param("payeeAccountId") UUID payeeAccountId,
             @Param("amountCents") long amountCents,
+            @Param("originalPaymentId") UUID originalPaymentId,
+            @Param("operationReason") String operationReason,
             @Param("createdAt") Instant createdAt);
 
     Optional<PaymentInstructionEntity> findByIdempotencyKey(String idempotencyKey);
+
+    @Query("""
+            SELECT payment
+            FROM PaymentInstructionEntity payment
+            WHERE payment.originalPaymentId = :originalPaymentId
+              AND payment.status IN ('PENDING', 'SUCCEEDED')
+            """)
+    Optional<PaymentInstructionEntity> findActiveReverse(
+            @Param("originalPaymentId") UUID originalPaymentId);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""

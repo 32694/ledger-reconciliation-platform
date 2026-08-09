@@ -1,0 +1,12 @@
+package io.github.user32694.ledgerplatform.audit;
+
+public enum AuditAction {
+    ACCOUNT_CREATE,
+    PAYMENT_TOP_UP,
+    PAYMENT_TRANSFER,
+    PAYMENT_REFUND,
+    PAYMENT_REVERSAL,
+    RECONCILIATION_IMPORT,
+    RECONCILIATION_RUN,
+    RECONCILIATION_RESOLVE
+}

@@ -3,7 +3,7 @@
 <section id="recent-payments-table" class="table-section compact-table"
          aria-labelledby="recent-payments-title" th:fragment="recentPaymentsTable">
     <div class="section-heading">
-        <div><h2 id="recent-payments-title">近期资金操作</h2><p>最近20条充值和转账指令</p></div>
+        <div><h2 id="recent-payments-title">近期资金操作</h2><p>最近20条充值、转账及反向操作</p></div>
         <a id="refresh-payments" class="button button-secondary"
            th:href="${paymentHistoryRefreshUrl}" hx-get="/admin/payments/recent"
            hx-target="#recent-payments-table" hx-swap="outerHTML">刷新</a>
@@ -13,7 +13,8 @@
             <thead><tr><th>业务流水号</th><th>类型</th><th class="numeric">金额</th><th>状态</th></tr></thead>
             <tbody>
             <tr th:each="payment : ${recentPayments}">
-                <td class="mono" th:text="${payment.channelReference}">PAY-001</td>
+                <td><a class="text-link mono" th:href="@{/admin/payments/{id}(id=${payment.id})}"
+                       th:text="${payment.channelReference}">PAY-001</a></td>
                 <td th:text="${payment.typeLabel}">充值</td>
                 <td class="numeric">人民币 <span th:text="${payment.amount}">0.00</span></td>
                 <td><span class="status"

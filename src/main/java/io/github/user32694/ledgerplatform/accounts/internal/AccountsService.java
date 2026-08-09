@@ -3,6 +3,10 @@ package io.github.user32694.ledgerplatform.accounts.internal;
 import io.github.user32694.ledgerplatform.accounts.AccountBalance;
 import io.github.user32694.ledgerplatform.accounts.AccountsApi;
 import io.github.user32694.ledgerplatform.accounts.CustomerAccountView;
+import io.github.user32694.ledgerplatform.audit.AuditAction;
+import io.github.user32694.ledgerplatform.audit.AuditApi;
+import io.github.user32694.ledgerplatform.audit.AuditCommand;
+import io.github.user32694.ledgerplatform.audit.AuditOutcome;
 import io.github.user32694.ledgerplatform.ledger.LedgerApi;
 import java.time.Instant;
 import java.util.List;
@@ -16,10 +20,13 @@ class AccountsService implements AccountsApi {
 
     private final CustomerAccountRepository accountRepository;
     private final LedgerApi ledgerApi;
+    private final AuditApi auditApi;
 
-    AccountsService(CustomerAccountRepository accountRepository, LedgerApi ledgerApi) {
+    AccountsService(
+            CustomerAccountRepository accountRepository, LedgerApi ledgerApi, AuditApi auditApi) {
         this.accountRepository = accountRepository;
         this.ledgerApi = ledgerApi;
+        this.auditApi = auditApi;
     }
 
     @Override
@@ -33,6 +40,14 @@ class AccountsService implements AccountsApi {
         Instant createdAt = Instant.now();
         var account = accountRepository.save(new CustomerAccountEntity(
                 accountId, accountNumber, normalizedOwnerName, wallet.id(), createdAt));
+        auditApi.record(new AuditCommand(
+                null,
+                AuditAction.ACCOUNT_CREATE,
+                "ACCOUNT",
+                account.id().toString(),
+                AuditOutcome.SUCCEEDED,
+                "客户账户创建成功",
+                account.accountNumber()));
         return toView(account);
     }
 

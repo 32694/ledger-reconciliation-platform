@@ -21,7 +21,7 @@
             <a th:href="@{/admin/payments/top-up}" th:classappend="${activeNav == 'payments'} ? ' active'">资金操作</a>
             <a th:href="@{/admin/ledger}" th:classappend="${activeNav == 'ledger'} ? ' active'">账本流水</a>
             <a th:href="@{/admin/reconciliation}" th:classappend="${activeNav == 'reconciliation'} ? ' active'">自动对账</a>
-            <span class="nav-disabled" aria-disabled="true">审计日志 <small>后续开放</small></span>
+            <a th:href="@{/admin/audit}" th:classappend="${activeNav == 'audit'} ? ' active'">审计日志</a>
         </nav>
         <form class="logout-form" method="post" th:action="@{/logout}">
             <span sec:authentication="name">管理员</span>

@@ -27,7 +27,7 @@ class PaymentInstructionEntity {
     @Column(name = "channel_reference", nullable = false, unique = true, length = 64)
     private String channelReference;
 
-    @Column(name = "payment_type", nullable = false, length = 16)
+    @Column(name = "payment_type", nullable = false, length = 24)
     private String paymentType;
 
     @Column(name = "payer_account_id")
@@ -35,6 +35,12 @@ class PaymentInstructionEntity {
 
     @Column(name = "payee_account_id", nullable = false)
     private UUID payeeAccountId;
+
+    @Column(name = "original_payment_id")
+    private UUID originalPaymentId;
+
+    @Column(name = "operation_reason", length = 500)
+    private String operationReason;
 
     @Column(name = "amount_cents", nullable = false)
     private long amountCents;
@@ -95,6 +101,14 @@ class PaymentInstructionEntity {
 
     UUID payeeAccountId() {
         return payeeAccountId;
+    }
+
+    UUID originalPaymentId() {
+        return originalPaymentId;
+    }
+
+    String operationReason() {
+        return operationReason;
     }
 
     long amountCents() {

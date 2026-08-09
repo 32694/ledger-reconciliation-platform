@@ -33,7 +33,7 @@
         <div class="section-heading">
             <div>
                 <h2>近期资金操作</h2>
-                <p>最近处理的充值和转账指令</p>
+                <p>最近处理的充值、转账及反向操作</p>
             </div>
             <a class="text-link" th:href="@{/admin/payments/top-up}">资金操作</a>
         </div>
@@ -42,7 +42,8 @@
                 <thead><tr><th>业务流水号</th><th>类型</th><th class="numeric">金额</th><th>状态</th></tr></thead>
                 <tbody>
                 <tr th:each="payment : ${recentPayments}">
-                    <td class="mono" th:text="${payment.channelReference}">PAY-001</td>
+                    <td><a class="text-link mono" th:href="@{/admin/payments/{id}(id=${payment.id})}"
+                           th:text="${payment.channelReference}">PAY-001</a></td>
                     <td th:text="${payment.typeLabel}">充值</td>
                     <td class="numeric">人民币 <span th:text="${payment.amount}">0.00</span></td>
                     <td><span class="status" th:classappend="${payment.status == 'SUCCEEDED'} ? ' status-success' : ' status-danger'" th:text="${payment.statusLabel}">成功</span></td>

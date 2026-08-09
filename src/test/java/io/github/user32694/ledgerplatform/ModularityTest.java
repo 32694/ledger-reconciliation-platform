@@ -19,7 +19,7 @@ class ModularityTest {
                 .collect(Collectors.toSet());
 
         assertThat(names).containsExactlyInAnyOrder(
-                "identity", "accounts", "ledger", "payments", "reconciliation");
+                "identity", "accounts", "ledger", "payments", "reconciliation", "audit");
     }
 
     @Test
@@ -33,18 +33,31 @@ class ModularityTest {
                 .getPackage();
         Package ledger = Class.forName("io.github.user32694.ledgerplatform.ledger.package-info")
                 .getPackage();
+        Package audit = Class.forName("io.github.user32694.ledgerplatform.audit.package-info")
+                .getPackage();
 
         assertThat(identity.getAnnotation(ApplicationModule.class).allowedDependencies()).isEmpty();
         assertThat(ledger.getAnnotation(ApplicationModule.class).allowedDependencies()).isEmpty();
+        assertThat(audit.getAnnotation(ApplicationModule.class).allowedDependencies()).isEmpty();
     }
 
     @Test
-    void reconciliationDependsOnlyOnPayments() throws ClassNotFoundException {
+    void businessModulesDeclareOnlyRequiredDependencies() throws ClassNotFoundException {
+        Package accounts = Class.forName(
+                        "io.github.user32694.ledgerplatform.accounts.package-info")
+                .getPackage();
+        Package payments = Class.forName(
+                        "io.github.user32694.ledgerplatform.payments.package-info")
+                .getPackage();
         Package reconciliation = Class.forName(
                         "io.github.user32694.ledgerplatform.reconciliation.package-info")
                 .getPackage();
 
+        assertThat(accounts.getAnnotation(ApplicationModule.class).allowedDependencies())
+                .containsExactly("ledger", "audit");
+        assertThat(payments.getAnnotation(ApplicationModule.class).allowedDependencies())
+                .containsExactly("accounts", "ledger", "audit");
         assertThat(reconciliation.getAnnotation(ApplicationModule.class).allowedDependencies())
-                .containsExactly("payments");
+                .containsExactly("payments", "audit");
     }
 }

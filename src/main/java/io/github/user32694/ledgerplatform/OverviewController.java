@@ -35,6 +35,7 @@ public class OverviewController {
         model.addAttribute("customerBalance", customerBalance);
         model.addAttribute("recentPayments", paymentsApi.findRecent(8).stream()
                 .map(payment -> new PaymentRow(
+                        payment.id(),
                         payment.channelReference(),
                         payment.type(),
                         paymentTypeLabel(payment.type()),
@@ -50,6 +51,8 @@ public class OverviewController {
         return switch (type) {
             case "TOP_UP" -> "充值";
             case "TRANSFER" -> "转账";
+            case "REFUND" -> "充值退款";
+            case "REVERSAL" -> "转账冲正";
             default -> type;
         };
     }
@@ -64,6 +67,7 @@ public class OverviewController {
     }
 
     public record PaymentRow(
+            java.util.UUID id,
             String channelReference,
             String type,
             String typeLabel,

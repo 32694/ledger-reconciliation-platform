@@ -3,6 +3,9 @@ package io.github.user32694.ledgerplatform.accounts;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.user32694.ledgerplatform.audit.AuditAction;
+import io.github.user32694.ledgerplatform.audit.AuditApi;
+import io.github.user32694.ledgerplatform.audit.AuditOutcome;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -15,16 +18,18 @@ import org.springframework.test.context.jdbc.Sql.ExecutionPhase;
 import org.springframework.test.context.jdbc.SqlMergeMode;
 import org.springframework.test.context.jdbc.SqlMergeMode.MergeMode;
 
-@ApplicationModuleTest(extraIncludes = "ledger")
+@ApplicationModuleTest(extraIncludes = {"ledger", "audit"})
 @ActiveProfiles("test")
 @SqlMergeMode(MergeMode.MERGE)
 @Sql(statements = {
+    "DELETE FROM audit.audit_event",
     "DELETE FROM accounts.customer_account",
     "DELETE FROM ledger.ledger_entry",
     "DELETE FROM ledger.ledger_transaction",
     "DELETE FROM ledger.ledger_account"
 }, executionPhase = ExecutionPhase.BEFORE_TEST_METHOD)
 @Sql(statements = {
+    "DELETE FROM audit.audit_event",
     "DELETE FROM accounts.customer_account",
     "DELETE FROM ledger.ledger_entry",
     "DELETE FROM ledger.ledger_transaction",
@@ -32,6 +37,7 @@ import org.springframework.test.context.jdbc.SqlMergeMode.MergeMode;
 }, executionPhase = ExecutionPhase.AFTER_TEST_METHOD)
 class AccountsModuleTest {
     @Autowired AccountsApi accountsApi;
+    @Autowired AuditApi auditApi;
     @Autowired JdbcTemplate jdbcTemplate;
 
     @Test
@@ -44,6 +50,22 @@ class AccountsModuleTest {
         assertThat(account.accountNumber()).hasSizeLessThanOrEqualTo(32);
         assertThat(accountsApi.balance(account.id()))
                 .isEqualTo(new AccountBalance(0, "CNY"));
+    }
+
+    @Test
+    void auditsAccountCreationInTheBusinessTransaction() {
+        var account = accountsApi.create("Audited Customer");
+
+        assertThat(auditApi.findRecent(AuditAction.ACCOUNT_CREATE, null, 100))
+                .singleElement()
+                .satisfies(event -> {
+                    assertThat(event.actor()).isEqualTo("SYSTEM");
+                    assertThat(event.aggregateType()).isEqualTo("ACCOUNT");
+                    assertThat(event.aggregateId()).isEqualTo(account.id().toString());
+                    assertThat(event.outcome()).isEqualTo(AuditOutcome.SUCCEEDED);
+                    assertThat(event.summary()).isEqualTo("客户账户创建成功");
+                    assertThat(event.correlationReference()).isEqualTo(account.accountNumber());
+                });
     }
 
     @Test
@@ -115,6 +137,7 @@ class AccountsModuleTest {
         Long walletCount = jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM ledger.ledger_account", Long.class);
         assertThat(walletCount).isZero();
+        assertThat(auditApi.findRecent(AuditAction.ACCOUNT_CREATE, null, 100)).isEmpty();
     }
 
     @Test
