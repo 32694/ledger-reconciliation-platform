@@ -72,8 +72,10 @@ class MigrationIntegrationTest {
                 """, String.class)).containsExactly(
                         "channel_statement_entry",
                         "reconciliation_batch",
+                        "reconciliation_case_event",
                         "reconciliation_resolution",
-                        "reconciliation_result");
+                        "reconciliation_result",
+                        "reconciliation_run");
 
         assertThatThrownBy(() -> jdbcTemplate.update("""
                 INSERT INTO reconciliation.reconciliation_batch
@@ -81,6 +83,95 @@ class MigrationIntegrationTest {
                 VALUES (?, 'OTHER', 'bad.csv', ?, 'IMPORTED', 'test', CURRENT_TIMESTAMP)
                 """, UUID.randomUUID(), "0".repeat(64)))
                 .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    @Transactional
+    void createsReconciliationOperationsConstraintsAndImmutableEvents() {
+        var resultConstraint = jdbcTemplate.queryForObject("""
+                SELECT pg_get_constraintdef(oid)
+                FROM pg_constraint
+                WHERE conrelid = 'reconciliation.reconciliation_result'::regclass
+                  AND conname = 'ck_reconciliation_result_resolution'
+                """, String.class);
+        var activeRunIndex = jdbcTemplate.queryForMap("""
+                SELECT index_definition.indisunique AS is_unique,
+                       pg_get_expr(index_definition.indpred, index_definition.indrelid) AS predicate
+                FROM pg_index index_definition
+                JOIN pg_class index_name ON index_name.oid = index_definition.indexrelid
+                WHERE index_name.relname = 'uq_reconciliation_run_active'
+                  AND index_definition.indrelid = 'reconciliation.reconciliation_run'::regclass
+                """);
+
+        assertThat(resultConstraint).contains("CLAIMED");
+        assertThat(activeRunIndex.get("is_unique")).isEqualTo(true);
+        assertThat((String) activeRunIndex.get("predicate"))
+                .contains("QUEUED")
+                .contains("RUNNING");
+
+        var batchId = insertReconciliationBatch();
+        var entryId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.channel_statement_entry
+                    (id, batch_id, line_number, channel_transaction_id, amount_cents, occurred_at)
+                VALUES (?, ?, 2, ?, 100, CURRENT_TIMESTAMP)
+                """, entryId, batchId, "MIGRATION-CASE-" + entryId);
+        var resultId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_result
+                    (id, batch_id, statement_entry_id, result_type, resolution_status, created_at)
+                VALUES (?, ?, ?, 'CHANNEL_ONLY', 'OPEN', CURRENT_TIMESTAMP)
+                """, resultId, batchId, entryId);
+        var eventId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_case_event
+                    (id, result_id, action, actor, created_at)
+                VALUES (?, ?, 'CLAIMED', 'admin', CURRENT_TIMESTAMP)
+                """, eventId, resultId);
+
+        assertThatThrownBy(() -> jdbcTemplate.update("""
+                UPDATE reconciliation.reconciliation_case_event
+                SET actor = 'changed'
+                WHERE id = ?
+                """, eventId)).isInstanceOf(DataAccessException.class);
+    }
+
+    @Test
+    @Transactional
+    void allowsClaimedReconciliationStatusAfterV13() {
+        var statusConstraint = jdbcTemplate.queryForObject("""
+                SELECT pg_get_constraintdef(oid)
+                FROM pg_constraint
+                WHERE conrelid = 'reconciliation.reconciliation_result'::regclass
+                  AND conname = 'ck_reconciliation_result_status'
+                """, String.class);
+
+        assertThat(statusConstraint)
+                .contains("NOT_REQUIRED")
+                .contains("OPEN")
+                .contains("CLAIMED")
+                .contains("RESOLVED");
+
+        var batchId = insertReconciliationBatch();
+        var entryId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.channel_statement_entry
+                    (id, batch_id, line_number, channel_transaction_id, amount_cents, occurred_at)
+                VALUES (?, ?, 2, ?, 100, CURRENT_TIMESTAMP)
+                """, entryId, batchId, "MIGRATION-CLAIMED-" + entryId);
+        var resultId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_result
+                    (id, batch_id, statement_entry_id, result_type, resolution_status, created_at)
+                VALUES (?, ?, ?, 'CHANNEL_ONLY', 'OPEN', CURRENT_TIMESTAMP)
+                """, resultId, batchId, entryId);
+
+        assertThat(jdbcTemplate.update("""
+                UPDATE reconciliation.reconciliation_result
+                SET resolution_status = 'CLAIMED', assigned_to = 'operator-1',
+                    claimed_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """, resultId)).isOne();
     }
 
     @Test
@@ -113,16 +204,26 @@ class MigrationIntegrationTest {
                 """, String.class)).containsExactly("9", "10", "11");
     }
 
+    private UUID insertReconciliationBatch() {
+        var batchId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_batch
+                    (id, source_type, file_name, file_sha256, period_start, period_end,
+                     status, created_by, created_at)
+                VALUES (?, 'SYNTHETIC_CHANNEL', 'migration.csv', ?, CURRENT_TIMESTAMP,
+                        CURRENT_TIMESTAMP, 'COMPLETED', 'test', CURRENT_TIMESTAMP)
+                """, batchId, UUID.randomUUID().toString().replace("-", "").repeat(2));
+        return batchId;
+    }
+
     @Test
     @Transactional
     void allowsReverseJournalTypesAndRejectsUnknownTypesAfterV11() {
-        assertThat(jdbcTemplate.queryForMap("""
-                SELECT COUNT(*) AS migration_count, MAX(version::integer) AS latest_version
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
                 FROM flyway_schema_history
-                WHERE success
-                """))
-                .containsEntry("migration_count", 11L)
-                .containsEntry("latest_version", 11);
+                WHERE version = '11' AND success
+                """, Integer.class)).isOne();
 
         var refundId = UUID.randomUUID();
         var reversalId = UUID.randomUUID();
@@ -243,7 +344,7 @@ class MigrationIntegrationTest {
                 """, Boolean.class);
         assumeTrue(
                 Boolean.TRUE.equals(canCreateDatabase),
-                "V8-to-V11 upgrade test requires a database-creating test role");
+                "V8 upgrade test requires a database-creating test role");
 
         var databaseName = "ledger_migration_test_" + UUID.randomUUID().toString().replace("-", "");
         var temporaryDatasourceUrl = datasourceUrlFor(databaseName);
@@ -283,6 +384,112 @@ class MigrationIntegrationTest {
                     WHERE version IN ('9', '10', '11') AND success
                     ORDER BY installed_rank
                     """, String.class)).containsExactly("9", "10", "11");
+        } finally {
+            dropTemporaryDatabase(databaseName);
+        }
+    }
+
+    @Test
+    void upgradesLegacyPaymentsAndResolvedCasesFromV11() throws SQLException {
+        var canCreateDatabase = jdbcTemplate.queryForObject("""
+                SELECT rolcreatedb OR rolsuper
+                FROM pg_roles
+                WHERE rolname = current_user
+                """, Boolean.class);
+        assumeTrue(
+                Boolean.TRUE.equals(canCreateDatabase),
+                "V11-to-V13 upgrade test requires a database-creating test role");
+
+        var databaseName = "ledger_migration_test_" + UUID.randomUUID().toString().replace("-", "");
+        var temporaryDatasourceUrl = datasourceUrlFor(databaseName);
+
+        try {
+            createTemporaryDatabase(databaseName);
+            Flyway.configure()
+                    .dataSource(temporaryDatasourceUrl, datasourceUsername, datasourcePassword)
+                    .target("11")
+                    .load()
+                    .migrate();
+
+            var legacyDatabase = new JdbcTemplate(new DriverManagerDataSource(
+                    temporaryDatasourceUrl, datasourceUsername, datasourcePassword));
+            var payerId = insertLegacyCustomerAccount(legacyDatabase);
+            var payeeId = insertLegacyCustomerAccount(legacyDatabase);
+            var topUpId = insertLegacyPayment(legacyDatabase, "TOP_UP", null, payeeId);
+            var transferId = insertLegacyPayment(legacyDatabase, "TRANSFER", payerId, payeeId);
+            var legacyRows = paymentSnapshots(legacyDatabase, topUpId, transferId);
+            var legacyBatchId = UUID.randomUUID();
+            var legacyEntryId = UUID.randomUUID();
+            var legacyResultId = UUID.randomUUID();
+            var legacyResolutionId = UUID.randomUUID();
+            legacyDatabase.update("""
+                    INSERT INTO reconciliation.reconciliation_batch
+                        (id, source_type, file_name, file_sha256, period_start, period_end,
+                         status, total_rows, matched_rows, difference_rows, created_by,
+                         created_at, started_at, completed_at)
+                    VALUES (?, 'SYNTHETIC_CHANNEL', 'legacy-resolved.csv', ?,
+                            '2026-01-15T09:30:00Z', '2026-01-15T09:30:00Z',
+                            'COMPLETED', 1, 0, 1, 'legacy-importer',
+                            '2026-01-15T09:31:00Z', '2026-01-15T09:32:00Z',
+                            '2026-01-15T09:33:00Z')
+                    """, legacyBatchId, "a".repeat(64));
+            legacyDatabase.update("""
+                    INSERT INTO reconciliation.channel_statement_entry
+                        (id, batch_id, line_number, channel_transaction_id, amount_cents, occurred_at)
+                    VALUES (?, ?, 2, 'LEGACY-RESOLVED-CASE', 100, '2026-01-15T09:30:00Z')
+                    """, legacyEntryId, legacyBatchId);
+            legacyDatabase.update("""
+                    INSERT INTO reconciliation.reconciliation_result
+                        (id, batch_id, statement_entry_id, result_type, resolution_status, created_at)
+                    VALUES (?, ?, ?, 'CHANNEL_ONLY', 'RESOLVED', '2026-01-15T09:33:00Z')
+                    """, legacyResultId, legacyBatchId, legacyEntryId);
+            legacyDatabase.update("""
+                    INSERT INTO reconciliation.reconciliation_resolution
+                        (id, result_id, action, note, operator, created_at)
+                    VALUES (?, ?, 'RESOLVE', 'legacy resolution note', 'legacy-operator',
+                            '2026-01-15T09:34:00Z')
+                    """, legacyResolutionId, legacyResultId);
+
+            Flyway.configure()
+                    .dataSource(temporaryDatasourceUrl, datasourceUsername, datasourcePassword)
+                    .load()
+                    .migrate();
+
+            assertThat(paymentSnapshots(legacyDatabase, topUpId, transferId)).isEqualTo(legacyRows);
+            assertThat(legacyDatabase.queryForObject("""
+                    SELECT COUNT(*)
+                    FROM payments.payment_instruction
+                    WHERE id IN (?, ?)
+                      AND original_payment_id IS NULL
+                      AND operation_reason IS NULL
+                    """, Integer.class, topUpId, transferId)).isEqualTo(2);
+            assertThat(legacyDatabase.queryForMap("""
+                    SELECT result.assigned_to,
+                           result.claimed_at = resolution.created_at AS claimed_at_matches,
+                           resolution.resolution_code
+                    FROM reconciliation.reconciliation_result result
+                    JOIN reconciliation.reconciliation_resolution resolution
+                      ON resolution.result_id = result.id
+                    WHERE result.id = ?
+                    """, legacyResultId)).containsEntry("assigned_to", "legacy-operator")
+                    .containsEntry("claimed_at_matches", true)
+                    .containsEntry("resolution_code", "OTHER");
+            assertThat(legacyDatabase.queryForMap("""
+                    SELECT action, actor, resolution_code, note,
+                           created_at = '2026-01-15T09:34:00Z'::timestamptz AS created_at_matches
+                    FROM reconciliation.reconciliation_case_event
+                    WHERE result_id = ?
+                    """, legacyResultId)).containsEntry("action", "RESOLVED")
+                    .containsEntry("actor", "legacy-operator")
+                    .containsEntry("resolution_code", "OTHER")
+                    .containsEntry("note", "legacy resolution note")
+                    .containsEntry("created_at_matches", true);
+            assertThat(legacyDatabase.queryForList("""
+                    SELECT version
+                    FROM flyway_schema_history
+                    WHERE version IN ('9', '10', '11', '12', '13') AND success
+                    ORDER BY installed_rank
+                    """, String.class)).containsExactly("9", "10", "11", "12", "13");
         } finally {
             dropTemporaryDatabase(databaseName);
         }

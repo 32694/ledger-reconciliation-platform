@@ -10,7 +10,8 @@
         <div class="actions">
             <form th:if="${canRun}" method="post" th:action="@{/admin/reconciliation/{id}/run(id=${batch.id})}">
                 <input type="hidden" th:name="${_csrf.parameterName}" th:value="${_csrf.token}">
-                <button class="button button-primary" type="submit">开始对账</button>
+                <button class="button button-primary" type="submit"
+                        th:text="${latestRun != null && latestRun.status.name() == 'FAILED' ? '重新发起对账' : '开始对账'}">开始对账</button>
             </form>
             <a class="button button-secondary" th:href="@{/admin/reconciliation}">返回批次</a>
         </div>
@@ -21,18 +22,49 @@
         <article><span>匹配笔数</span><strong th:text="${batch.matchedRows}">0</strong></article>
         <article><span>差异笔数</span><strong th:text="${batch.differenceRows}">0</strong></article>
     </section>
-    <p class="alert alert-error" th:if="${batch.errorMessage}" th:text="${batch.errorMessage}">批次失败</p>
+    <p class="alert alert-error" th:if="${runError}" th:text="${runError}">无法启动对账，请稍后重试</p>
+    <p class="alert alert-error"
+       th:if="${batch.status.name() == 'IMPORT_FAILED' && batch.errorMessage != null}"
+       th:text="${'渠道账单导入失败：' + batch.errorMessage}">渠道账单导入失败</p>
+    <p class="alert alert-error" th:if="${latestRun != null && latestRun.status.name() == 'FAILED'}">对账任务失败，可重新发起</p>
+    <div th:if="${latestRun != null}"
+         th:replace="~{admin/fragments/reconciliation-run-status :: status}"></div>
+    <section class="table-section">
+        <div class="section-heading">
+            <div><h2>运行历史</h2><p>按发起次数倒序展示</p></div>
+        </div>
+        <div class="table-scroll">
+            <table>
+                <thead><tr><th>次数</th><th>发起人</th><th>请求时间</th><th>开始时间</th><th>完成时间</th><th>耗时</th><th>状态</th><th class="numeric">匹配</th><th class="numeric">差异</th><th>失败原因</th></tr></thead>
+                <tbody>
+                <tr th:each="historyRun : ${runs}">
+                    <td th:text="${'第 ' + historyRun.attemptNumber + ' 次'}">第 1 次</td>
+                    <td th:text="${historyRun.requestedBy}">admin</td>
+                    <td th:text="${historyRun.requestedAt}">-</td>
+                    <td th:text="${historyRun.startedAt != null ? historyRun.startedAt : '-'}">-</td>
+                    <td th:text="${historyRun.completedAt != null ? historyRun.completedAt : '-'}">-</td>
+                    <td th:text="${historyRun.durationLabel}">--</td>
+                    <td><span class="status" th:text="${historyRun.statusLabel}">等待执行</span></td>
+                    <td class="numeric" th:text="${historyRun.matchedRows}">0</td>
+                    <td class="numeric" th:text="${historyRun.differenceRows}">0</td>
+                    <td th:text="${historyRun.errorMessage != null ? historyRun.errorMessage : '-'}">-</td>
+                </tr>
+                <tr th:if="${#lists.isEmpty(runs)}"><td colspan="10" class="empty-state">暂无运行记录</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
     <section class="table-section">
         <div class="section-heading">
             <div><h2>对账结果</h2><p>精确匹配渠道流水号与金额</p></div>
             <form class="filter-form" method="get" th:action="@{/admin/reconciliation/{id}(id=${batch.id})}">
                 <select name="resultType" aria-label="结果类型">
                     <option value="">全部结果</option>
-                    <option th:each="type : ${resultTypes}" th:value="${type}" th:text="${type}" th:selected="${selectedResultType == type.name()}">MATCHED</option>
+                    <option th:each="type : ${resultTypes}" th:value="${type.value}" th:text="${type.label}" th:selected="${selectedResultType == type.value}">匹配一致</option>
                 </select>
                 <select name="resolutionStatus" aria-label="处理状态">
                     <option value="">全部状态</option>
-                    <option th:each="status : ${resolutionStatuses}" th:value="${status}" th:text="${status}" th:selected="${selectedResolutionStatus == status.name()}">OPEN</option>
+                    <option th:each="status : ${resolutionStatuses}" th:value="${status.value}" th:text="${status.label}" th:selected="${selectedResolutionStatus == status.value}">待处理</option>
                 </select>
                 <button class="button button-secondary" type="submit">筛选</button>
             </form>
@@ -48,12 +80,11 @@
                     <td class="numeric" th:text="${result.internalAmountCents != null ? result.internalAmountCents : '-'}">-</td>
                     <td th:text="${result.resolutionLabel}">无需处理</td>
                     <td>
-                        <form th:if="${result.resolutionStatus.name() == 'OPEN'}" method="post" th:action="@{/admin/reconciliation/results/{id}/resolve(id=${result.id})}">
-                            <input type="hidden" th:name="${_csrf.parameterName}" th:value="${_csrf.token}">
-                            <input name="note" required maxlength="2000" placeholder="填写处理备注" aria-label="处理备注">
-                            <button class="button button-secondary" type="submit">标记已处理</button>
-                        </form>
-                        <span th:if="${result.resolutionStatus.name() != 'OPEN'}" th:text="${result.resolutionNote}">-</span>
+                        <a class="text-link"
+                           th:if="${result.resolutionStatus.name() == 'OPEN' || result.resolutionStatus.name() == 'CLAIMED'}"
+                           th:href="@{/admin/reconciliation/cases/{id}(id=${result.id})}">处理案件</a>
+                        <span th:if="${result.resolutionStatus.name() != 'OPEN' && result.resolutionStatus.name() != 'CLAIMED'}"
+                              th:text="${result.resolutionNote != null ? result.resolutionNote : '-'}">-</span>
                     </td>
                 </tr>
                 <tr th:if="${#lists.isEmpty(results)}"><td colspan="6" class="empty-state">暂无对账结果</td></tr>

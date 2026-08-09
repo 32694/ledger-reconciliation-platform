@@ -45,6 +45,12 @@ import org.springframework.test.web.servlet.MockMvc;
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 @Sql(statements = {
+    "TRUNCATE reconciliation.reconciliation_case_event",
+    "DELETE FROM reconciliation.reconciliation_resolution",
+    "DELETE FROM reconciliation.reconciliation_result",
+    "DELETE FROM reconciliation.reconciliation_run",
+    "DELETE FROM reconciliation.channel_statement_entry",
+    "DELETE FROM reconciliation.reconciliation_batch",
     "DELETE FROM audit.audit_event",
     "DELETE FROM payments.payment_instruction",
     "DELETE FROM accounts.customer_account",
@@ -53,6 +59,12 @@ import org.springframework.test.web.servlet.MockMvc;
     "DELETE FROM ledger.ledger_account"
 }, executionPhase = ExecutionPhase.BEFORE_TEST_METHOD)
 @Sql(statements = {
+    "TRUNCATE reconciliation.reconciliation_case_event",
+    "DELETE FROM reconciliation.reconciliation_resolution",
+    "DELETE FROM reconciliation.reconciliation_result",
+    "DELETE FROM reconciliation.reconciliation_run",
+    "DELETE FROM reconciliation.channel_statement_entry",
+    "DELETE FROM reconciliation.reconciliation_batch",
     "DELETE FROM audit.audit_event",
     "DELETE FROM payments.payment_instruction",
     "DELETE FROM accounts.customer_account",
@@ -66,6 +78,52 @@ class AdminWebTest {
     @Autowired AuditApi auditApi;
     @Autowired PaymentsApi paymentsApi;
     @Autowired JdbcTemplate jdbcTemplate;
+
+    private UUID insertReconciliationOperationsSummary() {
+        UUID batchId = UUID.randomUUID();
+        UUID openEntryId = UUID.randomUUID();
+        UUID claimedEntryId = UUID.randomUUID();
+        String fileHash = (UUID.randomUUID().toString() + UUID.randomUUID())
+                .replace("-", "");
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_batch
+                    (id, source_type, file_name, file_sha256, period_start, period_end,
+                     status, total_rows, matched_rows, difference_rows, created_by,
+                     created_at, started_at, completed_at)
+                VALUES (?, 'SYNTHETIC_CHANNEL', 'overview.csv', ?,
+                        '2026-01-15T09:30:00Z', '2026-01-15T10:00:00Z',
+                        'COMPLETED', 2, 1, 1, 'overview-test',
+                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """, batchId, fileHash);
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.channel_statement_entry
+                    (id, batch_id, line_number, channel_transaction_id, amount_cents, occurred_at)
+                VALUES (?, ?, 2, ?, 100, '2026-01-15T09:30:00Z'),
+                       (?, ?, 3, ?, 100, '2026-01-15T10:00:00Z')
+                """,
+                openEntryId, batchId, "OVERVIEW-OPEN-" + UUID.randomUUID(),
+                claimedEntryId, batchId, "OVERVIEW-CLAIMED-" + UUID.randomUUID());
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_result
+                    (id, batch_id, statement_entry_id, result_type, resolution_status, created_at)
+                VALUES (?, ?, ?, 'CHANNEL_ONLY', 'OPEN', CURRENT_TIMESTAMP)
+                """, UUID.randomUUID(), batchId, openEntryId);
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_result
+                    (id, batch_id, statement_entry_id, result_type, resolution_status,
+                     created_at, assigned_to, claimed_at)
+                VALUES (?, ?, ?, 'CHANNEL_ONLY', 'CLAIMED', CURRENT_TIMESTAMP,
+                        'overview-operator', CURRENT_TIMESTAMP)
+                """, UUID.randomUUID(), batchId, claimedEntryId);
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_run
+                    (id, batch_id, attempt_number, status, requested_by, requested_at,
+                     completed_at, error_message)
+                VALUES (?, ?, 1, 'FAILED', 'overview-operator', CURRENT_TIMESTAMP,
+                        CURRENT_TIMESTAMP, 'overview failure')
+                """, UUID.randomUUID(), batchId);
+        return batchId;
+    }
 
     @Test
     void redirectsAnonymousAdministratorToLogin() throws Exception {
@@ -106,6 +164,18 @@ class AdminWebTest {
                 .andExpect(content().string(containsString("交易账本管理平台")))
                 .andExpect(content().string(containsString("经营概览")))
                 .andExpect(content().string(containsString("客户账户总数")))
+                .andExpect(content().string(containsString("最近匹配率")))
+                .andExpect(content().string(containsString("待认领异常")))
+                .andExpect(content().string(containsString("处理中异常")))
+                .andExpect(content().string(containsString("失败对账任务")))
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*id=\"reconciliation-match-rate\"[^>]*href=\"/admin/reconciliation\"[^>]*>.*?<strong>--</strong>.*")))
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*id=\"reconciliation-open\"[^>]*href=\"/admin/reconciliation/cases\\?resolutionStatus=OPEN\"[^>]*>.*")))
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*id=\"reconciliation-claimed\"[^>]*href=\"/admin/reconciliation/cases\\?resolutionStatus=CLAIMED\"[^>]*>.*")))
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*id=\"reconciliation-failed\"[^>]*href=\"/admin/reconciliation\\?runStatus=FAILED\"[^>]*>.*")))
                 .andExpect(content().string(containsString("客户账户")))
                 .andExpect(content().string(containsString("资金操作")))
                 .andExpect(content().string(containsString("账本流水")))
@@ -115,6 +185,24 @@ class AdminWebTest {
                 .andExpect(content().string(containsString("管理后台")))
                 .andExpect(content().string(containsString("退出登录")))
                 .andExpect(content().string(containsString("新建账户")));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void rendersReconciliationOperationsMetrics() throws Exception {
+        UUID latestCompletedBatchId = insertReconciliationOperationsSummary();
+
+        mockMvc.perform(get("/admin"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*id=\"reconciliation-match-rate\"[^>]*href=\"/admin/reconciliation/"
+                                + latestCompletedBatchId + "\"[^>]*>.*?<strong>50\\.0%</strong>.*")))
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*id=\"reconciliation-open\"[^>]*>.*?<strong>1</strong>.*")))
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*id=\"reconciliation-claimed\"[^>]*>.*?<strong>1</strong>.*")))
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*id=\"reconciliation-failed\"[^>]*href=\"/admin/reconciliation\\?runStatus=FAILED\"[^>]*>.*?<strong>1</strong>.*")));
     }
 
     @Test
@@ -950,7 +1038,7 @@ class AdminWebTest {
         String marker = "audit-columns-" + UUID.randomUUID();
         auditApi.record(new AuditCommand(
                 null,
-                AuditAction.RECONCILIATION_RESOLVE,
+                AuditAction.RECONCILIATION_CASE_RESOLVE,
                 "RECONCILIATION_DIFFERENCE",
                 marker,
                 AuditOutcome.SUCCEEDED,
@@ -958,7 +1046,7 @@ class AdminWebTest {
                 null));
 
         mockMvc.perform(get("/admin/audit")
-                        .param("action", "RECONCILIATION_RESOLVE"))
+                        .param("action", "RECONCILIATION_CASE_RESOLVE"))
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("时间")))
                 .andExpect(content().string(containsString("操作人")))
@@ -967,7 +1055,7 @@ class AdminWebTest {
                 .andExpect(content().string(containsString("<th>结果</th>")))
                 .andExpect(content().string(containsString("摘要")))
                 .andExpect(content().string(containsString("关联标识")))
-                .andExpect(content().string(containsString("处理差异")))
+                .andExpect(content().string(containsString("解决差异")))
                 .andExpect(content().string(containsString(marker)))
                 .andExpect(content().string(containsString("已安全处理")))
                 .andExpect(content().string(containsString("—")));

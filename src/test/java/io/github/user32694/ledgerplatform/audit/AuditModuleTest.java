@@ -44,6 +44,9 @@ class AuditModuleTest {
                         AuditAction.PAYMENT_REVERSAL,
                         AuditAction.RECONCILIATION_IMPORT,
                         AuditAction.RECONCILIATION_RUN,
+                        AuditAction.RECONCILIATION_CASE_CLAIM,
+                        AuditAction.RECONCILIATION_CASE_RELEASE,
+                        AuditAction.RECONCILIATION_CASE_RESOLVE,
                         AuditAction.RECONCILIATION_RESOLVE);
         assertThat(AuditOutcome.values())
                 .containsExactly(AuditOutcome.SUCCEEDED, AuditOutcome.FAILED);
@@ -111,6 +114,22 @@ class AuditModuleTest {
                         AuditAction.PAYMENT_TRANSFER, AuditOutcome.FAILED, 100))
                 .extracting(AuditEventView::aggregateId)
                 .containsExactly("p-2");
+    }
+
+    @Test
+    void preservesLegacyReconciliationResolveAuditEvents() {
+        var recorded = auditApi.record(new AuditCommand(
+                "legacy-operator",
+                AuditAction.RECONCILIATION_RESOLVE,
+                "RECONCILIATION_RESULT",
+                "legacy-result",
+                AuditOutcome.SUCCEEDED,
+                "legacy resolution",
+                "legacy-batch"));
+
+        assertThat(auditApi.findRecent(AuditAction.RECONCILIATION_RESOLVE, null, 100))
+                .singleElement()
+                .isEqualTo(recorded);
     }
 
     @Test

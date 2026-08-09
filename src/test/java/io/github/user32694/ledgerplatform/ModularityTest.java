@@ -2,9 +2,14 @@ package io.github.user32694.ledgerplatform;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.github.user32694.ledgerplatform.accounts.AccountsApi;
+import io.github.user32694.ledgerplatform.payments.PaymentsApi;
+import io.github.user32694.ledgerplatform.reconciliation.ReconciliationApi;
+import java.util.Arrays;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.modulith.ApplicationModule;
 import org.springframework.modulith.core.ApplicationModules;
 
@@ -25,6 +30,19 @@ class ModularityTest {
     @Test
     void verifiesModuleDependencies() {
         modules.verify();
+    }
+
+    @Test
+    void overviewUsesOnlyPublicModuleApis() {
+        assertThat(OverviewController.class.getDeclaredConstructors())
+                .singleElement()
+                .satisfies(constructor -> assertThat(constructor.getParameterTypes())
+                        .containsExactly(AccountsApi.class, PaymentsApi.class, ReconciliationApi.class));
+        assertThat(Arrays.stream(OverviewController.class.getDeclaredFields())
+                        .map(field -> field.getType().getName()))
+                .noneMatch(name -> name.contains(".internal.") || name.endsWith("Repository"));
+        assertThat(OverviewController.class.getAnnotation(ConditionalOnBean.class).value())
+                .containsExactly(AccountsApi.class, PaymentsApi.class, ReconciliationApi.class);
     }
 
     @Test

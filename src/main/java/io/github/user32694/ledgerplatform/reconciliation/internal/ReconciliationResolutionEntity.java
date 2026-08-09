@@ -1,7 +1,10 @@
 package io.github.user32694.ledgerplatform.reconciliation.internal;
 
+import io.github.user32694.ledgerplatform.reconciliation.ResolutionCode;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.Instant;
@@ -26,24 +29,42 @@ class ReconciliationResolutionEntity {
     @Column(nullable = false, length = 128)
     private String operator;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "resolution_code", nullable = false, length = 32)
+    private ResolutionCode resolutionCode;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
     protected ReconciliationResolutionEntity() {}
 
-    static ReconciliationResolutionEntity resolve(UUID resultId, String note, String operator, Instant createdAt) {
+    static ReconciliationResolutionEntity resolve(
+            UUID resultId,
+            ResolutionCode resolutionCode,
+            String note,
+            String operator,
+            Instant createdAt) {
         var entity = new ReconciliationResolutionEntity();
         entity.id = UUID.randomUUID();
         entity.resultId = resultId;
         entity.action = "RESOLVE";
         entity.note = note;
         entity.operator = operator;
+        entity.resolutionCode = resolutionCode;
         entity.createdAt = createdAt.truncatedTo(ChronoUnit.MICROS);
         return entity;
     }
 
     String note() {
         return note;
+    }
+
+    ResolutionCode resolutionCode() {
+        return resolutionCode;
+    }
+
+    UUID resultId() {
+        return resultId;
     }
 
     String operator() {

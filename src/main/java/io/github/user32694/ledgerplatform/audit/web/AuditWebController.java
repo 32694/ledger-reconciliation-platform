@@ -61,7 +61,10 @@ public class AuditWebController {
             case PAYMENT_REVERSAL -> "转账冲正";
             case RECONCILIATION_IMPORT -> "对账导入";
             case RECONCILIATION_RUN -> "执行对账";
-            case RECONCILIATION_RESOLVE -> "处理差异";
+            case RECONCILIATION_CASE_CLAIM -> "认领差异";
+            case RECONCILIATION_CASE_RELEASE -> "取消认领";
+            case RECONCILIATION_CASE_RESOLVE -> "解决差异";
+            case RECONCILIATION_RESOLVE -> "处理差异（旧版）";
         };
     }
 

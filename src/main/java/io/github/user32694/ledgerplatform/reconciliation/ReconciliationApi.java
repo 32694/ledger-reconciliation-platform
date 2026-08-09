@@ -10,10 +10,28 @@ public interface ReconciliationApi {
 
     ReconciliationBatchView getBatch(UUID batchId);
 
-    ReconciliationBatchView run(UUID batchId);
+    ReconciliationRunView startRun(UUID batchId, String operator);
+
+    List<ReconciliationRunView> findRuns(UUID batchId);
 
     List<ReconciliationResultView> findResults(
             UUID batchId, ResultType resultType, ResolutionStatus resolutionStatus);
 
-    ReconciliationResultView resolve(UUID resultId, String note, String operator);
+    ReconciliationResultView claim(UUID resultId, String operator);
+
+    ReconciliationResultView release(UUID resultId, String operator);
+
+    ReconciliationResultView resolve(
+            UUID resultId, ResolutionCode resolutionCode, String note, String operator);
+
+    List<ReconciliationCaseEventView> findCaseEvents(UUID resultId);
+
+    List<ReconciliationCaseView> findCases(
+            ResultType type, ResolutionStatus status, String assignee);
+
+    List<ReconciliationCaseProgress> findCaseProgresses();
+
+    ReconciliationCaseDetailsView getResult(UUID resultId);
+
+    ReconciliationOperationsSummary getOperationsSummary();
 }

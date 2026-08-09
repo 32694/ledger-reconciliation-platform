@@ -65,6 +65,7 @@ class DocumentationTest {
     void documentsReversePaymentAndAuditWorkflows() throws IOException {
         String readme = Files.readString(Path.of("README.md"));
         String guide = Files.readString(Path.of("docs/USER_GUIDE.md"));
+        String migrationGuide = Files.readString(Path.of("docs/MIGRATION.md"));
 
         assertThat(readme)
                 .contains("全额退款")
@@ -76,9 +77,81 @@ class DocumentationTest {
                 .contains("全额冲正")
                 .contains("INSUFFICIENT_FUNDS")
                 .contains("审计日志")
+                .contains("应用接口只追加")
+                .contains("不提供修改或删除入口")
+                .contains("数据库层未禁止直接修改")
                 .contains("使用新幂等键重试")
                 .contains("两份不可变 journal")
                 .contains("唯一幂等键");
+        assertThat(readme)
+                .contains("应用接口只追加")
+                .contains("不提供修改或删除入口")
+                .doesNotContain("只追加、不可修改的审计事件");
+        assertThat(migrationGuide)
+                .contains("不包含禁止 `UPDATE` 或 `DELETE` 的数据库触发器");
+    }
+
+    @org.junit.jupiter.api.Test
+    void documentsAsynchronousReconciliationOperationsWorkflow() throws IOException {
+        String readme = Files.readString(Path.of("README.md"));
+        String guide = Files.readString(Path.of("docs/USER_GUIDE.md"));
+
+        assertThat(readme)
+                .contains("异步对账")
+                .contains("应用进程内本地线程池")
+                .contains("应用重启")
+                .contains("不会续跑")
+                .contains("只记录运营结论")
+                .contains("不会自动修改账本");
+        assertThat(guide)
+                .contains("`QUEUED`：等待执行")
+                .contains("`RUNNING`：对账中")
+                .contains("`SUCCEEDED`：已完成")
+                .contains("`FAILED`：执行失败")
+                .contains("HTMX")
+                .contains("每 `2` 秒")
+                .contains("导入成功后自动进入批次详情")
+                .contains("查看历史批次")
+                .contains("重新发起对账")
+                .contains("历史 attempt")
+                .contains("/admin/reconciliation/cases")
+                .contains("`OPEN` -> `CLAIMED` -> `RESOLVED`")
+                .contains("认领案件")
+                .contains("取消认领")
+                .contains("解决案件")
+                .contains("`INTERNAL_CONFIRMED`：内部账务为准")
+                .contains("`CHANNEL_CONFIRMED`：渠道账单为准")
+                .contains("`IGNORED_TEST_DATA`：忽略测试数据")
+                .contains("`OTHER`：其他")
+                .contains("不可变时间线")
+                .contains("审计日志")
+                .contains("应用进程内本地线程池")
+                .contains("active run 标记为 `FAILED`")
+                .contains("不会续跑")
+                .contains("只记录运营结论")
+                .contains("不会自动修改账本")
+                .doesNotContain("导入成功后，在批次列表点击**查看详情**")
+                .doesNotContain("**导入账单** -> **查看详情** -> **开始对账**");
+    }
+
+    @org.junit.jupiter.api.Test
+    void documentsReconciliationOperationsMigrationAndRollbackBoundaries() throws IOException {
+        String migrationGuide = Files.readString(Path.of("docs/MIGRATION.md"));
+
+        assertThat(migrationGuide)
+                .contains("JDK 17")
+                .contains("PostgreSQL 17")
+                .contains("Flyway")
+                .contains("V12__add_reconciliation_operations.sql")
+                .contains("V13__allow_claimed_reconciliation_status.sql")
+                .contains("旧约束")
+                .contains("升级前备份")
+                .contains("应用进程内本地线程池")
+                .contains("active run")
+                .contains("不会续跑")
+                .contains("Flyway 不提供自动回滚")
+                .contains("升级后产生的运行历史、案件时间线和审计记录")
+                .contains("不可回滚");
     }
 
     @org.junit.jupiter.api.Test

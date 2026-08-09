@@ -55,10 +55,13 @@ h2 { margin-bottom: 3px; font-size: 16px; }
 .text-link { color: var(--accent-dark); font-weight: 650; }
 
 .metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 26px; }
-.metrics article { padding: 16px 18px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); }
+.metrics article, .metrics .metric-link { padding: 16px 18px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); }
+.metrics .metric-link { text-decoration: none; }
+.metrics .metric-link:hover { border-color: var(--accent); }
 .metrics span { display: block; color: var(--muted); font-size: 12px; }
 .metrics strong { display: block; margin-top: 6px; font-size: 22px; }
 .metrics strong span { display: inline; color: inherit; font-size: inherit; }
+.reconciliation-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 
 .table-section { border-top: 2px solid #3c4950; background: var(--surface); }
 .section-heading { min-height: 66px; padding: 12px 16px; border: 1px solid var(--line); border-top: 0; }
@@ -89,6 +92,8 @@ tbody tr:hover { background: #f8fbfa; }
 .filter-form { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .filter-form select { min-height: 34px; padding: 5px 8px; border: 1px solid #aeb8bf; border-radius: 3px; color: var(--ink); background: #fff; }
 .filter-form input { min-width: 150px; min-height: 34px; padding: 5px 8px; border: 1px solid #aeb8bf; border-radius: 3px; }
+.filter-form .checkbox-field { display: inline-flex; min-height: 34px; align-items: center; gap: 6px; color: var(--muted); }
+.filter-form .checkbox-field input { min-width: 0; min-height: 0; width: 16px; height: 16px; }
 .split-workspace { display: grid; grid-template-columns: minmax(320px, 420px) minmax(0, 1fr); gap: 22px; align-items: start; }
 .compact-table td, .compact-table th { height: 40px; padding-inline: 10px; }
 
@@ -99,6 +104,10 @@ tbody tr:hover { background: #f8fbfa; }
 .definition-grid > div { min-width: 0; padding: 14px 16px; border: 1px solid var(--line); border-top: 0; }
 .definition-grid dt { margin-bottom: 5px; color: var(--muted); font-size: 12px; font-weight: 650; }
 .definition-grid dd { margin: 0; overflow-wrap: anywhere; }
+.case-actions { margin-bottom: 22px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
+.case-actions > form, .case-owner-actions { padding-top: 16px; }
+.case-owner-actions { display: flex; align-items: flex-start; gap: 16px; }
+.resolve-form { flex: 1; }
 .login-page { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: #eef1f2; }
 .login-panel { width: min(380px, 100%); padding: 28px; border: 1px solid var(--line); border-top: 4px solid var(--accent); background: var(--surface); }
 .login-panel h1 { margin-bottom: 24px; font-size: 22px; }
@@ -112,9 +121,11 @@ tbody tr:hover { background: #f8fbfa; }
     .workspace { width: 100%; }
     .topbar { padding-inline: 18px; }
     .content { padding: 20px 16px; }
-    .page-heading { align-items: flex-start; }
+    .page-heading { align-items: stretch; flex-direction: column; }
+    .page-heading .actions { justify-content: flex-start; }
     .actions { flex-wrap: wrap; justify-content: flex-end; }
     .metrics, .split-workspace { grid-template-columns: minmax(0, 1fr); }
     .definition-grid { grid-template-columns: minmax(0, 1fr); }
     .filter-form { width: 100%; justify-content: flex-start; }
+    .case-list-heading, .case-owner-actions { align-items: stretch; flex-direction: column; }
 }

@@ -12,24 +12,41 @@
     <section class="table-section">
         <div class="section-heading">
             <div>
-                <h2>对账批次</h2>
-                <p>上传文件后手动开始对账</p>
+                <h2 th:text="${listTitle}">对账批次</h2>
+                <p th:text="${selectedRunStatus != null ? '展示包含该运行状态的对账批次' : '上传文件后手动开始对账'}">上传文件后手动开始对账</p>
             </div>
-            <span class="result-count" th:text="${#lists.size(batches) + ' 个批次'}">0 个批次</span>
+            <div class="actions">
+                <a class="text-link" th:if="${selectedRunStatus != null}" th:href="@{/admin/reconciliation}">清除筛选</a>
+                <span class="result-count" th:text="${#lists.size(batches) + ' 个批次'}">0 个批次</span>
+            </div>
         </div>
         <div class="table-scroll">
             <table>
-                <thead><tr><th>文件名</th><th>状态</th><th class="numeric">总行数</th><th class="numeric">匹配</th><th class="numeric">差异</th><th>操作</th></tr></thead>
+                <thead><tr><th>文件名</th><th>批次状态</th><th>最近运行</th><th>异常处理</th><th class="numeric">总行数</th><th class="numeric">匹配</th><th class="numeric">差异</th><th>失败原因</th><th>操作</th></tr></thead>
                 <tbody>
                 <tr th:each="batch : ${batches}">
                     <td class="mono" th:text="${batch.fileName}">statement.csv</td>
                     <td><span class="status" th:text="${batch.statusLabel}">待对账</span></td>
+                    <td>
+                        <span th:if="${batch.latestRun != null}"
+                              th:text="${'第 ' + batch.latestRun.attemptNumber + ' 次 · ' + batch.latestRun.statusLabel + ' · ' + batch.latestRun.requestedBy}">第 1 次 · 等待执行 · admin</span>
+                        <small th:if="${batch.latestRun != null}" th:text="${batch.latestRun.requestedAt}">2026-01-15T10:00:00Z</small>
+                        <span th:if="${batch.latestRun == null}">尚未运行</span>
+                    </td>
+                    <td th:text="${batch.caseProgressLabel}">尚无异常</td>
                     <td class="numeric" th:text="${batch.totalRows}">0</td>
                     <td class="numeric" th:text="${batch.matchedRows}">0</td>
                     <td class="numeric" th:text="${batch.differenceRows}">0</td>
+                    <td>
+                        <span class="field-error" th:if="${batch.latestRun != null && batch.latestRun.errorMessage != null}"
+                              th:text="${batch.latestRun.errorMessage}">执行失败</span>
+                        <span class="field-error" th:if="${(batch.latestRun == null || batch.latestRun.errorMessage == null) && batch.errorMessage != null}"
+                              th:text="${batch.errorMessage}">批次失败</span>
+                        <span th:if="${(batch.latestRun == null || batch.latestRun.errorMessage == null) && batch.errorMessage == null}">-</span>
+                    </td>
                     <td><a class="text-link" th:href="@{/admin/reconciliation/{id}(id=${batch.id})}">查看详情</a></td>
                 </tr>
-                <tr th:if="${#lists.isEmpty(batches)}"><td colspan="6" class="empty-state">暂无对账批次</td></tr>
+                <tr th:if="${#lists.isEmpty(batches)}"><td colspan="9" class="empty-state">暂无对账批次</td></tr>
                 </tbody>
             </table>
         </div>
