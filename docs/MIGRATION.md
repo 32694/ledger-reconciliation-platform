@@ -5,16 +5,18 @@
 ## 迁移规则
 
 - 应用启动时自动执行待执行的 Flyway migration。
-- `V1-V8` 已发布且不可修改；**不可直接修改已执行**的 Flyway migration。任何新结构必须新增更大的版本号。
+- `V1-V8` 及后续 migration 已发布且不可修改；**不可直接修改已执行**的 Flyway migration。任何新结构必须新增更大的版本号。
 - 本里程碑新增：
   - `V9__add_payment_refunds_and_reversals.sql`：为 payment instruction 增加反向支付关联字段、操作原因和反向类型约束。
   - `V10__create_audit_events.sql`：创建只追加的 `audit.audit_event` 表，保存 action/outcome 字段并添加时间查询索引。
   - `V11__allow_reverse_journal_types.sql`：允许账本 journal 使用 `REFUND` 和 `REVERSAL` 类型，不改变应用已有的借贷平衡校验。
+  - `V12__add_reconciliation_operations.sql`：增加异步运行 attempt、差异负责人、解决方式和不可变案件时间线，并迁移已有解决记录。
+  - `V13__allow_claimed_reconciliation_status.sql`：修复 V12 未替换完全的旧约束，使 `reconciliation_result.resolution_status` 合法接受 `CLAIMED`。
 - Flyway 会在升级时按版本顺序执行；不要跳过或重排脚本，也不要手动修改 `flyway_schema_history`。
 
 ## 1. 迁移前准备和停机
 
-1. 在源电脑停止 Java 进程（`Ctrl-C`），确认没有写入中的资金操作或对账任务。
+1. 在源电脑停止 Java 进程（`Ctrl-C`），确认没有写入中的资金操作或对账任务；必须先完成升级前备份。
 2. 确认源电脑和目标电脑均安装 JDK 17、PostgreSQL 17 客户端（`pg_dump`、`pg_restore`）。
 3. 在仓库根目录检查 Git 工作区，只迁移已提交的代码：
 
@@ -85,17 +87,19 @@ PGPASSWORD="$DB_PASSWORD" pg_restore \
 迁移升级需要短暂停机：
 
 1. 先完成备份并停止旧版本应用。
-2. 更新代码到包含 V9-V11 的提交（`git pull --ff-only` 或重新 clone）。
+2. 更新代码到包含 V9-V13 的提交（`git pull --ff-only` 或重新 clone）。
 3. 启动新版本应用：
 
 ```sh
 ./mvnw spring-boot:run
 ```
 
-4. Flyway 在启动事务中按顺序执行 V9、V10、V11；日志出现 migration 成功后再开放管理页面。
-5. 登录并检查 `/admin/payments/top-up`、`/admin/payments/transfer`、`/admin/audit`，确认近期记录、反向交易链接和审计事件可见。
+4. Flyway 按顺序执行尚未执行的 V9-V13；日志出现 migration 成功后再开放管理页面。V13 是 V12 的旧约束修复，两者不能跳过、重排或合并。
+5. 登录并检查 `/admin/payments/top-up`、`/admin/payments/transfer`、`/admin/reconciliation`、`/admin/reconciliation/cases` 和 `/admin/audit`，确认近期记录、运行历史、案件时间线和审计事件可见。
 
 不要在应用运行时手动执行迁移脚本，也不要让旧版本应用和新版本应用同时写同一个数据库。
+
+异步对账 executor 是应用进程内本地线程池，不是持久化队列或独立 worker。应用重启后，原进程中的执行任务消失；新进程会把遗留的 `QUEUED`/`RUNNING` active run 标记为 `FAILED`，原任务不会续跑，需由管理员重新发起并创建新的 attempt。部署时不得假设多实例之间会转移或接管 active run。
 
 ## 5. 升级校验
 
@@ -121,16 +125,18 @@ curl --fail http://localhost:8080/actuator/health
 - 可对满足条件的原交易提交全额退款或全额冲正；
 - 原交易和反向交易的 journal 均存在且不可变；
 - `/admin/audit` 可按 action/outcome 筛选；
+- `/admin/reconciliation` 可查看异步运行状态和历史 attempt；
+- `/admin/reconciliation/cases` 可认领、取消认领和解决差异，并显示不可变时间线；
 - 旧的账户、支付、对账数据仍存在（如果恢复了 dump）。
 
 ## 6. 回滚边界
 
-Flyway 不提供自动回滚。发现新版本问题时：
+Flyway 不提供自动回滚。V12 会新增和回填运营记录，V13 会替换旧约束；这两项数据库变更不可通过切回旧应用自动撤销。发现新版本问题时：
 
-- 如果 V9-V11 尚未执行，只需停止应用并修复代码；不要修改已有 migration 文件。
+- 如果 V9-V13 尚未执行，只需停止应用并修复代码；不要修改已有 migration 文件。
 - 如果 migration 已执行但业务代码有问题，优先修复代码并重新部署；schema 向前兼容时使用新的 migration 继续演进。
-- 如果必须撤回 schema，先停止应用，使用升级前的 PostgreSQL dump 恢复到独立的空数据库，再启动与该 schema 兼容的旧版本。恢复会丢弃升级后产生的记录，因此必须明确数据丢失范围。
-- 不要通过删除 `flyway_schema_history`、编辑 checksum 或手工删除 V9/V10/V11 来“回滚”。
+- 如果必须撤回 schema，先停止应用，使用升级前的 PostgreSQL dump 恢复到独立的空数据库，再启动与该 schema 兼容的旧版本。升级后产生的运行历史、案件时间线和审计记录不可回滚到备份中，恢复会永久丢弃这些记录以及同期其他业务写入，必须先确认数据丢失范围。
+- 不要通过删除 `flyway_schema_history`、编辑 checksum 或手工删除 V9-V13 来“回滚”。
 
 回滚后再次启动时，应用和数据库的 migration 版本必须匹配。恢复完成后重新运行 `./mvnw clean verify` 和健康检查。
 
