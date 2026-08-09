@@ -274,6 +274,30 @@ class ReconciliationWebTest {
     }
 
     @Test
+    @WithMockUser(roles = "ADMIN")
+    void filtersBatchesByHistoricalRunStatusAndShowsTheMatchingAttempt() throws Exception {
+        var retriedBatch = importBatch("retried-failure.csv", "CH-RETRIED-FAILURE");
+        insertRun(retriedBatch.id(), 1, "FAILED", "failed-admin", 0, 1, "timeout");
+        insertRun(retriedBatch.id(), 2, "SUCCEEDED", "retry-admin", 1, 0, null);
+        var successfulBatch = importBatch("successful-only.csv", "CH-SUCCESSFUL-ONLY");
+        insertRun(successfulBatch.id(), 1, "SUCCEEDED", "success-admin", 1, 0, null);
+
+        mockMvc.perform(get("/admin/reconciliation").param("runStatus", "FAILED"))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/reconciliation-list"))
+                .andExpect(content().string(containsString("失败任务")))
+                .andExpect(content().string(containsString("retried-failure.csv")))
+                .andExpect(content().string(containsString("第 1 次")))
+                .andExpect(content().string(containsString("failed-admin")))
+                .andExpect(content().string(containsString("执行失败")))
+                .andExpect(content().string(not(containsString("retry-admin"))))
+                .andExpect(content().string(not(containsString("successful-only.csv"))));
+
+        mockMvc.perform(get("/admin/reconciliation").param("runStatus", "NOT_A_STATUS"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
     @WithMockUser(username = "case-admin", roles = "ADMIN")
     void rendersChineseActiveCaseWorkbenchAndSupportsFilters() throws Exception {
         var open = createChannelOnlyCase("web-open");

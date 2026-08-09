@@ -12,10 +12,13 @@
     <section class="table-section">
         <div class="section-heading">
             <div>
-                <h2>对账批次</h2>
-                <p>上传文件后手动开始对账</p>
+                <h2 th:text="${listTitle}">对账批次</h2>
+                <p th:text="${selectedRunStatus != null ? '展示包含该运行状态的对账批次' : '上传文件后手动开始对账'}">上传文件后手动开始对账</p>
             </div>
-            <span class="result-count" th:text="${#lists.size(batches) + ' 个批次'}">0 个批次</span>
+            <div class="actions">
+                <a class="text-link" th:if="${selectedRunStatus != null}" th:href="@{/admin/reconciliation}">清除筛选</a>
+                <span class="result-count" th:text="${#lists.size(batches) + ' 个批次'}">0 个批次</span>
+            </div>
         </div>
         <div class="table-scroll">
             <table>

@@ -12,6 +12,7 @@ import io.github.user32694.ledgerplatform.reconciliation.StatementUpload;
 import jakarta.servlet.http.HttpServletResponse;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.security.core.Authentication;
@@ -35,13 +36,20 @@ public class ReconciliationWebController {
     }
 
     @GetMapping
-    String list(Model model) {
-        model.addAttribute("batches", reconciliationApi.findBatches().stream()
-                .map(batch -> toBatchRow(batch, reconciliationApi.findRuns(batch.id()).stream()
-                        .findFirst()
-                        .map(ReconciliationWebController::toRunRow)
-                        .orElse(null)))
-                .toList());
+    String list(@RequestParam(required = false) RunStatus runStatus, Model model) {
+        var batches = new ArrayList<BatchRow>();
+        for (var batch : reconciliationApi.findBatches()) {
+            var selectedRun = reconciliationApi.findRuns(batch.id()).stream()
+                    .filter(run -> runStatus == null || run.status() == runStatus)
+                    .findFirst()
+                    .orElse(null);
+            if (runStatus == null || selectedRun != null) {
+                batches.add(toBatchRow(batch, selectedRun == null ? null : toRunRow(selectedRun)));
+            }
+        }
+        model.addAttribute("batches", batches);
+        model.addAttribute("selectedRunStatus", runStatus == null ? null : runStatus.name());
+        model.addAttribute("listTitle", runStatus == null ? "对账批次" : runStatusFilterLabel(runStatus));
         model.addAttribute("activeNav", "reconciliation");
         return "admin/reconciliation-list";
     }
@@ -191,6 +199,15 @@ public class ReconciliationWebController {
             case RUNNING -> "对账中";
             case SUCCEEDED -> "已完成";
             case FAILED -> "执行失败";
+        };
+    }
+
+    private static String runStatusFilterLabel(RunStatus status) {
+        return switch (status) {
+            case QUEUED -> "等待执行任务";
+            case RUNNING -> "执行中任务";
+            case SUCCEEDED -> "成功任务";
+            case FAILED -> "失败任务";
         };
     }
 

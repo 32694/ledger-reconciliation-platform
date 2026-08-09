@@ -183,6 +183,7 @@ public class ReconciliationFacade implements ReconciliationApi {
             }
         }
         return new ReconciliationOperationsSummary(
+                latestBatch == null ? null : latestBatch.id(),
                 matchRate,
                 store.countResults(ResolutionStatus.OPEN),
                 store.countResults(ResolutionStatus.CLAIMED),

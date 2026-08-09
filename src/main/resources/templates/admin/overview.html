@@ -29,6 +29,29 @@
         </article>
     </section>
 
+    <section class="metrics reconciliation-metrics" aria-label="对账运营概览">
+        <a id="reconciliation-match-rate" class="metric-link"
+           th:href="${reconciliationOperations.latestCompletedBatchId != null} ? @{/admin/reconciliation/{id}(id=${reconciliationOperations.latestCompletedBatchId})} : @{/admin/reconciliation}">
+            <span>最近匹配率</span>
+            <strong th:text="${reconciliationOperations.completedMatchRate != null ? #numbers.formatDecimal(reconciliationOperations.completedMatchRate, 1, 1) + '%' : '--'}">--</strong>
+        </a>
+        <a id="reconciliation-open" class="metric-link"
+           th:href="@{/admin/reconciliation/cases(resolutionStatus='OPEN')}">
+            <span>待认领异常</span>
+            <strong th:text="${reconciliationOperations.openCount}">0</strong>
+        </a>
+        <a id="reconciliation-claimed" class="metric-link"
+           th:href="@{/admin/reconciliation/cases(resolutionStatus='CLAIMED')}">
+            <span>处理中异常</span>
+            <strong th:text="${reconciliationOperations.claimedCount}">0</strong>
+        </a>
+        <a id="reconciliation-failed" class="metric-link"
+           th:href="@{/admin/reconciliation(runStatus='FAILED')}">
+            <span>失败对账任务</span>
+            <strong th:text="${reconciliationOperations.failedRunCount}">0</strong>
+        </a>
+    </section>
+
     <section class="table-section">
         <div class="section-heading">
             <div>

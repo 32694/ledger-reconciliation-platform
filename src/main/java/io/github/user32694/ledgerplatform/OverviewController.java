@@ -2,6 +2,7 @@ package io.github.user32694.ledgerplatform;
 
 import io.github.user32694.ledgerplatform.accounts.AccountsApi;
 import io.github.user32694.ledgerplatform.payments.PaymentsApi;
+import io.github.user32694.ledgerplatform.reconciliation.ReconciliationApi;
 import java.math.BigDecimal;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.stereotype.Controller;
@@ -9,14 +10,19 @@ import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
 
 @Controller
-@ConditionalOnBean({AccountsApi.class, PaymentsApi.class})
+@ConditionalOnBean({AccountsApi.class, PaymentsApi.class, ReconciliationApi.class})
 public class OverviewController {
     private final AccountsApi accountsApi;
     private final PaymentsApi paymentsApi;
+    private final ReconciliationApi reconciliationApi;
 
-    public OverviewController(AccountsApi accountsApi, PaymentsApi paymentsApi) {
+    public OverviewController(
+            AccountsApi accountsApi,
+            PaymentsApi paymentsApi,
+            ReconciliationApi reconciliationApi) {
         this.accountsApi = accountsApi;
         this.paymentsApi = paymentsApi;
+        this.reconciliationApi = reconciliationApi;
     }
 
     @GetMapping("/login")
@@ -43,6 +49,7 @@ public class OverviewController {
                         payment.status(),
                         paymentStatusLabel(payment.status())))
                 .toList());
+        model.addAttribute("reconciliationOperations", reconciliationApi.getOperationsSummary());
         model.addAttribute("activeNav", "overview");
         return "admin/overview";
     }

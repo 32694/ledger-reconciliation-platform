@@ -661,6 +661,7 @@ class ReconciliationModuleTest {
     void reportsEmptyOperationsSummaryWithoutCompletedBatches() {
         var summary = reconciliationApi.getOperationsSummary();
 
+        assertThat(summary.latestCompletedBatchId()).isNull();
         assertThat(summary.completedMatchRate()).isNull();
         assertThat(summary.openCount()).isZero();
         assertThat(summary.claimedCount()).isZero();
@@ -691,6 +692,7 @@ class ReconciliationModuleTest {
                 """, failedRunId, batch.id());
 
         var summary = reconciliationApi.getOperationsSummary();
+        assertThat(summary.latestCompletedBatchId()).isEqualTo(batch.id());
         assertThat(summary.completedMatchRate()).isEqualTo(50.0);
         assertThat(summary.openCount()).isZero();
         assertThat(summary.claimedCount()).isOne();
