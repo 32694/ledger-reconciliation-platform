@@ -336,6 +336,60 @@ class MigrationIntegrationTest {
     }
 
     @Test
+    void upgradesLegacyPaymentsFromV8WithoutRewritingThem() throws SQLException {
+        var canCreateDatabase = jdbcTemplate.queryForObject("""
+                SELECT rolcreatedb OR rolsuper
+                FROM pg_roles
+                WHERE rolname = current_user
+                """, Boolean.class);
+        assumeTrue(
+                Boolean.TRUE.equals(canCreateDatabase),
+                "V8 upgrade test requires a database-creating test role");
+
+        var databaseName = "ledger_migration_test_" + UUID.randomUUID().toString().replace("-", "");
+        var temporaryDatasourceUrl = datasourceUrlFor(databaseName);
+
+        try {
+            createTemporaryDatabase(databaseName);
+            Flyway.configure()
+                    .dataSource(temporaryDatasourceUrl, datasourceUsername, datasourcePassword)
+                    .target("8")
+                    .load()
+                    .migrate();
+
+            var legacyDatabase = new JdbcTemplate(new DriverManagerDataSource(
+                    temporaryDatasourceUrl, datasourceUsername, datasourcePassword));
+            var payerId = insertLegacyCustomerAccount(legacyDatabase);
+            var payeeId = insertLegacyCustomerAccount(legacyDatabase);
+            var topUpId = insertLegacyPayment(legacyDatabase, "TOP_UP", null, payeeId);
+            var transferId = insertLegacyPayment(legacyDatabase, "TRANSFER", payerId, payeeId);
+            var legacyRows = paymentSnapshots(legacyDatabase, topUpId, transferId);
+
+            Flyway.configure()
+                    .dataSource(temporaryDatasourceUrl, datasourceUsername, datasourcePassword)
+                    .load()
+                    .migrate();
+
+            assertThat(paymentSnapshots(legacyDatabase, topUpId, transferId)).isEqualTo(legacyRows);
+            assertThat(legacyDatabase.queryForObject("""
+                    SELECT COUNT(*)
+                    FROM payments.payment_instruction
+                    WHERE id IN (?, ?)
+                      AND original_payment_id IS NULL
+                      AND operation_reason IS NULL
+                    """, Integer.class, topUpId, transferId)).isEqualTo(2);
+            assertThat(legacyDatabase.queryForList("""
+                    SELECT version
+                    FROM flyway_schema_history
+                    WHERE version IN ('9', '10', '11') AND success
+                    ORDER BY installed_rank
+                    """, String.class)).containsExactly("9", "10", "11");
+        } finally {
+            dropTemporaryDatabase(databaseName);
+        }
+    }
+
+    @Test
     void upgradesLegacyPaymentsAndResolvedCasesFromV11() throws SQLException {
         var canCreateDatabase = jdbcTemplate.queryForObject("""
                 SELECT rolcreatedb OR rolsuper

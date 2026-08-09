@@ -3,6 +3,7 @@ package io.github.user32694.ledgerplatform.reconciliation.web;
 import io.github.user32694.ledgerplatform.reconciliation.BatchStatus;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationApi;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationBatchView;
+import io.github.user32694.ledgerplatform.reconciliation.ReconciliationCaseProgress;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationResultView;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationRunView;
 import io.github.user32694.ledgerplatform.reconciliation.ResolutionStatus;
@@ -15,7 +16,9 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -39,15 +42,19 @@ public class ReconciliationWebController {
     @GetMapping
     String list(@RequestParam(required = false) RunStatus runStatus, Model model) {
         var batches = new ArrayList<BatchRow>();
+        Map<UUID, ReconciliationCaseProgress> progressByBatch = reconciliationApi
+                .findCaseProgresses().stream()
+                .collect(Collectors.toMap(ReconciliationCaseProgress::batchId, progress -> progress));
         for (var batch : reconciliationApi.findBatches()) {
             var selectedRun = reconciliationApi.findRuns(batch.id()).stream()
                     .filter(run -> runStatus == null || run.status() == runStatus)
                     .findFirst()
                     .orElse(null);
             if (runStatus == null || selectedRun != null) {
-                var results = reconciliationApi.findResults(batch.id(), null, null);
                 batches.add(toBatchRow(
-                        batch, selectedRun == null ? null : toRunRow(selectedRun), results));
+                        batch,
+                        selectedRun == null ? null : toRunRow(selectedRun),
+                        progressByBatch.get(batch.id())));
             }
         }
         model.addAttribute("batches", batches);
@@ -152,17 +159,17 @@ public class ReconciliationWebController {
     }
 
     private static BatchRow toBatchRow(ReconciliationBatchView batch, RunRow latestRun) {
-        return toBatchRow(batch, latestRun, List.of());
+        return toBatchRow(batch, latestRun, null);
     }
 
     private static BatchRow toBatchRow(
             ReconciliationBatchView batch,
             RunRow latestRun,
-            List<ReconciliationResultView> results) {
+            ReconciliationCaseProgress progress) {
         return new BatchRow(
                 batch.id(), batch.fileName(), batch.status(), statusLabel(batch.status()),
                 batch.totalRows(), batch.matchedRows(), batch.differenceRows(), batch.errorMessage(),
-                caseProgressLabel(batch, results), latestRun);
+                caseProgressLabel(batch, progress), latestRun);
     }
 
     private static ResultRow toResultRow(ReconciliationResultView result) {
@@ -240,18 +247,11 @@ public class ReconciliationWebController {
     }
 
     private static String caseProgressLabel(
-            ReconciliationBatchView batch, List<ReconciliationResultView> results) {
-        long total = results.stream()
-                .filter(result -> result.resultType() != ResultType.MATCHED)
-                .count();
-        if (total == 0) {
+            ReconciliationBatchView batch, ReconciliationCaseProgress progress) {
+        if (progress == null) {
             return batch.status() == BatchStatus.COMPLETED ? "无需处理" : "尚无异常";
         }
-        long resolved = results.stream()
-                .filter(result -> result.resultType() != ResultType.MATCHED)
-                .filter(result -> result.resolutionStatus() == ResolutionStatus.RESOLVED)
-                .count();
-        return "已解决 " + resolved + " / " + total;
+        return "已解决 " + progress.resolvedCount() + " / " + progress.totalCount();
     }
 
     public record BatchRow(

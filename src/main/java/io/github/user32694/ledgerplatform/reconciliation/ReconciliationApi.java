@@ -29,6 +29,8 @@ public interface ReconciliationApi {
     List<ReconciliationCaseView> findCases(
             ResultType type, ResolutionStatus status, String assignee);
 
+    List<ReconciliationCaseProgress> findCaseProgresses();
+
     ReconciliationCaseDetailsView getResult(UUID resultId);
 
     ReconciliationOperationsSummary getOperationsSummary();

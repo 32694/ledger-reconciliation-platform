@@ -7,6 +7,7 @@ import io.github.user32694.ledgerplatform.audit.AuditOutcome;
 import io.github.user32694.ledgerplatform.reconciliation.BatchStatus;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationBatchView;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationCaseEventView;
+import io.github.user32694.ledgerplatform.reconciliation.ReconciliationCaseProgress;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationRunView;
 import io.github.user32694.ledgerplatform.reconciliation.ResolutionCode;
 import io.github.user32694.ledgerplatform.reconciliation.ResolutionStatus;
@@ -136,7 +137,7 @@ class ReconciliationStore {
 
     @Transactional
     void recoverAbandonedRuns(String message, Instant recoveryCutoff) {
-        var activeRuns = runRepository.findAllByStatusInAndRequestedAtLessThanEqual(
+        var activeRuns = runRepository.findAllByStatusInAndRequestedAtLessThan(
                 List.of(RunStatus.QUEUED, RunStatus.RUNNING), recoveryCutoff);
         for (var run : activeRuns) {
             if (!run.fail(message, Instant.now())) {
@@ -262,6 +263,13 @@ class ReconciliationStore {
                 type,
                 status,
                 assignee);
+    }
+
+    @Transactional(readOnly = true)
+    List<ReconciliationCaseProgress> findCaseProgresses() {
+        return resultRepository.findCaseProgresses(
+                io.github.user32694.ledgerplatform.reconciliation.ResultType.MATCHED,
+                ResolutionStatus.RESOLVED);
     }
 
     @Transactional(readOnly = true)

@@ -4,6 +4,7 @@ import io.github.user32694.ledgerplatform.reconciliation.ReconciliationApi;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationBatchView;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationCaseDetailsView;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationCaseEventView;
+import io.github.user32694.ledgerplatform.reconciliation.ReconciliationCaseProgress;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationCaseView;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationOperationsSummary;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationResultView;
@@ -160,6 +161,11 @@ public class ReconciliationFacade implements ReconciliationApi {
         return results.stream()
                 .map(result -> toCaseView(result, lookup))
                 .toList();
+    }
+
+    @Override
+    public List<ReconciliationCaseProgress> findCaseProgresses() {
+        return store.findCaseProgresses();
     }
 
     @Override

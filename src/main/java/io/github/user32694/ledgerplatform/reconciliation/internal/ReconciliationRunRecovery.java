@@ -1,6 +1,7 @@
 package io.github.user32694.ledgerplatform.reconciliation.internal;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
@@ -12,7 +13,11 @@ class ReconciliationRunRecovery {
 
     ReconciliationRunRecovery(ReconciliationStore store) {
         this.store = store;
-        this.recoveryCutoff = Instant.now();
+        this.recoveryCutoff = toDatabasePrecision(Instant.now());
+    }
+
+    static Instant toDatabasePrecision(Instant instant) {
+        return instant.truncatedTo(ChronoUnit.MICROS);
     }
 
     @EventListener(ApplicationReadyEvent.class)

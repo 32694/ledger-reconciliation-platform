@@ -675,6 +675,24 @@ class ReconciliationModuleTest {
     }
 
     @Test
+    void aggregatesCaseProgressAcrossBatches() {
+        var open = createChannelOnlyDifference("progress-open");
+        var resolved = createChannelOnlyDifference("progress-resolved");
+        reconciliationApi.claim(resolved.id(), "progress-operator");
+        reconciliationApi.resolve(
+                resolved.id(), ResolutionCode.CHANNEL_CONFIRMED, "confirmed", "progress-operator");
+
+        assertThat(reconciliationApi.findCaseProgresses())
+                .extracting(
+                        ReconciliationCaseProgress::batchId,
+                        ReconciliationCaseProgress::resolvedCount,
+                        ReconciliationCaseProgress::totalCount)
+                .containsExactlyInAnyOrder(
+                        org.assertj.core.groups.Tuple.tuple(open.batchId(), 0L, 1L),
+                        org.assertj.core.groups.Tuple.tuple(resolved.batchId(), 1L, 1L));
+    }
+
+    @Test
     void reportsEmptyOperationsSummaryWithoutCompletedBatches() {
         var summary = reconciliationApi.getOperationsSummary();
 
