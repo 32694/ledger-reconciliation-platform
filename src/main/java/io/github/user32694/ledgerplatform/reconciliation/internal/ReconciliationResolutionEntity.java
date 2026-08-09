@@ -26,6 +26,9 @@ class ReconciliationResolutionEntity {
     @Column(nullable = false, length = 128)
     private String operator;
 
+    @Column(name = "resolution_code", nullable = false, length = 32)
+    private String resolutionCode;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -38,6 +41,7 @@ class ReconciliationResolutionEntity {
         entity.action = "RESOLVE";
         entity.note = note;
         entity.operator = operator;
+        entity.resolutionCode = "OTHER";
         entity.createdAt = createdAt.truncatedTo(ChronoUnit.MICROS);
         return entity;
     }

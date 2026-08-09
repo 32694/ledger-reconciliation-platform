@@ -8,6 +8,7 @@ import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.UUID;
@@ -37,6 +38,16 @@ class ReconciliationResultEntity {
 
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
+
+    @Column(name = "assigned_to", length = 128)
+    private String assignedTo;
+
+    @Column(name = "claimed_at")
+    private Instant claimedAt;
+
+    @Version
+    @Column(nullable = false)
+    private long version;
 
     protected ReconciliationResultEntity() {}
 
@@ -92,8 +103,10 @@ class ReconciliationResultEntity {
         if (operator == null || operator.isBlank()) {
             throw new IllegalArgumentException("Operator is required");
         }
+        assignedTo = operator.strip();
+        claimedAt = resolvedAt.truncatedTo(ChronoUnit.MICROS);
         resolutionStatus = ResolutionStatus.RESOLVED;
         return ReconciliationResolutionEntity.resolve(
-                id, note.strip(), operator.strip(), resolvedAt);
+                id, note.strip(), assignedTo, resolvedAt);
     }
 }

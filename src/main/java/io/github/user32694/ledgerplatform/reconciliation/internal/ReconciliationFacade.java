@@ -3,6 +3,7 @@ package io.github.user32694.ledgerplatform.reconciliation.internal;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationApi;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationBatchView;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationResultView;
+import io.github.user32694.ledgerplatform.reconciliation.ReconciliationRunView;
 import io.github.user32694.ledgerplatform.reconciliation.ResolutionStatus;
 import io.github.user32694.ledgerplatform.reconciliation.StatementUpload;
 import io.github.user32694.ledgerplatform.reconciliation.ResultType;
@@ -68,6 +69,25 @@ public class ReconciliationFacade implements ReconciliationApi {
             throw new IllegalArgumentException("Batch id is required");
         }
         return runner.run(batchId);
+    }
+
+    @Override
+    public ReconciliationRunView startRun(UUID batchId, String operator) {
+        if (batchId == null) {
+            throw new IllegalArgumentException("Batch id is required");
+        }
+        if (operator == null || operator.isBlank()) {
+            throw new IllegalArgumentException("Operator is required");
+        }
+        return store.queueRun(batchId, operator.strip());
+    }
+
+    @Override
+    public List<ReconciliationRunView> findRuns(UUID batchId) {
+        if (batchId == null) {
+            throw new IllegalArgumentException("Batch id is required");
+        }
+        return store.findRuns(batchId);
     }
 
     @Override

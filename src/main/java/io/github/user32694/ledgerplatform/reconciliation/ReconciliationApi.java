@@ -12,6 +12,10 @@ public interface ReconciliationApi {
 
     ReconciliationBatchView run(UUID batchId);
 
+    ReconciliationRunView startRun(UUID batchId, String operator);
+
+    List<ReconciliationRunView> findRuns(UUID batchId);
+
     List<ReconciliationResultView> findResults(
             UUID batchId, ResultType resultType, ResolutionStatus resolutionStatus);
 

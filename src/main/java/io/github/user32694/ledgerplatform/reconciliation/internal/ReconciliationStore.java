@@ -6,6 +6,8 @@ import io.github.user32694.ledgerplatform.audit.AuditCommand;
 import io.github.user32694.ledgerplatform.audit.AuditOutcome;
 import io.github.user32694.ledgerplatform.reconciliation.BatchStatus;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationBatchView;
+import io.github.user32694.ledgerplatform.reconciliation.ReconciliationRunView;
+import io.github.user32694.ledgerplatform.reconciliation.RunStatus;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -20,6 +22,7 @@ class ReconciliationStore {
     private final ChannelStatementEntryRepository entryRepository;
     private final ReconciliationResultRepository resultRepository;
     private final ReconciliationResolutionRepository resolutionRepository;
+    private final ReconciliationRunRepository runRepository;
     private final AuditApi auditApi;
 
     ReconciliationStore(
@@ -27,12 +30,44 @@ class ReconciliationStore {
             ChannelStatementEntryRepository entryRepository,
             ReconciliationResultRepository resultRepository,
             ReconciliationResolutionRepository resolutionRepository,
+            ReconciliationRunRepository runRepository,
             AuditApi auditApi) {
         this.batchRepository = batchRepository;
         this.entryRepository = entryRepository;
         this.resultRepository = resultRepository;
         this.resolutionRepository = resolutionRepository;
+        this.runRepository = runRepository;
         this.auditApi = auditApi;
+    }
+
+    @Transactional
+    ReconciliationRunView queueRun(UUID batchId, String operator) {
+        var batch = batchRepository.findByIdForUpdate(batchId)
+                .orElseThrow(() -> new IllegalArgumentException("Batch does not exist: " + batchId));
+        var activeStatuses = List.of(RunStatus.QUEUED, RunStatus.RUNNING);
+        var activeRun = runRepository.findFirstByBatchIdAndStatusInOrderByAttemptNumberDesc(
+                batchId, activeStatuses);
+        if (activeRun.isPresent()) {
+            return activeRun.get().toView();
+        }
+        if (batch.status() != BatchStatus.IMPORTED
+                && batch.status() != BatchStatus.RECONCILIATION_FAILED) {
+            throw new IllegalStateException("Batch cannot start from " + batch.status());
+        }
+        int attemptNumber = runRepository.findFirstByBatchIdOrderByAttemptNumberDesc(batchId)
+                .map(previous -> previous.toView().attemptNumber() + 1)
+                .orElse(1);
+        return runRepository.saveAndFlush(
+                ReconciliationRunEntity.queued(batchId, attemptNumber, operator, Instant.now()))
+                .toView();
+    }
+
+    @Transactional(readOnly = true)
+    List<ReconciliationRunView> findRuns(UUID batchId) {
+        getBatch(batchId);
+        return runRepository.findAllByBatchIdOrderByAttemptNumberDesc(batchId).stream()
+                .map(ReconciliationRunEntity::toView)
+                .toList();
     }
 
     @Transactional(readOnly = true)

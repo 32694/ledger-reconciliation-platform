@@ -31,8 +31,10 @@ import org.springframework.test.context.jdbc.SqlMergeMode.MergeMode;
 @SqlMergeMode(MergeMode.MERGE)
 @Sql(statements = {
         "DELETE FROM audit.audit_event",
+        "DELETE FROM reconciliation.reconciliation_case_event",
         "DELETE FROM reconciliation.reconciliation_resolution",
         "DELETE FROM reconciliation.reconciliation_result",
+        "DELETE FROM reconciliation.reconciliation_run",
         "DELETE FROM reconciliation.channel_statement_entry",
         "DELETE FROM reconciliation.reconciliation_batch",
         "DELETE FROM payments.payment_instruction",
@@ -43,8 +45,10 @@ import org.springframework.test.context.jdbc.SqlMergeMode.MergeMode;
 }, executionPhase = ExecutionPhase.BEFORE_TEST_METHOD)
 @Sql(statements = {
         "DELETE FROM audit.audit_event",
+        "DELETE FROM reconciliation.reconciliation_case_event",
         "DELETE FROM reconciliation.reconciliation_resolution",
         "DELETE FROM reconciliation.reconciliation_result",
+        "DELETE FROM reconciliation.reconciliation_run",
         "DELETE FROM reconciliation.channel_statement_entry",
         "DELETE FROM reconciliation.reconciliation_batch",
         "DELETE FROM payments.payment_instruction",
@@ -59,6 +63,27 @@ class ReconciliationModuleTest {
     @Autowired AccountsApi accountsApi;
     @Autowired AuditApi auditApi;
     @Autowired JdbcTemplate jdbcTemplate;
+
+    @Test
+    void queuesOneActiveRunAndListsItAsTheFirstAttempt() {
+        var batch = reconciliationApi.importStatement(new StatementUpload(
+                "queued.csv", csv("CH-QUEUED,1,2026-01-15T09:30:00Z\n"), "admin"));
+
+        var first = reconciliationApi.startRun(batch.id(), "operator-1");
+        var repeated = reconciliationApi.startRun(batch.id(), "operator-1");
+
+        assertThat(first.status()).isEqualTo(RunStatus.QUEUED);
+        assertThat(first.attemptNumber()).isOne();
+        assertThat(first.requestedBy()).isEqualTo("operator-1");
+        assertThat(repeated.id()).isEqualTo(first.id());
+        assertThat(reconciliationApi.findRuns(batch.id()))
+                .singleElement()
+                .isEqualTo(first);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM reconciliation.reconciliation_run WHERE batch_id = ?",
+                Integer.class,
+                batch.id())).isOne();
+    }
 
     @Test
     void importsValidStatementAtomically() {
