@@ -20,6 +20,8 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringApplication;
@@ -69,7 +71,13 @@ import org.springframework.test.context.jdbc.SqlMergeMode.MergeMode;
         "DELETE FROM ledger.ledger_account"
 }, executionPhase = ExecutionPhase.AFTER_TEST_METHOD)
 class ReconciliationModuleTest {
+    private static final UUID DEFAULT_RULE_ID =
+            UUID.fromString("00000000-0000-0000-0000-000000000101");
+    private static final UUID ALIPAY_RULE_ID =
+            UUID.fromString("00000000-0000-0000-0000-000000000102");
+
     @Autowired ReconciliationApi reconciliationApi;
+    @Autowired ReconciliationRulesApi reconciliationRulesApi;
     @Autowired PaymentsApi paymentsApi;
     @Autowired AccountsApi accountsApi;
     @Autowired AuditApi auditApi;
@@ -77,10 +85,20 @@ class ReconciliationModuleTest {
     @Autowired ApplicationEventPublisher eventPublisher;
     @Autowired ConfigurableApplicationContext applicationContext;
 
+    @BeforeEach
+    void resetReconciliationRuleFixtureBeforeTest() {
+        resetReconciliationRuleFixture();
+    }
+
+    @AfterEach
+    void resetReconciliationRuleFixtureAfterTest() {
+        resetReconciliationRuleFixture();
+    }
+
     @Test
     void queuesOneActiveRunAndListsItAsTheFirstAttempt() throws InterruptedException {
         var batch = reconciliationApi.importStatement(new StatementUpload(
-                "queued.csv", csv("CH-QUEUED,1,2026-01-15T09:30:00Z\n"), "admin"));
+                "ALIPAY", "queued.csv", csv("CH-QUEUED,1,2026-01-15T09:30:00Z\n"), "admin"));
 
         var first = reconciliationApi.startRun(batch.id(), "operator-1");
         var repeated = reconciliationApi.startRun(batch.id(), "operator-1");
@@ -108,7 +126,7 @@ class ReconciliationModuleTest {
     @Test
     void completesQueuedRunAsynchronouslyAndAuditsTheRequester() throws InterruptedException {
         var batch = reconciliationApi.importStatement(new StatementUpload(
-                "async.csv", csv("CH-ASYNC,1,2026-01-15T09:30:00Z\n"), "admin"));
+                "ALIPAY", "async.csv", csv("CH-ASYNC,1,2026-01-15T09:30:00Z\n"), "admin"));
 
         var queued = reconciliationApi.startRun(batch.id(), "operator-async");
         var completed = awaitRunStatus(batch.id(), RunStatus.SUCCEEDED);
@@ -125,13 +143,28 @@ class ReconciliationModuleTest {
 
     @Test
     void importsValidStatementAtomically() {
+        var resolved = reconciliationRulesApi.resolvePublishedVersion("ALIPAY");
         var batch = reconciliationApi.importStatement(new StatementUpload(
-                "statement.csv", csv("CH-1,12500,2026-01-15T09:30:00Z\nCH-2,7500,2026-01-15T10:45:00Z\n"), "admin"));
+                "ALIPAY", "statement.csv", csv("CH-1,12500,2026-01-15T09:30:00Z\nCH-2,7500,2026-01-15T10:45:00Z\n"), "admin"));
 
         assertThat(batch.status()).isEqualTo(BatchStatus.IMPORTED);
         assertThat(batch.totalRows()).isEqualTo(2);
         assertThat(batch.periodStart()).isEqualTo(java.time.Instant.parse("2026-01-15T09:30:00Z"));
         assertThat(batch.periodEnd()).isEqualTo(java.time.Instant.parse("2026-01-15T10:45:00Z"));
+        assertThat(batch.channelCode()).isEqualTo("ALIPAY");
+        assertThat(batch.channelDisplayName()).isEqualTo("支付宝");
+        assertThat(batch.ruleVersionId()).isEqualTo(resolved.id());
+        assertThat(batch.ruleVersionNumber()).isEqualTo(resolved.versionNumber());
+        assertThat(batch.amountToleranceCents()).isEqualTo(resolved.amountToleranceCents());
+        assertThat(batch.queryWindowHours()).isEqualTo(resolved.queryWindowHours());
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT channel_id FROM reconciliation.reconciliation_batch WHERE id = ?",
+                UUID.class, batch.id()))
+                .isEqualTo(UUID.fromString("00000000-0000-0000-0000-000000000001"));
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT rule_version_id FROM reconciliation.reconciliation_batch WHERE id = ?",
+                UUID.class, batch.id()))
+                .isEqualTo(resolved.id());
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM reconciliation.channel_statement_entry WHERE batch_id = ?",
                 Integer.class, batch.id())).isEqualTo(2);
@@ -147,12 +180,108 @@ class ReconciliationModuleTest {
     }
 
     @Test
-    void returnsExistingBatchForRepeatedFileHash() {
+    void rejectsInactiveAndUnknownChannelsBeforeParsing() {
+        reconciliationRulesApi.setChannelActive("ALIPAY", false, "rule-admin");
+        var content = csv("CH-REJECTED,not-an-amount,2026-01-15T09:30:00Z\n");
+
+        assertThatThrownBy(() -> reconciliationApi.importStatement(
+                        new StatementUpload("ALIPAY", "inactive.csv", content, "admin")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("对账渠道未启用: ALIPAY");
+        assertThatThrownBy(() -> reconciliationApi.importStatement(
+                        new StatementUpload("UNKNOWN", "unknown.csv", content, "admin")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("对账渠道不存在: UNKNOWN");
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM reconciliation.reconciliation_batch", Integer.class)).isZero();
+    }
+
+    @Test
+    void locksChannelOverrideAndKeepsItAfterPublishingALaterVersion() {
+        var firstPublished = reconciliationRulesApi.publish(
+                ALIPAY_RULE_ID,
+                reconciliationRulesApi.saveDraft(
+                        ALIPAY_RULE_ID,
+                        new ReconciliationRuleDraftCommand(25, 2, "rule-editor")).id(),
+                25,
+                2,
+                "rule-publisher");
+        var resolvedDefault = reconciliationRulesApi.resolvePublishedVersion("WECHAT_PAY");
+
+        var batch = reconciliationApi.importStatement(new StatementUpload(
+                "ALIPAY", "locked.csv", csv("CH-LOCKED,1,2026-01-15T09:30:00Z\n"), "admin"));
+
+        var secondPublished = reconciliationRulesApi.publish(
+                ALIPAY_RULE_ID,
+                reconciliationRulesApi.saveDraft(
+                        ALIPAY_RULE_ID,
+                        new ReconciliationRuleDraftCommand(75, 6, "rule-editor-2")).id(),
+                75,
+                6,
+                "rule-publisher-2");
+        var reloaded = reconciliationApi.getBatch(batch.id());
+
+        assertThat(firstPublished.sourceScope()).isEqualTo(RuleScopeType.CHANNEL);
+        assertThat(firstPublished.ruleId()).isEqualTo(ALIPAY_RULE_ID);
+        assertThat(firstPublished.ruleId()).isNotEqualTo(resolvedDefault.ruleId());
+        assertThat(secondPublished.id()).isNotEqualTo(firstPublished.id());
+        assertThat(reloaded.ruleVersionId()).isEqualTo(firstPublished.id());
+        assertThat(reloaded.ruleVersionNumber()).isEqualTo(firstPublished.versionNumber());
+        assertThat(reloaded.amountToleranceCents()).isEqualTo(25);
+        assertThat(reloaded.queryWindowHours()).isEqualTo(2);
+    }
+
+    @Test
+    void resolvesPaymentsAcrossLockedQueryWindowForResultsAndCaseLookup() {
+        var published = reconciliationRulesApi.publish(
+                ALIPAY_RULE_ID,
+                reconciliationRulesApi.saveDraft(
+                        ALIPAY_RULE_ID,
+                        new ReconciliationRuleDraftCommand(0, 2, "rule-editor")).id(),
+                0,
+                2,
+                "rule-publisher");
+        var account = accountsApi.create("Window Customer");
+        var payment = paymentsApi.topUp(new TopUpCommand("window-payment", account.id(), 300));
+        var statementAt = payment.occurredAt().plus(1, java.time.temporal.ChronoUnit.HOURS);
+        var batch = reconciliationApi.importStatement(new StatementUpload(
+                "ALIPAY", "window.csv", csv(row("CHANNEL-ONLY", 1, statementAt)), "admin"));
+        var resultId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_result
+                    (id, batch_id, statement_entry_id, payment_id, result_type, resolution_status, created_at)
+                VALUES (?, ?, NULL, ?, 'INTERNAL_ONLY', 'OPEN', CURRENT_TIMESTAMP)
+                """, resultId, batch.id(), payment.id());
+
+        assertThat(batch.queryStart()).isEqualTo(statementAt.minus(2, java.time.temporal.ChronoUnit.HOURS));
+        assertThat(batch.queryEnd()).isEqualTo(statementAt.plus(2, java.time.temporal.ChronoUnit.HOURS));
+        assertThat(batch.ruleVersionId()).isEqualTo(published.id());
+        assertThat(reconciliationApi.findResults(batch.id(), ResultType.INTERNAL_ONLY, null))
+                .singleElement()
+                .satisfies(result -> {
+                    assertThat(result.paymentId()).isEqualTo(payment.id());
+                    assertThat(result.internalAmountCents()).isEqualTo(300);
+                    assertThat(result.occurredAt()).isEqualTo(payment.occurredAt());
+                });
+        assertThat(reconciliationApi.findCases(ResultType.INTERNAL_ONLY, ResolutionStatus.OPEN, null))
+                .singleElement()
+                .satisfies(caseView -> {
+                    assertThat(caseView.paymentId()).isEqualTo(payment.id());
+                    assertThat(caseView.internalAmountCents()).isEqualTo(300);
+                });
+        assertThat(reconciliationApi.getResult(resultId).caseView().internalAmountCents())
+                .isEqualTo(300);
+    }
+
+    @Test
+    void returnsExistingBatchForRepeatedFileHashEvenWhenChannelChangesBecauseHashIdempotencyIsFileLevel() {
         var content = csv("CH-IDEMPOTENT,1,2026-01-15T09:30:00Z\n");
-        var first = reconciliationApi.importStatement(new StatementUpload("first.csv", content, "admin"));
-        var repeated = reconciliationApi.importStatement(new StatementUpload("second.csv", content, "other"));
+        var first = reconciliationApi.importStatement(new StatementUpload("ALIPAY", "first.csv", content, "admin"));
+        var repeated = reconciliationApi.importStatement(new StatementUpload("WECHAT_PAY", "second.csv", content, "other"));
 
         assertThat(repeated.id()).isEqualTo(first.id());
+        assertThat(repeated.channelCode()).isEqualTo(first.channelCode());
+        assertThat(repeated.ruleVersionId()).isEqualTo(first.ruleVersionId());
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM reconciliation.reconciliation_batch", Integer.class)).isOne();
         assertThat(jdbcTemplate.queryForObject(
@@ -164,15 +293,31 @@ class ReconciliationModuleTest {
     @Test
     void retainsOnlyFailureMetadataWhenCsvIsInvalid() {
         var content = csv("CH-BAD,not-an-amount,2026-01-15T09:30:00Z\n");
-        var batch = reconciliationApi.importStatement(new StatementUpload("bad.csv", content, "admin"));
+        var resolved = reconciliationRulesApi.resolvePublishedVersion("ALIPAY");
+        var batch = reconciliationApi.importStatement(new StatementUpload("ALIPAY", "bad.csv", content, "admin"));
 
         assertThat(batch.status()).isEqualTo(BatchStatus.IMPORT_FAILED);
         assertThat(batch.errorMessage()).isNotBlank();
         assertThat(batch.periodStart()).isNull();
+        assertThat(batch.channelCode()).isEqualTo("ALIPAY");
+        assertThat(batch.channelDisplayName()).isEqualTo("支付宝");
+        assertThat(batch.ruleVersionId()).isEqualTo(resolved.id());
+        assertThat(batch.ruleVersionNumber()).isEqualTo(resolved.versionNumber());
+        assertThat(batch.amountToleranceCents()).isEqualTo(resolved.amountToleranceCents());
+        assertThat(batch.queryWindowHours()).isEqualTo(resolved.queryWindowHours());
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT channel_id FROM reconciliation.reconciliation_batch WHERE id = ?",
+                UUID.class, batch.id()))
+                .isEqualTo(UUID.fromString("00000000-0000-0000-0000-000000000001"));
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT rule_version_id FROM reconciliation.reconciliation_batch WHERE id = ?",
+                UUID.class, batch.id()))
+                .isEqualTo(resolved.id());
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM reconciliation.channel_statement_entry", Integer.class)).isZero();
-        assertThat(reconciliationApi.importStatement(new StatementUpload("bad-again.csv", content, "admin")).id())
+        assertThat(reconciliationApi.importStatement(new StatementUpload("ALIPAY", "bad-again.csv", content, "admin")).id())
                 .isEqualTo(batch.id());
+        assertThatThrownBy(batch::queryStart).isInstanceOf(IllegalStateException.class);
         assertThat(auditApi.findRecent(
                         AuditAction.RECONCILIATION_IMPORT, AuditOutcome.FAILED, 100))
                 .singleElement()
@@ -185,9 +330,9 @@ class ReconciliationModuleTest {
     @Test
     void rejectsChannelIdAlreadyImportedByAnotherBatch() {
         reconciliationApi.importStatement(new StatementUpload(
-                "first.csv", csv("CH-GLOBAL,1,2026-01-15T09:30:00Z\n"), "admin"));
+                "ALIPAY", "first.csv", csv("CH-GLOBAL,1,2026-01-15T09:30:00Z\n"), "admin"));
         var rejected = reconciliationApi.importStatement(new StatementUpload(
-                "second.csv", csv("CH-GLOBAL,2,2026-01-15T10:30:00Z\n"), "admin"));
+                "ALIPAY", "second.csv", csv("CH-GLOBAL,2,2026-01-15T10:30:00Z\n"), "admin"));
 
         assertThat(rejected.status()).isEqualTo(BatchStatus.IMPORT_FAILED);
         assertThat(jdbcTemplate.queryForObject(
@@ -199,7 +344,7 @@ class ReconciliationModuleTest {
     @Test
     void computesSha256AsLowercaseHex() {
         var batch = reconciliationApi.importStatement(new StatementUpload(
-                "hash.csv", csv("CH-HASH,1,2026-01-15T09:30:00Z\n"), "admin"));
+                "ALIPAY", "hash.csv", csv("CH-HASH,1,2026-01-15T09:30:00Z\n"), "admin"));
 
         assertThat(batch.fileSha256()).matches("[0-9a-f]{64}");
     }
@@ -216,7 +361,7 @@ class ReconciliationModuleTest {
                 row("CHANNEL-ONLY", 400, internalOnly.occurredAt())) + "\n";
 
         var batch = reconciliationApi.importStatement(
-                new StatementUpload("matching.csv", csv(rows), "admin"));
+                new StatementUpload("ALIPAY", "matching.csv", csv(rows), "admin"));
         runToCompletion(batch.id(), "operator-match");
         var completed = reconciliationApi.getBatch(batch.id());
 
@@ -242,7 +387,7 @@ class ReconciliationModuleTest {
     @Test
     void completedBatchRunIsIdempotent() {
         var batch = reconciliationApi.importStatement(new StatementUpload(
-                "rerun.csv", csv("CH-RERUN,1,2026-01-15T09:30:00Z\n"), "admin"));
+                "ALIPAY", "rerun.csv", csv("CH-RERUN,1,2026-01-15T09:30:00Z\n"), "admin"));
         var firstRun = runToCompletion(batch.id(), "operator-first");
         var completed = reconciliationApi.getBatch(batch.id());
         var firstResultIds = reconciliationApi.findResults(batch.id(), null, null).stream()
@@ -263,7 +408,7 @@ class ReconciliationModuleTest {
     @Test
     void repeatedStartReturnsActiveAsyncAttemptWithoutChangingState() {
         var batch = reconciliationApi.importStatement(new StatementUpload(
-                "sync-active.csv", csv("CH-SYNC-ACTIVE,1,2026-01-15T09:30:00Z\n"), "admin"));
+                "ALIPAY", "sync-active.csv", csv("CH-SYNC-ACTIVE,1,2026-01-15T09:30:00Z\n"), "admin"));
         var runId = UUID.randomUUID();
         jdbcTemplate.update(
                 """
@@ -298,7 +443,7 @@ class ReconciliationModuleTest {
     }, executionPhase = ExecutionPhase.AFTER_TEST_METHOD)
     void auditsFailedReconciliationRun() throws InterruptedException {
         var batch = reconciliationApi.importStatement(new StatementUpload(
-                "failed-run.csv", csv("CH-FAILED-RUN,1,2026-01-15T09:30:00Z\n"), "admin"));
+                "ALIPAY", "failed-run.csv", csv("CH-FAILED-RUN,1,2026-01-15T09:30:00Z\n"), "admin"));
 
         reconciliationApi.startRun(batch.id(), "operator-failed");
         var failed = awaitRunStatus(batch.id(), RunStatus.FAILED);
@@ -325,7 +470,7 @@ class ReconciliationModuleTest {
     }, executionPhase = ExecutionPhase.AFTER_TEST_METHOD)
     void failedAsyncRunCanBeRetriedWithoutLosingAttemptHistory() throws InterruptedException {
         var batch = reconciliationApi.importStatement(new StatementUpload(
-                "failed-async.csv", csv("CH-FAILED-ASYNC,1,2026-01-15T09:30:00Z\n"), "admin"));
+                "ALIPAY", "failed-async.csv", csv("CH-FAILED-ASYNC,1,2026-01-15T09:30:00Z\n"), "admin"));
 
         reconciliationApi.startRun(batch.id(), "operator-first");
         var first = awaitRunStatus(batch.id(), RunStatus.FAILED);
@@ -348,11 +493,11 @@ class ReconciliationModuleTest {
     @Test
     void startupRecoveryFailsQueuedAndRunningRuns() {
         var queuedBatch = reconciliationApi.importStatement(new StatementUpload(
-                "abandoned-queued.csv", csv("CH-ABANDONED-QUEUED,1,2026-01-15T09:30:00Z\n"), "admin"));
+                "ALIPAY", "abandoned-queued.csv", csv("CH-ABANDONED-QUEUED,1,2026-01-15T09:30:00Z\n"), "admin"));
         var runningBatch = reconciliationApi.importStatement(new StatementUpload(
-                "abandoned-running.csv", csv("CH-ABANDONED-RUNNING,1,2026-01-15T09:30:00Z\n"), "admin"));
+                "ALIPAY", "abandoned-running.csv", csv("CH-ABANDONED-RUNNING,1,2026-01-15T09:30:00Z\n"), "admin"));
         var currentProcessBatch = reconciliationApi.importStatement(new StatementUpload(
-                "current-process.csv", csv("CH-CURRENT-PROCESS,1,2026-01-15T09:30:00Z\n"), "admin"));
+                "ALIPAY", "current-process.csv", csv("CH-CURRENT-PROCESS,1,2026-01-15T09:30:00Z\n"), "admin"));
         var queuedRunId = UUID.randomUUID();
         var runningRunId = UUID.randomUUID();
         var requestedAt = Instant.parse("2026-01-15T10:00:00Z");
@@ -525,7 +670,7 @@ class ReconciliationModuleTest {
         var account = accountsApi.create("Matched Claim Customer");
         var payment = paymentsApi.topUp(new TopUpCommand("matched-claim-payment", account.id(), 1));
         var batch = reconciliationApi.importStatement(new StatementUpload(
-                "matched-claim.csv",
+                "ALIPAY", "matched-claim.csv",
                 csv(row(payment.channelReference(), 1, payment.occurredAt()) + "\n"),
                 "admin"));
         runToCompletion(batch.id(), "operator-matched-claim");
@@ -582,7 +727,7 @@ class ReconciliationModuleTest {
     @Test
     void importFailedBatchCannotRun() {
         var batch = reconciliationApi.importStatement(new StatementUpload(
-                "cannot-run.csv", csv("CH-BAD,nope,2026-01-15T09:30:00Z\n"), "admin"));
+                "ALIPAY", "cannot-run.csv", csv("CH-BAD,nope,2026-01-15T09:30:00Z\n"), "admin"));
 
         assertThatThrownBy(() -> reconciliationApi.startRun(batch.id(), "operator-import-failed"))
                 .isInstanceOf(IllegalStateException.class)
@@ -593,7 +738,7 @@ class ReconciliationModuleTest {
     @Test
     void resolvesClaimedDifferenceOnceWithAnAuditRecord() {
         var batch = reconciliationApi.importStatement(new StatementUpload(
-                "resolve.csv", csv("CH-RESOLVE,1,2026-01-15T09:30:00Z\n"), "admin"));
+                "ALIPAY", "resolve.csv", csv("CH-RESOLVE,1,2026-01-15T09:30:00Z\n"), "admin"));
         runToCompletion(batch.id(), "operator-resolve");
         var difference = reconciliationApi.findResults(batch.id(), ResultType.CHANNEL_ONLY, ResolutionStatus.OPEN)
                 .get(0);
@@ -631,7 +776,7 @@ class ReconciliationModuleTest {
         var account = accountsApi.create("Already Matched");
         var payment = paymentsApi.topUp(new TopUpCommand("resolve-match", account.id(), 1));
         var batch = reconciliationApi.importStatement(new StatementUpload(
-                "matched.csv", csv(row(payment.channelReference(), 1, payment.occurredAt()) + "\n"), "admin"));
+                "ALIPAY", "matched.csv", csv(row(payment.channelReference(), 1, payment.occurredAt()) + "\n"), "admin"));
         runToCompletion(batch.id(), "operator-matched");
         var matched = reconciliationApi.findResults(batch.id(), ResultType.MATCHED, null).get(0);
 
@@ -708,7 +853,7 @@ class ReconciliationModuleTest {
         var account = accountsApi.create("Summary Customer");
         var payment = paymentsApi.topUp(new TopUpCommand("summary-match", account.id(), 100));
         var batch = reconciliationApi.importStatement(new StatementUpload(
-                "summary.csv",
+                "ALIPAY", "summary.csv",
                 csv(row(payment.channelReference(), 100, payment.occurredAt())
                         + "\nSUMMARY-DIFF,50,2026-01-15T10:00:00Z\n"),
                 "admin"));
@@ -738,9 +883,47 @@ class ReconciliationModuleTest {
         return channelReference + "," + amountCents + "," + occurredAt;
     }
 
+    private void resetReconciliationRuleFixture() {
+        jdbcTemplate.execute("DELETE FROM audit.audit_event");
+        jdbcTemplate.execute(
+                "TRUNCATE reconciliation.reconciliation_rule_version, "
+                        + "reconciliation.reconciliation_rule, "
+                        + "reconciliation.reconciliation_channel CASCADE");
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_channel
+                    (id, code, display_name, active, created_at, version)
+                VALUES
+                    ('00000000-0000-0000-0000-000000000001', 'ALIPAY', '支付宝', true, CURRENT_TIMESTAMP, 0),
+                    ('00000000-0000-0000-0000-000000000002', 'WECHAT_PAY', '微信支付', true, CURRENT_TIMESTAMP, 0),
+                    ('00000000-0000-0000-0000-000000000003', 'UNION_PAY', '银联', true, CURRENT_TIMESTAMP, 0),
+                    ('00000000-0000-0000-0000-000000000004', 'LEGACY_SYNTHETIC', '历史兼容渠道', false, CURRENT_TIMESTAMP, 0)
+                """);
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_rule
+                    (id, scope_type, channel_id, version)
+                VALUES
+                    ('00000000-0000-0000-0000-000000000101', 'DEFAULT', NULL, 0),
+                    ('00000000-0000-0000-0000-000000000102', 'CHANNEL', '00000000-0000-0000-0000-000000000001', 0),
+                    ('00000000-0000-0000-0000-000000000103', 'CHANNEL', '00000000-0000-0000-0000-000000000002', 0),
+                    ('00000000-0000-0000-0000-000000000104', 'CHANNEL', '00000000-0000-0000-0000-000000000003', 0)
+                """);
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_rule_version
+                    (id, rule_id, version_number, status, amount_tolerance_cents,
+                     query_window_hours, created_by, created_at, published_by, published_at)
+                VALUES
+                    ('00000000-0000-0000-0000-000000000201',
+                     '00000000-0000-0000-0000-000000000101', 1, 'PUBLISHED', 0,
+                     0, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP)
+                """);
+        jdbcTemplate.update(
+                "UPDATE reconciliation.reconciliation_rule SET active_version_id = ? WHERE id = ?",
+                UUID.fromString("00000000-0000-0000-0000-000000000201"), DEFAULT_RULE_ID);
+    }
+
     private ReconciliationResultView createChannelOnlyDifference(String suffix) {
         var batch = reconciliationApi.importStatement(new StatementUpload(
-                suffix + ".csv",
+                "ALIPAY", suffix + ".csv",
                 csv("CH-" + suffix.toUpperCase() + ",1,2026-01-15T09:30:00Z\n"),
                 "admin"));
         runToCompletion(batch.id(), "operator-" + suffix);

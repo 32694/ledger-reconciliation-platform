@@ -105,9 +105,7 @@ public class ReconciliationFacade implements ReconciliationApi {
         var entries = store.findStatementEntries(batchId).stream()
                 .collect(java.util.stream.Collectors.toMap(
                         ReconciliationMatcher.StatementEntrySnapshot::id, Function.identity()));
-        var payments = batch.periodStart() == null
-                ? List.<PaymentView>of()
-                : paymentsApi.findSucceededTopUps(batch.periodStart(), batch.periodEnd());
+        var payments = findPayments(batch);
         var paymentMap = payments.stream().collect(java.util.stream.Collectors.toMap(
                 PaymentView::id, Function.identity()));
         return store.findResults(batchId).stream()
@@ -205,10 +203,7 @@ public class ReconciliationFacade implements ReconciliationApi {
             var batch = store.getBatch(batchId);
             batches.put(batchId, batch);
             store.findStatementEntries(batchId).forEach(entry -> entries.put(entry.id(), entry));
-            if (batch.periodStart() != null && batch.periodEnd() != null) {
-                paymentsApi.findSucceededTopUps(batch.periodStart(), batch.periodEnd())
-                        .forEach(payment -> payments.put(payment.id(), payment));
-            }
+            findPayments(batch).forEach(payment -> payments.put(payment.id(), payment));
         }
         var resolutions = store.findResolutions(results.stream()
                 .map(ReconciliationResultEntity::id)
@@ -244,7 +239,7 @@ public class ReconciliationFacade implements ReconciliationApi {
         var entries = store.findStatementEntries(result.batchId()).stream()
                 .collect(java.util.stream.Collectors.toMap(
                         ReconciliationMatcher.StatementEntrySnapshot::id, Function.identity()));
-        var payments = paymentsApi.findSucceededTopUps(batch.periodStart(), batch.periodEnd()).stream()
+        var payments = findPayments(batch).stream()
                 .collect(java.util.stream.Collectors.toMap(PaymentView::id, Function.identity()));
         return toResultView(result, entries, payments);
     }
@@ -285,6 +280,15 @@ public class ReconciliationFacade implements ReconciliationApi {
         if (resultId == null) {
             throw new IllegalArgumentException("Result id is required");
         }
+    }
+
+    private List<PaymentView> findPayments(ReconciliationBatchView batch) {
+        if (batch.status() == io.github.user32694.ledgerplatform.reconciliation.BatchStatus.IMPORT_FAILED
+                || batch.periodStart() == null
+                || batch.periodEnd() == null) {
+            return List.of();
+        }
+        return paymentsApi.findSucceededTopUps(batch.queryStart(), batch.queryEnd());
     }
 
     private static byte[] sha256(byte[] content) {

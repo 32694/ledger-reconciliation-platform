@@ -258,6 +258,17 @@ class ReconciliationRuleService implements ReconciliationRulesApi {
         return toVersionView(findVersion(defaultRule.activeVersionId()), defaultRule);
     }
 
+    @Transactional(readOnly = true)
+    ResolvedImportRule resolveImportRule(String channelCode) {
+        String normalizedCode = requireChannelCode(channelCode);
+        var channel = findSelectableChannel(normalizedCode);
+        if (!channel.active()) {
+            throw new IllegalStateException("对账渠道未启用: " + channel.code());
+        }
+        var version = resolvePublishedVersion(normalizedCode);
+        return new ResolvedImportRule(channel.id(), version.id());
+    }
+
     private ReconciliationRuleView toRuleView(ReconciliationRuleEntity rule) {
         ReconciliationChannelEntity channel = rule.channelId() == null
                 ? null
@@ -383,4 +394,6 @@ class ReconciliationRuleService implements ReconciliationRulesApi {
         }
         return normalized;
     }
+
+    record ResolvedImportRule(UUID channelId, UUID ruleVersionId) {}
 }

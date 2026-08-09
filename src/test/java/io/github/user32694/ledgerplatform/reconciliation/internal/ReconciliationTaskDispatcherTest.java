@@ -77,7 +77,7 @@ class ReconciliationTaskDispatcherTest {
     @Test
     void rejectedTaskFailsThePersistedRunAndAuditsTheRequester() {
         var batch = reconciliationApi.importStatement(new StatementUpload(
-                "rejected.csv", csv("CH-REJECTED,1,2026-01-15T09:30:00Z\n"), "admin"));
+                "ALIPAY", "rejected.csv", csv("CH-REJECTED,1,2026-01-15T09:30:00Z\n"), "admin"));
         var queued = store.queueRun(batch.id(), "operator-rejected").run();
         TaskExecutor rejectingExecutor = task -> {
             throw new TaskRejectedException("test rejection");
@@ -108,7 +108,7 @@ class ReconciliationTaskDispatcherTest {
     @Test
     void runnerFailsQueuedRunWhenBatchCannotEnterRunningState() {
         var batch = reconciliationApi.importStatement(new StatementUpload(
-                "start-conflict.csv", csv("CH-START-CONFLICT,1,2026-01-15T09:30:00Z\n"), "admin"));
+                "ALIPAY", "start-conflict.csv", csv("CH-START-CONFLICT,1,2026-01-15T09:30:00Z\n"), "admin"));
         var queued = store.queueRun(batch.id(), "operator-conflict").run();
         jdbcTemplate.update(
                 "UPDATE reconciliation.reconciliation_batch SET status = 'RUNNING', started_at = ? WHERE id = ?",

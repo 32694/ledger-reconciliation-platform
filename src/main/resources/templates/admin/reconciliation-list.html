@@ -22,10 +22,12 @@
         </div>
         <div class="table-scroll">
             <table>
-                <thead><tr><th>文件名</th><th>批次状态</th><th>最近运行</th><th>异常处理</th><th class="numeric">总行数</th><th class="numeric">匹配</th><th class="numeric">差异</th><th>失败原因</th><th>操作</th></tr></thead>
+                <thead><tr><th>文件名</th><th>渠道</th><th>规则版本</th><th>批次状态</th><th>最近运行</th><th>异常处理</th><th class="numeric">总行数</th><th class="numeric">匹配</th><th class="numeric">差异</th><th>失败原因</th><th>操作</th></tr></thead>
                 <tbody>
                 <tr th:each="batch : ${batches}">
                     <td class="mono" th:text="${batch.fileName}">statement.csv</td>
+                    <td th:text="${batch.channelDisplayName}">支付宝</td>
+                    <td th:text="${'规则版本 ' + batch.ruleVersionNumber}">规则版本 1</td>
                     <td><span class="status" th:text="${batch.statusLabel}">待对账</span></td>
                     <td>
                         <span th:if="${batch.latestRun != null}"
@@ -46,7 +48,7 @@
                     </td>
                     <td><a class="text-link" th:href="@{/admin/reconciliation/{id}(id=${batch.id})}">查看详情</a></td>
                 </tr>
-                <tr th:if="${#lists.isEmpty(batches)}"><td colspan="9" class="empty-state">暂无对账批次</td></tr>
+                <tr th:if="${#lists.isEmpty(batches)}"><td colspan="11" class="empty-state">暂无对账批次</td></tr>
                 </tbody>
             </table>
         </div>

@@ -22,6 +22,12 @@
         <article><span>匹配笔数</span><strong th:text="${batch.matchedRows}">0</strong></article>
         <article><span>差异笔数</span><strong th:text="${batch.differenceRows}">0</strong></article>
     </section>
+    <section class="table-section">
+        <div class="section-heading">
+            <div><h2>导入规则</h2><p th:text="${batch.channelDisplayName}">支付宝</p></div>
+            <span th:text="${'规则版本 ' + batch.ruleVersionNumber}">规则版本 1</span>
+        </div>
+    </section>
     <p class="alert alert-error" th:if="${runError}" th:text="${runError}">无法启动对账，请稍后重试</p>
     <p class="alert alert-error"
        th:if="${batch.status.name() == 'IMPORT_FAILED' && batch.errorMessage != null}"

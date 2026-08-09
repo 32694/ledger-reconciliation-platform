@@ -18,6 +18,7 @@ import java.util.Map;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import jakarta.persistence.EntityManager;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,6 +32,7 @@ class ReconciliationStore {
     private final ReconciliationCaseEventRepository caseEventRepository;
     private final ReconciliationRunRepository runRepository;
     private final AuditApi auditApi;
+    private final EntityManager entityManager;
 
     ReconciliationStore(
             ReconciliationBatchRepository batchRepository,
@@ -39,7 +41,8 @@ class ReconciliationStore {
             ReconciliationResolutionRepository resolutionRepository,
             ReconciliationCaseEventRepository caseEventRepository,
             ReconciliationRunRepository runRepository,
-            AuditApi auditApi) {
+            AuditApi auditApi,
+            EntityManager entityManager) {
         this.batchRepository = batchRepository;
         this.entryRepository = entryRepository;
         this.resultRepository = resultRepository;
@@ -47,6 +50,7 @@ class ReconciliationStore {
         this.caseEventRepository = caseEventRepository;
         this.runRepository = runRepository;
         this.auditApi = auditApi;
+        this.entityManager = entityManager;
     }
 
     @Transactional
@@ -177,17 +181,23 @@ class ReconciliationStore {
     ReconciliationBatchEntity persistImported(
             String fileName,
             String hash,
+            UUID channelId,
+            UUID ruleVersionId,
             ParsedStatement parsed,
             String operator,
             Instant createdAt) {
         var batch = batchRepository.save(ReconciliationBatchEntity.imported(
                 fileName,
                 hash,
+                channelId,
+                ruleVersionId,
                 parsed.periodStart(),
                 parsed.periodEnd(),
                 parsed.entries().size(),
                 operator,
                 createdAt));
+        batchRepository.flush();
+        entityManager.refresh(batch);
         entryRepository.saveAllAndFlush(parsed.entries().stream()
                 .map(entry -> ChannelStatementEntryEntity.from(batch.id(), entry))
                 .toList());
@@ -206,11 +216,15 @@ class ReconciliationStore {
     ReconciliationBatchEntity persistImportFailure(
             String fileName,
             String hash,
+            UUID channelId,
+            UUID ruleVersionId,
             String errorMessage,
             String operator,
             Instant createdAt) {
         var batch = batchRepository.save(ReconciliationBatchEntity.importFailed(
-                fileName, hash, errorMessage, operator, createdAt));
+                fileName, hash, channelId, ruleVersionId, errorMessage, operator, createdAt));
+        batchRepository.flush();
+        entityManager.refresh(batch);
         auditApi.record(reconciliationAudit(
                 operator,
                 AuditAction.RECONCILIATION_IMPORT,

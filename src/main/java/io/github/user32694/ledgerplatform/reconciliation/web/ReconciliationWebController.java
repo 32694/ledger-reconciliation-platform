@@ -4,6 +4,7 @@ import io.github.user32694.ledgerplatform.reconciliation.BatchStatus;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationApi;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationBatchView;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationCaseProgress;
+import io.github.user32694.ledgerplatform.reconciliation.ReconciliationRulesApi;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationResultView;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationRunView;
 import io.github.user32694.ledgerplatform.reconciliation.ResolutionStatus;
@@ -34,9 +35,13 @@ import org.springframework.web.multipart.MultipartFile;
 @RequestMapping("/admin/reconciliation")
 public class ReconciliationWebController {
     private final ReconciliationApi reconciliationApi;
+    private final ReconciliationRulesApi reconciliationRulesApi;
 
-    public ReconciliationWebController(ReconciliationApi reconciliationApi) {
+    public ReconciliationWebController(
+            ReconciliationApi reconciliationApi,
+            ReconciliationRulesApi reconciliationRulesApi) {
         this.reconciliationApi = reconciliationApi;
+        this.reconciliationRulesApi = reconciliationRulesApi;
     }
 
     @GetMapping
@@ -66,29 +71,46 @@ public class ReconciliationWebController {
 
     @GetMapping("/import")
     String importForm(Model model) {
-        model.addAttribute("activeNav", "reconciliation");
+        populateImportForm(model, null);
         return "admin/reconciliation-import";
+    }
+
+    @GetMapping("/import/rule-preview")
+    String rulePreview(@RequestParam String channelCode, Model model) {
+        try {
+            var rule = reconciliationRulesApi.resolvePublishedVersion(channelCode);
+            model.addAttribute("rule", rule);
+            model.addAttribute(
+                    "ruleScopeLabel",
+                    rule.sourceScope() == io.github.user32694.ledgerplatform.reconciliation.RuleScopeType.CHANNEL
+                            ? "渠道规则" : "默认规则");
+        } catch (RuntimeException exception) {
+            model.addAttribute("previewError", "无法解析该渠道的已发布规则");
+        }
+        return "admin/fragments/reconciliation-rule-preview";
     }
 
     @PostMapping("/import")
     String importStatement(
             @RequestParam("file") MultipartFile file,
+            @RequestParam("channelCode") String channelCode,
             Authentication authentication,
             Model model) {
         if (file == null || file.isEmpty()) {
             model.addAttribute("importError", "请选择要导入的 CSV 文件");
-            model.addAttribute("activeNav", "reconciliation");
+            populateImportForm(model, channelCode);
             return "admin/reconciliation-import";
         }
         try {
             var batch = reconciliationApi.importStatement(new StatementUpload(
+                    channelCode,
                     file.getOriginalFilename() == null ? "statement.csv" : file.getOriginalFilename(),
                     file.getBytes(),
                     authentication.getName()));
             return "redirect:/admin/reconciliation/" + batch.id();
         } catch (Exception exception) {
             model.addAttribute("importError", "文件导入失败，请检查格式后重试");
-            model.addAttribute("activeNav", "reconciliation");
+            populateImportForm(model, channelCode);
             return "admin/reconciliation-import";
         }
     }
@@ -168,6 +190,7 @@ public class ReconciliationWebController {
             ReconciliationCaseProgress progress) {
         return new BatchRow(
                 batch.id(), batch.fileName(), batch.status(), statusLabel(batch.status()),
+                batch.channelDisplayName(), batch.ruleVersionNumber(),
                 batch.totalRows(), batch.matchedRows(), batch.differenceRows(), batch.errorMessage(),
                 caseProgressLabel(batch, progress), latestRun);
     }
@@ -259,6 +282,8 @@ public class ReconciliationWebController {
             String fileName,
             BatchStatus status,
             String statusLabel,
+            String channelDisplayName,
+            int ruleVersionNumber,
             int totalRows,
             int matchedRows,
             int differenceRows,
@@ -297,4 +322,10 @@ public class ReconciliationWebController {
             int differenceRows,
             String errorMessage,
             boolean active) {}
+
+    private void populateImportForm(Model model, String selectedChannelCode) {
+        model.addAttribute("channels", reconciliationRulesApi.findChannels(false));
+        model.addAttribute("selectedChannelCode", selectedChannelCode);
+        model.addAttribute("activeNav", "reconciliation");
+    }
 }

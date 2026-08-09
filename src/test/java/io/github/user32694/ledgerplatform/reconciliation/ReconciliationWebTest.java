@@ -14,6 +14,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrlPattern;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.view;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.xpath;
 
 import io.github.user32694.ledgerplatform.accounts.AccountsApi;
 import io.github.user32694.ledgerplatform.payments.PaymentsApi;
@@ -472,6 +473,7 @@ class ReconciliationWebTest {
     @Test
     @WithMockUser(roles = "ADMIN")
     void rendersChineseListAndImportPages() throws Exception {
+        reconciliationRulesApi.setChannelActive("WECHAT_PAY", false, "fixture-admin");
         mockMvc.perform(get("/admin/reconciliation"))
                 .andExpect(status().isOk())
                 .andExpect(view().name("admin/reconciliation-list"))
@@ -481,7 +483,12 @@ class ReconciliationWebTest {
                 .andExpect(status().isOk())
                 .andExpect(view().name("admin/reconciliation-import"))
                 .andExpect(content().string(containsString("channel_transaction_id,amount_cents,occurred_at")))
-                .andExpect(content().string(containsString("模拟渠道")));
+                .andExpect(content().string(containsString("模拟渠道")))
+                .andExpect(content().string(containsString("最大 20 MB，最多 100,000 行数据")))
+                .andExpect(xpath("//select[@name='channelCode' and @required]").exists())
+                .andExpect(xpath("//select[@name='channelCode']/option[@value='ALIPAY']").string("支付宝"))
+                .andExpect(xpath("//select[@name='channelCode']/option[@value='WECHAT_PAY']").doesNotExist())
+                .andExpect(xpath("//select[@name='channelCode']/option[@value='LEGACY_SYNTHETIC']").doesNotExist());
     }
 
     @Test
@@ -493,16 +500,54 @@ class ReconciliationWebTest {
 
         mockMvc.perform(multipart("/admin/reconciliation/import").file(file))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(multipart("/admin/reconciliation/import").file(file).with(csrf()))
+        mockMvc.perform(multipart("/admin/reconciliation/import")
+                        .file(file)
+                        .param("channelCode", "ALIPAY")
+                        .with(csrf()))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedUrlPattern("/admin/reconciliation/*"));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void previewsTheDefaultOrChannelRuleForSelectedChannel() throws Exception {
+        mockMvc.perform(get("/admin/reconciliation/import/rule-preview")
+                        .param("channelCode", "ALIPAY"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("默认规则")))
+                .andExpect(content().string(containsString("版本 1")));
+
+        var draft = reconciliationRulesApi.saveDraft(
+                ALIPAY_RULE_ID, new ReconciliationRuleDraftCommand(25, 48, "fixture-editor"));
+        reconciliationRulesApi.publish(ALIPAY_RULE_ID, draft.id(), 25, 48, "fixture-publisher");
+
+        mockMvc.perform(get("/admin/reconciliation/import/rule-preview")
+                        .param("channelCode", "ALIPAY"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("渠道规则")))
+                .andExpect(content().string(containsString("版本 1")));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void displaysBatchChannelAndLockedRuleVersionOnListAndDetail() throws Exception {
+        var batch = importBatch("channel-visible.csv", "CH-VISIBLE");
+
+        mockMvc.perform(get("/admin/reconciliation"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("支付宝")))
+                .andExpect(content().string(containsString("规则版本 1")));
+        mockMvc.perform(get("/admin/reconciliation/{batchId}", batch.id()))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("支付宝")))
+                .andExpect(content().string(containsString("规则版本 1")));
     }
 
     @Test
     @WithMockUser(username = "run-admin", roles = "ADMIN")
     void startsBatchForAuthenticatedOperatorWithoutWaitingForExecution() throws Exception {
         var batch = reconciliationApi.importStatement(new StatementUpload(
-                "routes.csv", "channel_transaction_id,amount_cents,occurred_at\nCH-ROUTE,1,2026-01-15T09:30:00Z\n"
+                "ALIPAY", "routes.csv", "channel_transaction_id,amount_cents,occurred_at\nCH-ROUTE,1,2026-01-15T09:30:00Z\n"
                         .getBytes(StandardCharsets.UTF_8), "admin"));
         var workersStarted = new CountDownLatch(2);
         var releaseWorkers = new CountDownLatch(1);
@@ -603,7 +648,7 @@ class ReconciliationWebTest {
     @WithMockUser(roles = "ADMIN")
     void importFailedBatchDetailShowsStableErrorAndSpecificReason() throws Exception {
         var batch = reconciliationApi.importStatement(new StatementUpload(
-                "invalid-detail.csv",
+                "ALIPAY", "invalid-detail.csv",
                 "channel_transaction_id,amount_cents,occurred_at\nCH-INVALID,nope,2026-01-15T09:30:00Z\n"
                         .getBytes(StandardCharsets.UTF_8),
                 "admin"));
@@ -920,7 +965,7 @@ class ReconciliationWebTest {
 
     private ReconciliationBatchView importBatch(String fileName, String transactionId) {
         return reconciliationApi.importStatement(new StatementUpload(
-                fileName,
+                "ALIPAY", fileName,
                 ("channel_transaction_id,amount_cents,occurred_at\n"
                         + transactionId + ",1,2026-01-15T09:30:00Z\n")
                         .getBytes(StandardCharsets.UTF_8),
@@ -944,7 +989,7 @@ class ReconciliationWebTest {
         var payment = paymentsApi.topUp(new TopUpCommand(
                 "case-" + suffix, account.id(), internalAmountCents));
         var batch = reconciliationApi.importStatement(new StatementUpload(
-                suffix + ".csv",
+                "ALIPAY", suffix + ".csv",
                 ("channel_transaction_id,amount_cents,occurred_at\n"
                         + payment.channelReference() + "," + channelAmountCents + ","
                         + payment.occurredAt() + "\n").getBytes(StandardCharsets.UTF_8),

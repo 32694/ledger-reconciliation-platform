@@ -14,10 +14,15 @@ import org.springframework.stereotype.Service;
 class ReconciliationImportService {
     private final StatementCsvParser parser;
     private final ReconciliationStore store;
+    private final ReconciliationRuleService ruleService;
 
-    ReconciliationImportService(StatementCsvParser parser, ReconciliationStore store) {
+    ReconciliationImportService(
+            StatementCsvParser parser,
+            ReconciliationStore store,
+            ReconciliationRuleService ruleService) {
         this.parser = parser;
         this.store = store;
+        this.ruleService = ruleService;
     }
 
     ReconciliationBatchView importStatement(StatementUpload upload) {
@@ -28,10 +33,17 @@ class ReconciliationImportService {
         if (existing.isPresent()) {
             return existing.get().toView();
         }
+        var resolvedRule = ruleService.resolveImportRule(upload.channelCode());
         try {
             ParsedStatement parsed = parser.parse(content);
             return store.persistImported(
-                            upload.fileName(), hash, parsed, upload.operator(), Instant.now())
+                            upload.fileName(),
+                            hash,
+                            resolvedRule.channelId(),
+                            resolvedRule.ruleVersionId(),
+                            parsed,
+                            upload.operator(),
+                            Instant.now())
                     .toView();
         } catch (RuntimeException exception) {
             var raced = store.findByHash(hash);
@@ -41,7 +53,13 @@ class ReconciliationImportService {
             String message = stableMessage(exception);
             try {
                 return store.persistImportFailure(
-                                upload.fileName(), hash, message, upload.operator(), Instant.now())
+                                upload.fileName(),
+                                hash,
+                                resolvedRule.channelId(),
+                                resolvedRule.ruleVersionId(),
+                                message,
+                                upload.operator(),
+                                Instant.now())
                         .toView();
             } catch (DataIntegrityViolationException race) {
                 return store.findByHash(hash)
@@ -54,6 +72,10 @@ class ReconciliationImportService {
     private static void validateUpload(StatementUpload upload) {
         if (upload == null) {
             throw new IllegalArgumentException("Upload is required");
+        }
+        if (upload.channelCode() == null || upload.channelCode().isBlank()
+                || upload.channelCode().codePointCount(0, upload.channelCode().length()) > 32) {
+            throw new IllegalArgumentException("Channel code is invalid");
         }
         if (upload.fileName() == null || upload.fileName().isBlank()
                 || upload.fileName().codePointCount(0, upload.fileName().length()) > 255) {
