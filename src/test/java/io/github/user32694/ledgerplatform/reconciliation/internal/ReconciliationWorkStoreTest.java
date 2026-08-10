@@ -119,11 +119,11 @@ class ReconciliationWorkStoreTest {
     @Test
     void stillRejectsStartingRunsInOtherStates() {
         insertBatch("RUNNING", 2);
-        insertRun(FIRST_RUN_ID, 1, "FAILED");
+        insertRun(FIRST_RUN_ID, 1, "SUCCEEDED");
 
         assertThatThrownBy(() -> store.markRunRunning(FIRST_RUN_ID))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessage("Run cannot start from FAILED");
+                .hasMessage("Run cannot start from SUCCEEDED");
     }
 
     @Test
@@ -222,7 +222,7 @@ class ReconciliationWorkStoreTest {
                     (id, batch_id, attempt_number, status, requested_by, requested_at,
                      started_at, completed_at, error_message)
                 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
-                        CASE WHEN ? = 'FAILED' THEN CURRENT_TIMESTAMP ELSE NULL END,
+                        CASE WHEN ? IN ('SUCCEEDED', 'FAILED') THEN CURRENT_TIMESTAMP ELSE NULL END,
                         CASE WHEN ? = 'FAILED' THEN 'previous failure' ELSE NULL END)
                 """, id, BATCH_ID, attemptNumber, status, "operator-" + attemptNumber, status, status);
     }
