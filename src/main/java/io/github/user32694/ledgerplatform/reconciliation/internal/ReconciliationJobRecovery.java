@@ -9,6 +9,8 @@ import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
+import io.github.user32694.ledgerplatform.reconciliation.ReconciliationRunView;
+import io.github.user32694.ledgerplatform.reconciliation.RunStatus;
 
 @Component
 class ReconciliationJobRecovery {
@@ -20,6 +22,12 @@ class ReconciliationJobRecovery {
     private final JobRepository jobRepository;
     private final JobOperator jobOperator;
     private final Instant recoveryCutoff;
+
+    enum RecoveryAction {
+        SUBMIT,
+        RESTART,
+        FAIL
+    }
 
     ReconciliationJobRecovery(
             ReconciliationStore store,
@@ -39,16 +47,25 @@ class ReconciliationJobRecovery {
         return instant.truncatedTo(ChronoUnit.MICROS);
     }
 
+    static RecoveryAction actionFor(ReconciliationRunView run) {
+        if (run.status() == RunStatus.QUEUED && run.batchJobExecutionId() == null) {
+            return RecoveryAction.SUBMIT;
+        }
+        if (run.status() == RunStatus.RUNNING
+                && run.batchJobExecutionId() != null
+                && run.restartCount() == 0) {
+            return RecoveryAction.RESTART;
+        }
+        return RecoveryAction.FAIL;
+    }
+
     @EventListener(ApplicationReadyEvent.class)
     void recover() {
         for (var run : store.findRecoverableRuns(recoveryCutoff)) {
-            if (run.status() == io.github.user32694.ledgerplatform.reconciliation.RunStatus.QUEUED
-                    && run.batchJobExecutionId() == null) {
-                jobLauncher.submit(run.id());
-            } else if (run.status() == io.github.user32694.ledgerplatform.reconciliation.RunStatus.RUNNING
-                    && run.batchJobExecutionId() != null
-                    && run.restartCount() == 0) {
-                restartAbandonedExecution(run.id(), run.batchJobExecutionId());
+            switch (actionFor(run)) {
+                case SUBMIT -> jobLauncher.submit(run.id());
+                case RESTART -> restartAbandonedExecution(run.id(), run.batchJobExecutionId());
+                case FAIL -> store.failRun(run.id(), ABANDONED_MESSAGE);
             }
         }
     }

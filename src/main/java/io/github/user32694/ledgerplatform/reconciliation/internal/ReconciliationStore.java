@@ -90,13 +90,13 @@ class ReconciliationStore {
     }
 
     @Transactional(readOnly = true)
-    long restartableExecutionId(UUID runId) {
+    Optional<Long> restartableExecutionId(UUID runId) {
         var run = runRepository.findById(runId)
                 .orElseThrow(() -> new IllegalArgumentException("Run does not exist: " + runId));
-        if (run.status() != RunStatus.FAILED || run.batchJobExecutionId() == null) {
+        if (run.status() != RunStatus.FAILED) {
             throw new IllegalStateException("Run is not restartable: " + runId);
         }
-        return run.batchJobExecutionId();
+        return Optional.ofNullable(run.batchJobExecutionId());
     }
 
     @Transactional(readOnly = true)
