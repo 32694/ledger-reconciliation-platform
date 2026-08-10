@@ -102,20 +102,20 @@ class ReconciliationPerformanceIT {
                      original_payment_id, operation_reason)
                 SELECT ('00000000-0000-0000-0001-' || lpad(to_hex(row), 12, '0'))::uuid,
                        'performance-match-' || row, repeat('0', 64),
-                       'PERF-MATCH-' || lpad(row::text, 6, '0'), 'TOP_UP', NULL, ?, 1000,
-                       'CNY', 'SUCCEEDED', NULL, 0, ?, ?, NULL, NULL
+                       'PERF-MATCH-' || lpad(row::text, 6, '0'), 'TOP_UP', NULL::uuid, ?, 1000,
+                       'CNY', 'SUCCEEDED', NULL::varchar, 0, ?, ?, NULL::uuid, NULL::varchar
                 FROM generate_series(10, 100000, 10) AS row
                 UNION ALL
                 SELECT ('00000000-0000-0000-0002-' || lpad(to_hex(row), 12, '0'))::uuid,
                        'performance-internal-' || row, repeat('0', 64),
-                       'PERF-INTERNAL-' || lpad(row::text, 6, '0'), 'TOP_UP', NULL, ?, 2000,
-                       'CNY', 'SUCCEEDED', NULL, 0, ?, ?, NULL, NULL
+                       'PERF-INTERNAL-' || lpad(row::text, 6, '0'), 'TOP_UP', NULL::uuid, ?, 2000,
+                       'CNY', 'SUCCEEDED', NULL::varchar, 0, ?, ?, NULL::uuid, NULL::varchar
                 FROM generate_series(10, 100000, 10) AS row
                 UNION ALL
                 SELECT ('00000000-0000-0000-0003-' || lpad(to_hex(row), 12, '0'))::uuid,
                        'performance-mismatch-' || row, repeat('0', 64),
-                       'PERF-MISMATCH-' || lpad(row::text, 6, '0'), 'TOP_UP', NULL, ?, 1000,
-                       'CNY', 'SUCCEEDED', NULL, 0, ?, ?, NULL, NULL
+                       'PERF-MISMATCH-' || lpad(row::text, 6, '0'), 'TOP_UP', NULL::uuid, ?, 1000,
+                       'CNY', 'SUCCEEDED', NULL::varchar, 0, ?, ?, NULL::uuid, NULL::varchar
                 FROM generate_series(1, 100000, 10) AS row
                 """,
                 payeeAccountId, Timestamp.from(OCCURRED_AT), Timestamp.from(OCCURRED_AT),
