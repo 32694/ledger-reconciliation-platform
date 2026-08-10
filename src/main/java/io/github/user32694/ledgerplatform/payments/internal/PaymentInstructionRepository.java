@@ -4,6 +4,7 @@ import jakarta.persistence.LockModeType;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -75,6 +76,61 @@ interface PaymentInstructionRepository extends JpaRepository<PaymentInstructionE
             ORDER BY payment.completedAt ASC, payment.id ASC
             """)
     List<PaymentInstructionEntity> findSucceededTopUps(
+            @Param("fromInclusive") Instant fromInclusive,
+            @Param("toInclusive") Instant toInclusive);
+
+    @Query("""
+            SELECT payment
+            FROM PaymentInstructionEntity payment
+            WHERE payment.paymentType = 'TOP_UP'
+              AND payment.status = 'SUCCEEDED'
+              AND payment.completedAt BETWEEN :fromInclusive AND :toInclusive
+              AND payment.channelReference IN :references
+            ORDER BY payment.completedAt ASC, payment.id ASC
+            """)
+    List<PaymentInstructionEntity> findSucceededTopUpsByReferences(
+            @Param("references") Set<String> references,
+            @Param("fromInclusive") Instant fromInclusive,
+            @Param("toInclusive") Instant toInclusive);
+
+    @Query("""
+            SELECT payment
+            FROM PaymentInstructionEntity payment
+            WHERE payment.paymentType = 'TOP_UP'
+              AND payment.status = 'SUCCEEDED'
+              AND payment.completedAt BETWEEN :fromInclusive AND :toInclusive
+            ORDER BY payment.completedAt ASC, payment.id ASC
+            """)
+    List<PaymentInstructionEntity> findSucceededTopUpsPage(
+            @Param("fromInclusive") Instant fromInclusive,
+            @Param("toInclusive") Instant toInclusive,
+            Pageable pageable);
+
+    @Query("""
+            SELECT payment
+            FROM PaymentInstructionEntity payment
+            WHERE payment.paymentType = 'TOP_UP'
+              AND payment.status = 'SUCCEEDED'
+              AND payment.completedAt BETWEEN :fromInclusive AND :toInclusive
+              AND (payment.completedAt > :afterTime
+                   OR (payment.completedAt = :afterTime AND payment.id > :afterId))
+            ORDER BY payment.completedAt ASC, payment.id ASC
+            """)
+    List<PaymentInstructionEntity> findSucceededTopUpsAfter(
+            @Param("fromInclusive") Instant fromInclusive,
+            @Param("toInclusive") Instant toInclusive,
+            @Param("afterTime") Instant afterTime,
+            @Param("afterId") UUID afterId,
+            Pageable pageable);
+
+    @Query("""
+            SELECT COUNT(payment)
+            FROM PaymentInstructionEntity payment
+            WHERE payment.paymentType = 'TOP_UP'
+              AND payment.status = 'SUCCEEDED'
+              AND payment.completedAt BETWEEN :fromInclusive AND :toInclusive
+            """)
+    long countSucceededTopUps(
             @Param("fromInclusive") Instant fromInclusive,
             @Param("toInclusive") Instant toInclusive);
 }

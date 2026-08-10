@@ -9,7 +9,10 @@ import io.github.user32694.ledgerplatform.audit.AuditEventView;
 import io.github.user32694.ledgerplatform.audit.AuditOutcome;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
@@ -118,6 +121,98 @@ class TopUpModuleTest {
                 second.occurredAt(), first.occurredAt()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("Start must not be after end");
+    }
+
+    @Test
+    void findsSucceededTopUpsByExactReferencesAndInclusiveBoundaries() {
+        var account = accountsApi.create("Bounded Query Customer");
+        var first = paymentsApi.topUp(new TopUpCommand("bounded-1", account.id(), 100));
+        var second = paymentsApi.topUp(new TopUpCommand("bounded-2", account.id(), 200));
+        jdbcTemplate.update(
+                "UPDATE payments.payment_instruction SET completed_at = ? WHERE id = ?",
+                Timestamp.from(first.occurredAt().plusSeconds(1)), second.id());
+
+        Map<String, PaymentView> result = paymentsApi.findSucceededTopUpsByReferences(
+                new LinkedHashSet<>(List.of(first.channelReference(), "missing-reference")),
+                first.occurredAt(), first.occurredAt());
+
+        assertThat(result).containsOnlyKeys(first.channelReference());
+        assertThat(result.get(first.channelReference())).isEqualTo(first);
+        var orderedResult = paymentsApi.findSucceededTopUpsByReferences(
+                new LinkedHashSet<>(List.of(second.channelReference(), first.channelReference())),
+                first.occurredAt(), second.occurredAt());
+        assertThat(orderedResult.keySet())
+                .containsExactly(first.channelReference(), second.channelReference());
+        assertThat(paymentsApi.findSucceededTopUpsByReferences(
+                Set.of(second.channelReference()), first.occurredAt(), first.occurredAt()))
+                .isEmpty();
+    }
+
+    @Test
+    void pagesSucceededTopUpsInStableCompletedAtAndIdOrder() {
+        var account = accountsApi.create("Paging Customer");
+        var first = paymentsApi.topUp(new TopUpCommand("paging-1", account.id(), 100));
+        var second = paymentsApi.topUp(new TopUpCommand("paging-2", account.id(), 200));
+        var sameCompletedAt = Timestamp.from(first.occurredAt());
+        jdbcTemplate.update(
+                "UPDATE payments.payment_instruction SET completed_at = ? WHERE id IN (?, ?)",
+                sameCompletedAt, first.id(), second.id());
+        var from = first.occurredAt().minusNanos(1);
+        var to = second.occurredAt().plusNanos(1);
+
+        var firstPage = paymentsApi.findSucceededTopUpsAfter(from, to, null, 1);
+        var secondPage = paymentsApi.findSucceededTopUpsAfter(
+                from, to, firstPage.nextCursor(), 1);
+        var expectedIds = jdbcTemplate.query("""
+                SELECT id
+                FROM payments.payment_instruction
+                WHERE id IN (?, ?)
+                ORDER BY completed_at ASC, id ASC
+                """, (resultSet, rowNumber) -> resultSet.getObject("id", UUID.class),
+                first.id(), second.id());
+
+        assertThat(firstPage.payments()).hasSize(1);
+        assertThat(secondPage.payments()).hasSize(1);
+        assertThat(List.of(firstPage.payments().get(0).id(), secondPage.payments().get(0).id()))
+                .containsExactlyElementsOf(expectedIds);
+        assertThat(paymentsApi.countSucceededTopUps(from, to)).isEqualTo(2);
+    }
+
+    @Test
+    void excludesFailedAndNonTopUpPaymentsFromBoundedQueries() {
+        var payer = accountsApi.create("Bounded Exclusion Payer");
+        var payee = accountsApi.create("Bounded Exclusion Payee");
+        var succeeded = paymentsApi.topUp(new TopUpCommand("bounded-success", payer.id(), 100));
+        var failed = paymentsApi.topUp(
+                new TopUpCommand("bounded-failed", payer.id(), Long.MAX_VALUE));
+        var transfer = paymentsApi.transfer(
+                new TransferCommand("bounded-transfer", payer.id(), payee.id(), 100));
+
+        var result = paymentsApi.findSucceededTopUps(
+                succeeded.occurredAt().minusNanos(1), transfer.occurredAt().plusNanos(1));
+        var boundedPage = paymentsApi.findSucceededTopUpsAfter(
+                succeeded.occurredAt().minusNanos(1), transfer.occurredAt().plusNanos(1), null, 500);
+
+        assertThat(result).extracting(PaymentView::id).containsExactly(succeeded.id());
+        assertThat(boundedPage.payments()).extracting(PaymentView::id).containsExactly(succeeded.id());
+        assertThat(paymentsApi.countSucceededTopUps(
+                succeeded.occurredAt().minusNanos(1), transfer.occurredAt().plusNanos(1)))
+                .isEqualTo(1);
+        assertThat(transfer.status()).isEqualTo("SUCCEEDED");
+        assertThat(failed.status()).isEqualTo("FAILED");
+    }
+
+    @Test
+    void validatesBoundedPagingInputsAndSkipsEmptyReferenceQueries() {
+        var now = Instant.now();
+
+        assertThat(paymentsApi.findSucceededTopUpsByReferences(Set.of(), now, now)).isEmpty();
+        assertThat(paymentsApi.findSucceededTopUpsAfter(now, now, null, 1).payments()).isEmpty();
+        assertThat(paymentsApi.findSucceededTopUpsAfter(now, now, null, 500).payments()).isEmpty();
+        assertThatThrownBy(() -> paymentsApi.findSucceededTopUpsAfter(now, now, null, 0))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> paymentsApi.findSucceededTopUpsAfter(now, now, null, 501))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
