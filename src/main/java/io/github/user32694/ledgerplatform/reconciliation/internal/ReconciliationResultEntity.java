@@ -52,21 +52,6 @@ class ReconciliationResultEntity {
 
     protected ReconciliationResultEntity() {}
 
-    static ReconciliationResultEntity from(
-            UUID batchId,
-            ReconciliationMatcher.ResultDraft draft,
-            Instant createdAt) {
-        var entity = new ReconciliationResultEntity();
-        entity.id = UUID.randomUUID();
-        entity.batchId = batchId;
-        entity.statementEntryId = draft.statementEntryId();
-        entity.paymentId = draft.paymentId();
-        entity.resultType = draft.resultType();
-        entity.resolutionStatus = draft.resolutionStatus();
-        entity.createdAt = createdAt.truncatedTo(ChronoUnit.MICROS);
-        return entity;
-    }
-
     UUID id() {
         return id;
     }

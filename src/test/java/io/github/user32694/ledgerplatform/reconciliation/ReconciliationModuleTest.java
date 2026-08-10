@@ -571,8 +571,8 @@ class ReconciliationModuleTest {
                 });
         assertThat(reconciliationApi.getBatch(queuedBatch.id()))
                 .satisfies(batch -> {
-                    assertThat(batch.status()).isEqualTo(BatchStatus.RECONCILIATION_FAILED);
-                    assertThat(batch.errorMessage()).isEqualTo("Application restarted before run completion");
+                    assertThat(batch.status()).isEqualTo(BatchStatus.COMPLETED);
+                    assertThat(batch.errorMessage()).isNull();
                 });
         assertThat(reconciliationApi.getBatch(runningBatch.id()))
                 .satisfies(batch -> {

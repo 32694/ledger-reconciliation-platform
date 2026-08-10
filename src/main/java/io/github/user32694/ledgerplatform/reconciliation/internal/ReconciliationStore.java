@@ -144,34 +144,6 @@ class ReconciliationStore {
         run.updateProgress(stepName, previousStepRead + Math.max(0, processedInStep));
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    ReconciliationBatchView completeRun(
-            UUID runId, List<ReconciliationMatcher.ResultDraft> drafts) {
-        var run = findRunForUpdate(runId);
-        var batch = findEntity(run.batchId());
-        resultRepository.deleteAllByBatchId(batch.id());
-        resultRepository.flush();
-        resultRepository.saveAllAndFlush(drafts.stream()
-                .map(draft -> ReconciliationResultEntity.from(batch.id(), draft, Instant.now()))
-                .toList());
-        int matchedRows = (int) drafts.stream()
-                .filter(draft -> draft.resultType().name().equals("MATCHED"))
-                .count();
-        int differenceRows = drafts.size() - matchedRows;
-        var now = Instant.now();
-        batch.complete(matchedRows, differenceRows, now);
-        run.succeed(matchedRows, differenceRows, now);
-        auditApi.record(reconciliationAudit(
-                run.requestedBy(),
-                AuditAction.RECONCILIATION_RUN,
-                "RECONCILIATION_BATCH",
-                batch.id(),
-                AuditOutcome.SUCCEEDED,
-                "对账运行成功",
-                run.id().toString()));
-        return batch.toView();
-    }
-
     @Transactional
     void writeWorkResults(
             UUID runId, UUID batchId, List<ReconciliationWorkResult> results) {
