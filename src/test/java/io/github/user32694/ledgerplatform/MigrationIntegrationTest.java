@@ -102,14 +102,6 @@ class MigrationIntegrationTest {
                         "notification.consumed_message",
                         "notification.notification");
 
-        assertThatThrownBy(() -> jdbcTemplate.update("""
-                INSERT INTO messaging.outbox_event
-                    (id, aggregate_type, aggregate_id, event_type, schema_version, payload, status,
-                     next_attempt_at, occurred_at, created_at)
-                VALUES (?, 'payment', 'payment-1', 'payment.created', 1, '{}'::jsonb, 'INVALID',
-                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                """, UUID.randomUUID())).isInstanceOf(DataIntegrityViolationException.class);
-
         var eventId = UUID.randomUUID();
         jdbcTemplate.update("""
                 INSERT INTO notification.notification
@@ -124,6 +116,14 @@ class MigrationIntegrationTest {
                 VALUES (?, ?, 'PAYMENT', 'Payment created', 'Payment payment-1 was created',
                         'payment', 'payment-1', CURRENT_TIMESTAMP)
                 """, UUID.randomUUID(), eventId)).isInstanceOf(DataIntegrityViolationException.class);
+
+        assertThatThrownBy(() -> jdbcTemplate.update("""
+                INSERT INTO messaging.outbox_event
+                    (id, aggregate_type, aggregate_id, event_type, schema_version, payload, status,
+                     next_attempt_at, occurred_at, created_at)
+                VALUES (?, 'payment', 'payment-1', 'payment.created', 1, '{}'::jsonb, 'INVALID',
+                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """, UUID.randomUUID())).isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
