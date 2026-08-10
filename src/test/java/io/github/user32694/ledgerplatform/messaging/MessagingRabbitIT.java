@@ -6,6 +6,8 @@ import static org.awaitility.Awaitility.await;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.user32694.ledgerplatform.notifications.NotificationView;
 import io.github.user32694.ledgerplatform.notifications.NotificationsApi;
+import java.io.IOException;
+import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -19,6 +21,7 @@ import org.springframework.amqp.core.MessageBuilder;
 import org.springframework.amqp.core.MessageDeliveryMode;
 import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.core.QueueInformation;
+import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.rabbit.listener.RabbitListenerEndpointRegistry;
@@ -38,6 +41,7 @@ class MessagingRabbitIT {
     @Autowired RabbitAdmin rabbitAdmin;
     @Autowired RabbitTemplate rabbitTemplate;
     @Autowired RabbitListenerEndpointRegistry listenerRegistry;
+    @Autowired CachingConnectionFactory connectionFactory;
     @Autowired JdbcTemplate jdbcTemplate;
 
     @BeforeEach
@@ -53,16 +57,7 @@ class MessagingRabbitIT {
 
     @Test
     void publishesOutboxEventAndCreatesNotification() {
-        UUID eventId = outboxApi.append(new OutboxCommand(
-                EventType.PAYMENT_SUCCEEDED,
-                "PAYMENT",
-                UUID.randomUUID().toString(),
-                1,
-                Map.of(
-                        "paymentType", "TOP_UP",
-                        "amountCents", 500L,
-                        "channelReference", "TOPUP-RABBIT-IT"),
-                Instant.now()));
+        UUID eventId = appendPaymentEvent();
 
         await().atMost(TEN_SECONDS).untilAsserted(() -> {
             assertThat(outboxStatus(eventId)).isEqualTo("PUBLISHED");
@@ -71,6 +66,32 @@ class MessagingRabbitIT {
                     .contains(eventId);
         });
         awaitQueuesEmpty();
+    }
+
+    @Test
+    void retainsOutboxDuringBrokerInterruptionAndPublishesAfterRecovery() throws IOException {
+        String brokerAddress = connectionFactory.getHost() + ":" + connectionFactory.getPort();
+        routeRabbitConnectionTo("127.0.0.1:" + unusedTcpPort());
+        UUID eventId = appendPaymentEvent();
+
+        await().atMost(TEN_SECONDS).untilAsserted(() -> {
+            Map<String, Object> outbox = outboxState(eventId);
+            assertThat(outbox).containsEntry("status", "PENDING");
+            assertThat(((Number) outbox.get("attempt_count")).intValue()).isPositive();
+            assertThat(countByEventId("notification.notification", eventId)).isZero();
+        });
+
+        try {
+            routeRabbitConnectionTo(brokerAddress);
+            await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+                assertThat(outboxStatus(eventId)).isEqualTo("PUBLISHED");
+                assertThat(notificationsApi.findRecent(100))
+                        .extracting(NotificationView::eventId)
+                        .contains(eventId);
+            });
+        } finally {
+            routeRabbitConnectionTo(brokerAddress);
+        }
     }
 
     @Test
@@ -133,6 +154,19 @@ class MessagingRabbitIT {
                         """));
     }
 
+    private UUID appendPaymentEvent() {
+        return outboxApi.append(new OutboxCommand(
+                EventType.PAYMENT_SUCCEEDED,
+                "PAYMENT",
+                UUID.randomUUID().toString(),
+                1,
+                Map.of(
+                        "paymentType", "TOP_UP",
+                        "amountCents", 500L,
+                        "channelReference", "TOPUP-RABBIT-IT"),
+                Instant.now()));
+    }
+
     private static Message persistentJson(byte[] body, String messageId) {
         return MessageBuilder.withBody(body)
                 .setContentType(MessageProperties.CONTENT_TYPE_JSON)
@@ -169,6 +203,11 @@ class MessagingRabbitIT {
                 "SELECT status FROM messaging.outbox_event WHERE id = ?", String.class, eventId);
     }
 
+    private Map<String, Object> outboxState(UUID eventId) {
+        return jdbcTemplate.queryForMap(
+                "SELECT status, attempt_count FROM messaging.outbox_event WHERE id = ?", eventId);
+    }
+
     private int countByEventId(String table, UUID eventId) {
         return jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM " + table + " WHERE event_id = ?", Integer.class, eventId);
@@ -176,5 +215,16 @@ class MessagingRabbitIT {
 
     private int count(String table) {
         return jdbcTemplate.queryForObject("SELECT COUNT(*) FROM " + table, Integer.class);
+    }
+
+    private void routeRabbitConnectionTo(String address) {
+        connectionFactory.setAddresses(address);
+        connectionFactory.resetConnection();
+    }
+
+    private static int unusedTcpPort() throws IOException {
+        try (ServerSocket socket = new ServerSocket(0)) {
+            return socket.getLocalPort();
+        }
     }
 }
