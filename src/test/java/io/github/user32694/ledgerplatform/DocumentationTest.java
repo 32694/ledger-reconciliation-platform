@@ -33,8 +33,10 @@ class DocumentationTest {
                 .doesNotContain("当前应用不能导入");
         assertThat(guide)
                 .contains("channel_transaction_id,amount_cents,occurred_at")
-                .contains("10,000")
-                .contains("2 MB")
+                .contains("100,000")
+                .contains("20 MB")
+                .contains("Spring Batch")
+                .contains("reconciliation-performance")
                 .contains("匹配一致")
                 .contains("金额不一致")
                 .contains("仅渠道存在")
@@ -92,15 +94,16 @@ class DocumentationTest {
     }
 
     @org.junit.jupiter.api.Test
-    void documentsAsynchronousReconciliationOperationsWorkflow() throws IOException {
+    void documentsRestartableSpringBatchReconciliationWorkflow() throws IOException {
         String readme = Files.readString(Path.of("README.md"));
         String guide = Files.readString(Path.of("docs/USER_GUIDE.md"));
 
         assertThat(readme)
                 .contains("异步对账")
-                .contains("应用进程内本地线程池")
-                .contains("应用重启")
-                .contains("不会续跑")
+                .contains("Spring Batch")
+                .contains("默认规则")
+                .contains("渠道规则")
+                .contains("不可变")
                 .contains("只记录运营结论")
                 .contains("不会自动修改账本");
         assertThat(guide)
@@ -112,8 +115,10 @@ class DocumentationTest {
                 .contains("每 `2` 秒")
                 .contains("导入成功后自动进入批次详情")
                 .contains("查看历史批次")
-                .contains("重新发起对账")
-                .contains("历史 attempt")
+                .contains("从检查点继续")
+                .contains("新建尝试")
+                .contains("规则版本")
+                .contains("渠道")
                 .contains("/admin/reconciliation/cases")
                 .contains("`OPEN` -> `CLAIMED` -> `RESOLVED`")
                 .contains("认领案件")
@@ -125,11 +130,10 @@ class DocumentationTest {
                 .contains("`OTHER`：其他")
                 .contains("不可变时间线")
                 .contains("审计日志")
-                .contains("应用进程内本地线程池")
-                .contains("active run 标记为 `FAILED`")
-                .contains("不会续跑")
                 .contains("只记录运营结论")
                 .contains("不会自动修改账本")
+                .doesNotContain("应用进程内本地线程池")
+                .doesNotContain("原任务不会续跑")
                 .doesNotContain("导入成功后，在批次列表点击**查看详情**")
                 .doesNotContain("**导入账单** -> **查看详情** -> **开始对账**");
     }
@@ -144,11 +148,12 @@ class DocumentationTest {
                 .contains("Flyway")
                 .contains("V12__add_reconciliation_operations.sql")
                 .contains("V13__allow_claimed_reconciliation_status.sql")
+                .contains("V14__add_reconciliation_rules_and_work_results.sql")
+                .contains("V15__create_spring_batch_metadata.sql")
                 .contains("旧约束")
                 .contains("升级前备份")
-                .contains("应用进程内本地线程池")
-                .contains("active run")
-                .contains("不会续跑")
+                .contains("batch")
+                .contains("检查点")
                 .contains("Flyway 不提供自动回滚")
                 .contains("升级后产生的运行历史、案件时间线和审计记录")
                 .contains("不可回滚");
