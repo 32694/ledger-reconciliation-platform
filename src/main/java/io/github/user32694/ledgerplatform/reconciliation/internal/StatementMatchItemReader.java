@@ -7,7 +7,7 @@ import java.util.UUID;
 import org.springframework.batch.item.ExecutionContext;
 import org.springframework.batch.item.ItemStreamReader;
 
-final class StatementMatchItemReader implements ItemStreamReader<ReconciliationWorkItem> {
+public class StatementMatchItemReader implements ItemStreamReader<ReconciliationWorkItem> {
     private static final String LAST_COMMITTED_LINE_NUMBER = "lastCommittedLineNumber";
 
     private final UUID runId;
@@ -19,7 +19,7 @@ final class StatementMatchItemReader implements ItemStreamReader<ReconciliationW
     private int pageAfterLineNumber;
     private int lastReturnedLineNumber;
 
-    StatementMatchItemReader(
+    public StatementMatchItemReader(
             UUID runId,
             ReconciliationStore store,
             ChannelStatementEntryRepository entryRepository,

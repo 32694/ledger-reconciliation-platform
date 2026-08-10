@@ -8,7 +8,7 @@ import java.util.UUID;
 import org.springframework.batch.item.ExecutionContext;
 import org.springframework.batch.item.ItemStreamReader;
 
-final class InternalOnlyPaymentItemReader implements ItemStreamReader<ReconciliationWorkItem> {
+public class InternalOnlyPaymentItemReader implements ItemStreamReader<ReconciliationWorkItem> {
     private static final String CURSOR_TIME = "cursorTime";
     private static final String CURSOR_ID = "cursorId";
 
@@ -20,7 +20,7 @@ final class InternalOnlyPaymentItemReader implements ItemStreamReader<Reconcilia
     private PaymentPageCursor pageCursor;
     private PaymentPageCursor lastReturnedCursor;
 
-    InternalOnlyPaymentItemReader(UUID runId, ReconciliationStore store, PaymentsApi paymentsApi) {
+    public InternalOnlyPaymentItemReader(UUID runId, ReconciliationStore store, PaymentsApi paymentsApi) {
         this.runId = runId;
         this.store = store;
         this.paymentsApi = paymentsApi;

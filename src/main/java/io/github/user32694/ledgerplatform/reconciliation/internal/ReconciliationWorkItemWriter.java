@@ -4,12 +4,12 @@ import java.util.UUID;
 import org.springframework.batch.item.Chunk;
 import org.springframework.batch.item.ItemWriter;
 
-final class ReconciliationWorkItemWriter implements ItemWriter<ReconciliationWorkResult> {
+public class ReconciliationWorkItemWriter implements ItemWriter<ReconciliationWorkResult> {
     private final UUID runId;
     private final UUID batchId;
     private final ReconciliationStore store;
 
-    ReconciliationWorkItemWriter(UUID runId, UUID batchId, ReconciliationStore store) {
+    public ReconciliationWorkItemWriter(UUID runId, UUID batchId, ReconciliationStore store) {
         this.runId = runId;
         this.batchId = batchId;
         this.store = store;
