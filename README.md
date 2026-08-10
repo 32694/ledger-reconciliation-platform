@@ -52,13 +52,13 @@
 cp .env.example .env
 # 修改 .env 中的数据库和管理员密码；密码使用单行单引号值，且不要包含单引号。
 set -a
-source .env
+. ./.env
 set +a
 docker compose up -d
 ./mvnw spring-boot:run
 ```
 
-打开 <http://localhost:8080/login>，使用 `APP_ADMIN_USERNAME` 和 `APP_ADMIN_PASSWORD` 登录。应用不会自动读取 `.env`，每个新终端都需要重新执行 `source`。数据库启动后，Flyway 会在应用启动阶段自动执行待执行迁移。
+打开 <http://localhost:8080/login>，使用 `APP_ADMIN_USERNAME` 和 `APP_ADMIN_PASSWORD` 登录。应用不会自动读取 `.env`，每个新终端都需要重新执行 `set -a; . ./.env; set +a`。数据库启动后，Flyway 会在应用启动阶段自动执行待执行迁移。
 
 完整的本地启动、业务操作、失败重试和常见错误处理见[用户手册](docs/USER_GUIDE.md)；迁移到另一台电脑或迁移 PostgreSQL 数据见[迁移手册](docs/MIGRATION.md)。
 
@@ -92,4 +92,4 @@ SPRING_DATASOURCE_PASSWORD="$DB_PASSWORD" \
 ./mvnw -Preconciliation-performance -Dit.test=ReconciliationPerformanceIT verify
 ```
 
-该验证会演示 100,000 行分块处理、一次确定性失败后的同一运行恢复，并打印耗时、吞吐量和最终统计；不以固定耗时阈值判定结果。
+该验证会演示 100,000 行分块处理、一次确定性失败后的同一运行恢复，并打印 `elapsedMs`、`channelRowsPerSecond`、`channelRows`、`resultRows` 和 `restartCount`；不以固定耗时阈值判定结果。

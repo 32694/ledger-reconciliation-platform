@@ -2,11 +2,13 @@ package io.github.user32694.ledgerplatform;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.io.IOException;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.api.io.TempDir;
 
 class DocumentationTest {
     @ParameterizedTest
@@ -212,5 +214,42 @@ class DocumentationTest {
         assertThat(guide)
                 .doesNotContain("### 6.2 在异常工作台处理差异")
                 .doesNotContain("SYNTHETIC_CHANNEL");
+    }
+
+    @org.junit.jupiter.api.Test
+    void documentsPosixEnvironmentLoadingAndPerformanceOutputNames() throws IOException {
+        String readme = Files.readString(Path.of("README.md"));
+        String guide = Files.readString(Path.of("docs/USER_GUIDE.md"));
+        String migrationGuide = Files.readString(Path.of("docs/MIGRATION.md"));
+
+        for (String document : java.util.List.of(readme, guide, migrationGuide)) {
+            assertThat(document)
+                    .contains(". ./.env")
+                    .doesNotContain("source .env");
+        }
+        for (String document : java.util.List.of(readme, guide)) {
+            assertThat(document)
+                    .contains("channelRowsPerSecond")
+                    .contains("channelRows")
+                    .contains("resultRows")
+                    .doesNotContain("throughputRowsPerSecond");
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void rejectsDirectoryAsReconciliationDemoOutput(@TempDir Path temporaryDirectory)
+            throws IOException, InterruptedException {
+        Path outputDirectory = Files.createDirectory(temporaryDirectory.resolve("directory-output"));
+        var process = new ProcessBuilder(
+                "scripts/generate-reconciliation-demo.sh", outputDirectory.toString(), "1")
+                .redirectErrorStream(true)
+                .start();
+        String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+
+        assertThat(process.waitFor()).isEqualTo(64);
+        assertThat(output).contains("输出路径不能是目录");
+        try (var generatedFiles = Files.list(outputDirectory)) {
+            assertThat(generatedFiles).isEmpty();
+        }
     }
 }

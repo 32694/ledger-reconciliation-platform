@@ -10,6 +10,11 @@ fi
 output=$1
 rows=$2
 
+if [ -d "$output" ]; then
+    echo "输出路径不能是目录" >&2
+    exit 64
+fi
+
 case $rows in
     ''|*[!0-9]*)
         echo "行数必须是 1 到 100000 的整数" >&2

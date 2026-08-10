@@ -31,7 +31,7 @@ git log -1 --oneline
 
 ## 2. 备份 PostgreSQL 数据
 
-数据库备份是可选的；只迁移代码时可跳到下一节。先在源电脑执行 `set -a; source .env; set +a`：
+数据库备份是可选的；只迁移代码时可跳到下一节。先在源电脑执行 `set -a; . ./.env; set +a`：
 
 ```sh
 mkdir -p ../migration-artifacts
@@ -59,7 +59,7 @@ chmod 600 .env
 
 ```sh
 set -a
-source .env
+. ./.env
 set +a
 ```
 

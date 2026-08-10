@@ -17,7 +17,7 @@ chmod 600 .env
 
 ```sh
 set -a
-source .env
+. ./.env
 set +a
 ```
 
@@ -188,7 +188,7 @@ SPRING_DATASOURCE_PASSWORD="$DB_PASSWORD" \
 ./mvnw -Preconciliation-performance -Dit.test=ReconciliationPerformanceIT verify
 ```
 
-该验证会输出 elapsed、throughput、total 和 restartCount。它只校验正确性和恢复语义，不设固定耗时阈值。
+该验证会输出 `elapsedMs`、`channelRowsPerSecond`、`channelRows`、`resultRows` 和 `restartCount`。它只校验正确性和恢复语义，不设固定耗时阈值。
 
 ## 7. 停止和清理
 
@@ -205,7 +205,7 @@ docker compose stop
 - **Connection refused**：确认 PostgreSQL 17 正在运行、`5432` 未被其他实例占用，并检查 `DB_URL`。
 - **Password authentication failed**：确认数据库角色密码和 `DB_PASSWORD` 相同；旧 Compose volume 会保留首次初始化的密码。
 - **Database does not exist**：创建 `ledger_platform` 和 `ledger_platform_test`，再重新运行测试或应用。
-- **`app.admin.username is required` / `app.admin.password is required`**：在启动应用的同一终端执行 `set -a; source .env; set +a`。
+- **`app.admin.username is required` / `app.admin.password is required`**：在启动应用的同一终端执行 `set -a; . ./.env; set +a`。
 - **付款账户余额不足**：这是业务保护，不会写入转账 journal；补足余额后用新幂等键提交。
 - **反向操作 `INSUFFICIENT_FUNDS`**：补足源钱包后，用新幂等键重试全额退款或全额冲正。
 - **幂等键冲突**：同一 key 的请求参数不能变化；更换唯一 key 后再提交。

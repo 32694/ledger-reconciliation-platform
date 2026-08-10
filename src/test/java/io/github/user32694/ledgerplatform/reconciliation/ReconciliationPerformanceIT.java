@@ -38,13 +38,13 @@ class ReconciliationPerformanceIT {
 
     @BeforeEach
     void cleanBefore() {
+        dropPerformanceTriggers();
         cleanDatabase();
     }
 
     @AfterEach
     void cleanAfter() {
-        jdbcTemplate.execute("DROP TRIGGER IF EXISTS trg_performance_failure ON reconciliation.reconciliation_result_work");
-        jdbcTemplate.execute("DROP FUNCTION IF EXISTS reconciliation.fail_performance_after_two_chunks()");
+        dropPerformanceTriggers();
         cleanDatabase();
     }
 
@@ -68,13 +68,14 @@ class ReconciliationPerformanceIT {
         assertThat(duplicateWorkStatementRows(failed.id())).isZero();
         assertThat(duplicateWorkPaymentRows(failed.id())).isZero();
 
-        jdbcTemplate.execute("DROP TRIGGER trg_performance_failure ON reconciliation.reconciliation_result_work");
-        jdbcTemplate.execute("DROP FUNCTION reconciliation.fail_performance_after_two_chunks()");
+        jdbcTemplate.execute("DROP TRIGGER IF EXISTS trg_performance_failure ON reconciliation.reconciliation_result_work");
+        jdbcTemplate.execute("DROP FUNCTION IF EXISTS reconciliation.fail_performance_after_two_chunks()");
+        installReplayGuard();
 
         reconciliationApi.restartRun(failed.id(), "performance");
         var completed = awaitRun(batch.id(), RunStatus.SUCCEEDED, progress);
         long elapsedMillis = Duration.ofNanos(System.nanoTime() - startedNanos).toMillis();
-        long throughput = elapsedMillis == 0 ? ROW_COUNT : ROW_COUNT * 1_000 / elapsedMillis;
+        long channelRowsPerSecond = elapsedMillis == 0 ? ROW_COUNT : ROW_COUNT * 1_000 / elapsedMillis;
 
         assertThat(completed.id()).isEqualTo(failed.id());
         assertThat(completed.restartCount()).isEqualTo(1);
@@ -90,8 +91,8 @@ class ReconciliationPerformanceIT {
         assertThat(workRowsForRun(completed.id())).isZero();
 
         System.out.printf(
-                "reconciliation-performance elapsedMs=%d throughputRowsPerSecond=%d total=%d restartCount=%d%n",
-                elapsedMillis, throughput, EXPECTED_RESULT_COUNT, completed.restartCount());
+                "reconciliation-performance elapsedMs=%d channelRowsPerSecond=%d channelRows=%d resultRows=%d restartCount=%d%n",
+                elapsedMillis, channelRowsPerSecond, ROW_COUNT, EXPECTED_RESULT_COUNT, completed.restartCount());
     }
 
     private void insertPayments(UUID payeeAccountId) {
@@ -150,6 +151,41 @@ class ReconciliationPerformanceIT {
                 BEFORE INSERT ON reconciliation.reconciliation_result_work
                 FOR EACH ROW EXECUTE FUNCTION reconciliation.fail_performance_after_two_chunks()
                 """);
+    }
+
+    private void installReplayGuard() {
+        jdbcTemplate.execute("""
+                CREATE FUNCTION reconciliation.reject_performance_replay()
+                RETURNS TRIGGER
+                LANGUAGE plpgsql
+                AS $$
+                DECLARE line_number_value INTEGER;
+                BEGIN
+                    IF NEW.statement_entry_id IS NULL THEN
+                        RETURN NEW;
+                    END IF;
+                    SELECT line_number INTO line_number_value
+                    FROM reconciliation.channel_statement_entry
+                    WHERE id = NEW.statement_entry_id;
+                    IF line_number_value <= 1001 THEN
+                        RAISE EXCEPTION 'checkpoint replay detected';
+                    END IF;
+                    RETURN NEW;
+                END;
+                $$
+                """);
+        jdbcTemplate.execute("""
+                CREATE TRIGGER trg_performance_replay_guard
+                BEFORE INSERT ON reconciliation.reconciliation_result_work
+                FOR EACH ROW EXECUTE FUNCTION reconciliation.reject_performance_replay()
+                """);
+    }
+
+    private void dropPerformanceTriggers() {
+        jdbcTemplate.execute("DROP TRIGGER IF EXISTS trg_performance_failure ON reconciliation.reconciliation_result_work");
+        jdbcTemplate.execute("DROP FUNCTION IF EXISTS reconciliation.fail_performance_after_two_chunks()");
+        jdbcTemplate.execute("DROP TRIGGER IF EXISTS trg_performance_replay_guard ON reconciliation.reconciliation_result_work");
+        jdbcTemplate.execute("DROP FUNCTION IF EXISTS reconciliation.reject_performance_replay()");
     }
 
     private ReconciliationRunView awaitRun(
