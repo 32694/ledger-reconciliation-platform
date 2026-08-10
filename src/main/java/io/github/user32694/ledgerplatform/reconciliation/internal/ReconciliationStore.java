@@ -4,6 +4,9 @@ import io.github.user32694.ledgerplatform.audit.AuditAction;
 import io.github.user32694.ledgerplatform.audit.AuditApi;
 import io.github.user32694.ledgerplatform.audit.AuditCommand;
 import io.github.user32694.ledgerplatform.audit.AuditOutcome;
+import io.github.user32694.ledgerplatform.messaging.EventType;
+import io.github.user32694.ledgerplatform.messaging.OutboxApi;
+import io.github.user32694.ledgerplatform.messaging.OutboxCommand;
 import io.github.user32694.ledgerplatform.reconciliation.BatchStatus;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationBatchView;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationCaseEventView;
@@ -36,6 +39,7 @@ class ReconciliationStore {
     private final ReconciliationRunRepository runRepository;
     private final ReconciliationResultWorkRepository workRepository;
     private final AuditApi auditApi;
+    private final OutboxApi outboxApi;
     private final EntityManager entityManager;
     private final JdbcTemplate jdbcTemplate;
 
@@ -48,6 +52,7 @@ class ReconciliationStore {
             ReconciliationRunRepository runRepository,
             ReconciliationResultWorkRepository workRepository,
             AuditApi auditApi,
+            OutboxApi outboxApi,
             EntityManager entityManager,
             JdbcTemplate jdbcTemplate) {
         this.batchRepository = batchRepository;
@@ -58,6 +63,7 @@ class ReconciliationStore {
         this.runRepository = runRepository;
         this.workRepository = workRepository;
         this.auditApi = auditApi;
+        this.outboxApi = outboxApi;
         this.entityManager = entityManager;
         this.jdbcTemplate = jdbcTemplate;
     }
@@ -308,6 +314,17 @@ class ReconciliationStore {
                 AuditOutcome.SUCCEEDED,
                 "对账运行成功",
                 run.id().toString()));
+        outboxApi.append(new OutboxCommand(
+                EventType.RECONCILIATION_COMPLETED,
+                "RECONCILIATION_BATCH",
+                batch.id().toString(),
+                1,
+                Map.of(
+                        "batchId", batch.id().toString(),
+                        "runId", run.id().toString(),
+                        "matchedRows", matchedRows,
+                        "differenceRows", differenceRows),
+                now));
         jdbcTemplate.update("""
                 DELETE FROM reconciliation.reconciliation_result_work WHERE batch_id = ?
                 """, batch.id());

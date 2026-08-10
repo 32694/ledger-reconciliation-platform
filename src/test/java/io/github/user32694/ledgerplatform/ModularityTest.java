@@ -24,7 +24,8 @@ class ModularityTest {
                 .collect(Collectors.toSet());
 
         assertThat(names).containsExactlyInAnyOrder(
-                "identity", "accounts", "ledger", "payments", "reconciliation", "audit");
+                "identity", "accounts", "ledger", "payments", "reconciliation", "audit",
+                "messaging", "notifications");
     }
 
     @Test
@@ -53,10 +54,13 @@ class ModularityTest {
                 .getPackage();
         Package audit = Class.forName("io.github.user32694.ledgerplatform.audit.package-info")
                 .getPackage();
+        Package messaging = Class.forName("io.github.user32694.ledgerplatform.messaging.package-info")
+                .getPackage();
 
         assertThat(identity.getAnnotation(ApplicationModule.class).allowedDependencies()).isEmpty();
         assertThat(ledger.getAnnotation(ApplicationModule.class).allowedDependencies()).isEmpty();
         assertThat(audit.getAnnotation(ApplicationModule.class).allowedDependencies()).isEmpty();
+        assertThat(messaging.getAnnotation(ApplicationModule.class).allowedDependencies()).isEmpty();
     }
 
     @Test
@@ -70,12 +74,17 @@ class ModularityTest {
         Package reconciliation = Class.forName(
                         "io.github.user32694.ledgerplatform.reconciliation.package-info")
                 .getPackage();
+        Package notifications = Class.forName(
+                        "io.github.user32694.ledgerplatform.notifications.package-info")
+                .getPackage();
 
         assertThat(accounts.getAnnotation(ApplicationModule.class).allowedDependencies())
                 .containsExactly("ledger", "audit");
         assertThat(payments.getAnnotation(ApplicationModule.class).allowedDependencies())
-                .containsExactly("accounts", "ledger", "audit");
+                .containsExactly("accounts", "ledger", "audit", "messaging");
         assertThat(reconciliation.getAnnotation(ApplicationModule.class).allowedDependencies())
-                .containsExactly("payments", "audit");
+                .containsExactly("payments", "audit", "messaging");
+        assertThat(notifications.getAnnotation(ApplicationModule.class).allowedDependencies())
+                .containsExactly("messaging");
     }
 }

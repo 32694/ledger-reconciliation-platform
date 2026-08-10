@@ -1,6 +1,6 @@
 # 迁移手册
 
-本手册用于把 `ledger-reconciliation-platform` 和可选的 PostgreSQL 数据迁移到另一台电脑。项目使用 JDK 17、PostgreSQL 17 和 Flyway；不需要新增 Redis、Kafka 或其他外部服务。
+本手册用于把 `ledger-reconciliation-platform` 和可选的 PostgreSQL 数据迁移到另一台电脑。项目使用 JDK 17、PostgreSQL 17、RabbitMQ 4 和 Flyway；不需要 Redis、Kafka 或其他外部服务。RabbitMQ 管理页面默认映射到 `15672`。
 
 ## 迁移规则
 
@@ -14,12 +14,13 @@
   - `V13__allow_claimed_reconciliation_status.sql`：修复 V12 未替换完全的旧约束，使 `reconciliation_result.resolution_status` 合法接受 `CLAIMED`。
   - `V14__add_reconciliation_rules_and_work_results.sql`：增加渠道、默认/渠道规则的不可变发布版本、运行进度和结果工作表。
   - `V15__create_spring_batch_metadata.sql`：在 Flyway 管理的 `batch` schema 创建 Spring Batch PostgreSQL 元数据表。
+  - `V16__add_outbox_and_notifications.sql`：创建 Transactional Outbox、消费去重和站内通知表；RabbitMQ 拓扑由应用启动时声明。
 - Flyway 会在升级时按版本顺序执行；不要跳过或重排脚本，也不要手动修改 `flyway_schema_history`。
 
 ## 1. 迁移前准备和停机
 
 1. 在源电脑停止 Java 进程（`Ctrl-C`），确认没有写入中的资金操作或对账任务；必须先完成升级前备份。
-2. 确认源电脑和目标电脑均安装 JDK 17、PostgreSQL 17 客户端（`pg_dump`、`pg_restore`）。
+2. 确认源电脑和目标电脑均安装 Docker Compose；宿主机模式还需 JDK 17、PostgreSQL 17 客户端（`pg_dump`、`pg_restore`）和 RabbitMQ 4。
 3. 在仓库根目录检查 Git 工作区，只迁移已提交的代码：
 
 ```sh
@@ -44,6 +45,8 @@ PGPASSWORD="$DB_PASSWORD" pg_dump \
 
 备份不包含 `identity.admin_user` 行，因此管理员密码不会迁移；目标电脑首次启动会根据新的 `APP_ADMIN_USERNAME` 和 `APP_ADMIN_PASSWORD` 初始化管理员。通过可信的加密渠道把 `ledger-platform.dump` 传到目标电脑，数据库 dump 不要提交到 Git。
 
+PostgreSQL dump 会包含 Outbox、消费去重和站内通知表，但不会包含 RabbitMQ 队列。迁移前停止业务写入，在 `/admin/messaging` 确认待投递、投递中、主队列和死信队列均为 `0`，再停止应用并备份。若队列中仍有“已投递但尚未消费”的消息，而目标电脑不迁移 RabbitMQ volume，这些队列消息不会出现在目标环境；不要依赖重新发送已标记为 `PUBLISHED` 的事件来弥补。只迁移源码或已排空环境时，目标电脑可创建全新的 RabbitMQ volume。
+
 ## 3. 目标电脑安装和恢复
 
 在目标电脑：
@@ -55,7 +58,7 @@ cp .env.example .env
 chmod 600 .env
 ```
 
-编辑 `.env`，填入新的 `DB_*` 和 `APP_ADMIN_*` 值，然后导出：
+编辑 `.env`，填入新的 `DB_*`、`RABBITMQ_*` 和 `APP_ADMIN_*` 值，然后导出供后续数据库命令使用：
 
 ```sh
 set -a
@@ -63,7 +66,28 @@ set -a
 set +a
 ```
 
-按照[用户手册](USER_GUIDE.md)启动 PostgreSQL 17，创建 `ledger_platform` 和 `ledger_platform_test`，并确认使用的是目标电脑的空数据库。若要恢复业务数据，先做只读确认：
+只迁移源码、不恢复旧数据时，直接启动三服务，等待它们均为 `healthy`，然后跳到第 5 节：
+
+```sh
+docker compose up --build -d
+docker compose ps
+```
+
+需要恢复业务数据时，先只启动 PostgreSQL 和 RabbitMQ，**不要启动 app**：
+
+```sh
+docker compose up -d db rabbitmq
+docker compose ps
+```
+
+等待 `db`、`rabbitmq` 均为 `healthy`，创建 `ledger_platform_test`，并确认使用的是目标电脑的空数据库：
+
+```sh
+docker compose exec db psql -U "$DB_USERNAME" -d ledger_platform \
+  -c 'CREATE DATABASE ledger_platform_test;'
+```
+
+再做只读确认：
 
 ```sh
 PGPASSWORD="$DB_PASSWORD" psql -h localhost -p 5432 -U "$DB_USERNAME" -d postgres \
@@ -82,22 +106,29 @@ PGPASSWORD="$DB_PASSWORD" pg_restore \
   --no-owner --exit-on-error ../migration-artifacts/ledger-platform.dump
 ```
 
-`dropdb` 是破坏性命令，只能在已确认的本地空目标上运行。若只迁移源码，不执行 `dropdb`/`pg_restore`，直接启动应用即可由 Flyway 创建全新 schema。
+`dropdb` 是破坏性命令，只能在已确认的本地空目标上运行。恢复完成后再启动应用：
+
+```sh
+docker compose up --build -d app
+docker compose ps
+```
+
+等待 `app` 为 `healthy`。登录地址为 <http://localhost:8080/login>，RabbitMQ 管理页面为 <http://localhost:15672>。
 
 ## 4. 升级顺序和停机窗口
 
 迁移升级需要短暂停机：
 
 1. 先完成备份并停止旧版本应用。
-2. 更新代码到包含 V9-V15 的提交（`git pull --ff-only` 或重新 clone）。
+2. 更新代码到包含 V9-V16 的提交（`git pull --ff-only` 或重新 clone）。
 3. 启动新版本应用：
 
 ```sh
 ./mvnw spring-boot:run
 ```
 
-4. Flyway 按顺序执行尚未执行的 V9-V15；日志出现 migration 成功后再开放管理页面。V13 是 V12 的旧约束修复，V14 引入规则和工作表，V15 引入 `batch` schema；它们不能跳过、重排或合并。
-5. 登录并检查 `/admin/payments/top-up`、`/admin/payments/transfer`、`/admin/reconciliation`、`/admin/reconciliation/cases` 和 `/admin/audit`，确认近期记录、运行历史、案件时间线和审计事件可见。
+4. Flyway 按顺序执行尚未执行的 V9-V16；日志出现 migration 成功后再开放管理页面。V13 是 V12 的旧约束修复，V14 引入规则和工作表，V15 引入 `batch` schema，V16 引入 Outbox 与通知表；它们不能跳过、重排或合并。
+5. 登录并检查 `/admin/payments/top-up`、`/admin/payments/transfer`、`/admin/reconciliation`、`/admin/reconciliation/cases`、`/admin/notifications`、`/admin/messaging` 和 `/admin/audit`，确认历史数据和消息状态可见。
 
 不要在应用运行时手动执行迁移脚本，也不要让旧版本应用和新版本应用同时写同一个数据库。
 
@@ -116,9 +147,13 @@ SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/ledger_platform_test \
 SPRING_DATASOURCE_USERNAME="$DB_USERNAME" \
 SPRING_DATASOURCE_PASSWORD="$DB_PASSWORD" \
 ./mvnw clean verify
+RABBITMQ_HOST=localhost \
+RABBITMQ_USERNAME="$RABBITMQ_USERNAME" \
+RABBITMQ_PASSWORD="$RABBITMQ_PASSWORD" \
+./mvnw -Pmessaging-integration verify
 ```
 
-`java -version` 和 `psql --version` 应为 17；`./mvnw clean verify` 必须成功。应用启动后：
+`java -version` 和 `psql --version` 应为 17；完整 Maven 验证必须成功。应用启动后：
 
 ```sh
 curl --fail http://localhost:8080/actuator/health
@@ -132,16 +167,18 @@ curl --fail http://localhost:8080/actuator/health
 - `/admin/audit` 可按 action/outcome 筛选；
 - `/admin/reconciliation` 可查看异步运行状态和历史 attempt；
 - `/admin/reconciliation/cases` 可认领、取消认领和解决差异，并显示不可变时间线；
+- `/admin/notifications` 可查看并标记支付/对账通知；
+- `/admin/messaging` 可查看 Outbox 状态及 RabbitMQ 主队列、死信队列深度；
 - 旧的账户、支付、对账数据仍存在（如果恢复了 dump）。
 
 ## 6. 回滚边界
 
-Flyway 不提供自动回滚。V12 会新增和回填运营记录，V13 会替换旧约束，V14/V15 会新增规则、工作结果和 Batch 元数据；这些数据库变更不可通过切回旧应用自动撤销。发现新版本问题时：
+Flyway 不提供自动回滚。V12 会新增和回填运营记录，V13 会替换旧约束，V14/V15 会新增规则、工作结果和 Batch 元数据，V16 会新增 Outbox、消费去重和通知数据；这些数据库变更不可通过切回旧应用自动撤销。发现新版本问题时：
 
-- 如果 V9-V15 尚未执行，只需停止应用并修复代码；不要修改已有 migration 文件。
+- 如果 V9-V16 尚未执行，只需停止应用并修复代码；不要修改已有 migration 文件。
 - 如果 migration 已执行但业务代码有问题，优先修复代码并重新部署；schema 向前兼容时使用新的 migration 继续演进。
 - 如果必须撤回 schema，先停止应用，使用升级前的 PostgreSQL dump 恢复到独立的空数据库，再启动与该 schema 兼容的旧版本。升级后产生的运行历史、案件时间线和审计记录不可回滚到备份中，恢复会永久丢弃这些记录以及同期其他业务写入，必须先确认数据丢失范围。
-- 不要通过删除 `flyway_schema_history`、编辑 checksum 或手工删除 V9-V15 来“回滚”。
+- 不要通过删除 `flyway_schema_history`、编辑 checksum 或手工删除 V9-V16 来“回滚”。
 
 回滚后再次启动时，应用和数据库的 migration 版本必须匹配。恢复完成后重新运行 `./mvnw clean verify` 和健康检查。
 

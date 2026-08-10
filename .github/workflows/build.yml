@@ -12,6 +12,9 @@ env:
   SPRING_DATASOURCE_PASSWORD: ledger_app
   APP_ADMIN_USERNAME: ci-admin
   APP_ADMIN_PASSWORD: ci-admin-password
+  RABBITMQ_HOST: localhost
+  RABBITMQ_USERNAME: ledger_app
+  RABBITMQ_PASSWORD: ledger_app
 
 jobs:
   verify:
@@ -30,6 +33,19 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      rabbitmq:
+        image: rabbitmq:4-management
+        env:
+          RABBITMQ_DEFAULT_USER: ledger_app
+          RABBITMQ_DEFAULT_PASS: ledger_app
+        ports:
+          - 5672:5672
+          - 15672:15672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
 
     steps:
       - uses: actions/checkout@v4
@@ -44,11 +60,13 @@ jobs:
         env:
           PGPASSWORD: ledger_app
       - name: Verify
-        run: ./mvnw --batch-mode verify
-      - name: Upload Surefire reports
+        run: ./mvnw --batch-mode -Pmessaging-integration verify
+      - name: Upload test reports
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: surefire-reports
-          path: target/surefire-reports/
+          name: test-reports
+          path: |
+            target/surefire-reports/
+            target/failsafe-reports/
           if-no-files-found: ignore

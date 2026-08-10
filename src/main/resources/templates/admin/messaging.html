@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{admin/layout :: shell('消息运维', ${activeNav}, ~{::main})}">
+<main class="content">
+    <div class="page-heading">
+        <div><p class="eyebrow">可靠消息投递</p><h1>消息运维</h1></div>
+        <a class="button button-secondary" th:href="@{/admin/messaging}">刷新</a>
+    </div>
+
+    <p class="alert alert-success" th:if="${message}" th:text="${message}">操作成功</p>
+    <p class="alert alert-error" th:if="${!queues.available}">消息服务不可用，队列数据暂时无法读取</p>
+
+    <section class="metrics" aria-label="Outbox 状态统计">
+        <article><span>待投递</span><strong th:text="${summary.pendingCount}">0</strong></article>
+        <article><span>投递中</span><strong th:text="${summary.publishingCount}">0</strong></article>
+        <article><span>已投递</span><strong th:text="${summary.publishedCount}">0</strong></article>
+        <article><span>失败事件</span><strong th:text="${summary.failedCount}">0</strong></article>
+        <article th:classappend="${!queues.available} ? ' queue-unavailable'">
+            <span>主队列</span>
+            <strong th:text="${queues.available ? queues.mainQueueCount : '--'}">0</strong>
+        </article>
+        <article th:classappend="${!queues.available} ? ' queue-unavailable'">
+            <span>死信队列</span>
+            <strong th:text="${queues.available ? queues.deadLetterQueueCount : '--'}">0</strong>
+        </article>
+    </section>
+
+    <section class="table-section compact-table">
+        <div class="section-heading">
+            <div><h2>近期 Outbox 事件</h2><p>最多显示最近 100 条事件</p></div>
+            <span class="result-count" th:text="${#lists.size(events) + ' 条记录'}">0 条记录</span>
+        </div>
+        <div class="table-scroll">
+            <table>
+                <thead><tr><th>事件编号</th><th>事件类型</th><th>业务对象</th><th>业务编号</th><th>状态</th><th>尝试次数</th><th>错误信息</th><th>创建时间</th><th>操作</th></tr></thead>
+                <tbody>
+                <tr th:each="event : ${events}">
+                    <td class="mono" th:text="${event.id}">event-id</td>
+                    <td th:text="${event.eventTypeLabel}">支付成功</td>
+                    <td th:text="${event.aggregateTypeLabel}">资金操作</td>
+                    <td class="mono wrap-cell" th:text="${event.aggregateId}">aggregate-id</td>
+                    <td><span class="status" th:classappend="${event.statusClass}" th:text="${event.statusLabel}">待投递</span></td>
+                    <td class="numeric" th:text="${event.attemptCount}">0</td>
+                    <td class="wrap-cell" th:text="${event.lastError ?: '--'}">--</td>
+                    <td th:text="${event.createdAt}">2026-01-01T00:00:00Z</td>
+                    <td>
+                        <form class="inline-form" method="post" th:if="${event.status == 'FAILED'}"
+                              th:action="@{/admin/messaging/{id}/retry(id=${event.id})}">
+                            <button class="button button-secondary" type="submit">重新投递</button>
+                        </form>
+                        <span th:if="${event.status != 'FAILED'}">--</span>
+                    </td>
+                </tr>
+                <tr th:if="${#lists.isEmpty(events)}"><td colspan="9" class="empty-state">暂无消息事件</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+</main>
+</html>

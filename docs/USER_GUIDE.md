@@ -1,6 +1,6 @@
 # 用户手册
 
-本手册说明如何运行模拟交易账本与自动对账平台。只使用合成数据。运行环境为 Git、JDK 17、Maven Wrapper 和 PostgreSQL 17，应用端口为 `8080`，数据库端口为 `5432`。
+本手册说明如何运行模拟交易账本与自动对账平台。只使用合成数据。推荐使用 Docker Compose；宿主机开发模式需要 Git、JDK 17、Maven Wrapper、PostgreSQL 17 和 RabbitMQ 4。应用端口为 `8080`，数据库端口为 `5432`，RabbitMQ 端口为 `5672`，管理页面端口为 `15672`。
 
 ## 1. 本地启动
 
@@ -13,7 +13,32 @@ cp .env.example .env
 chmod 600 .env
 ```
 
-编辑 `.env`，设置 `DB_USERNAME`、`DB_PASSWORD`、`APP_ADMIN_USERNAME` 和 `APP_ADMIN_PASSWORD`。密码使用单行单引号值，且不要包含单引号。应用不会自动加载 `.env`，每个新终端都要执行：
+编辑 `.env`，设置 `DB_USERNAME`、`DB_PASSWORD`、`RABBITMQ_USERNAME`、`RABBITMQ_PASSWORD`、`APP_ADMIN_USERNAME` 和 `APP_ADMIN_PASSWORD`。密码使用单行单引号值，且不要包含单引号。
+
+### 1.2 三服务一键启动（推荐）
+
+```sh
+docker compose up --build -d
+docker compose ps
+```
+
+等待 `app`、`db`、`rabbitmq` 均显示 `healthy`。登录地址为 <http://localhost:8080/login>，RabbitMQ 管理页面为 <http://localhost:15672>。两处分别使用 `.env` 中的管理员账号和 RabbitMQ 账号。Compose 自动读取仓库根目录的 `.env`，不需要手工导出。
+
+停止服务但保留 PostgreSQL 和 RabbitMQ named volume：
+
+```sh
+docker compose down
+```
+
+### 1.3 宿主机运行 Java
+
+只启动依赖：
+
+```sh
+docker compose up -d db rabbitmq
+```
+
+应用不会自动加载 `.env`，宿主机模式下每个新终端都要执行：
 
 ```sh
 set -a
@@ -21,20 +46,16 @@ set -a
 set +a
 ```
 
-### 1.2 启动 PostgreSQL 17
-
-使用已有的 PostgreSQL 17 实例，或使用仓库提供的 Docker Compose：
+如需测试数据库，在依赖启动后创建：
 
 ```sh
-docker compose up -d
-docker compose ps
 docker compose exec db psql -U "$DB_USERNAME" -d ledger_platform \
   -c 'CREATE DATABASE ledger_platform_test;'
 ```
 
-等待 `db` 显示 `healthy`。Compose 只启动 PostgreSQL，Java 应用仍在宿主机运行。若使用已有实例，按所在环境的管理方式创建 `.env` 指向的主库和 `ledger_platform_test` 测试库；不要把本机路径、用户名或凭据写入文档或提交。
+若使用已有实例，按所在环境的管理方式创建 `.env` 指向的主库和 `ledger_platform_test` 测试库，并确保 RabbitMQ 用户有 `/` vhost 的读写配置权限；不要把本机路径、用户名或凭据写入文档或提交。
 
-### 1.3 测试、校验和启动
+### 1.4 测试、校验和启动
 
 使用本地数据库凭据运行测试：
 
@@ -52,6 +73,7 @@ SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/ledger_platform_test \
 SPRING_DATASOURCE_USERNAME="$DB_USERNAME" \
 SPRING_DATASOURCE_PASSWORD="$DB_PASSWORD" \
 ./mvnw clean verify
+./mvnw -Pmessaging-integration verify
 ```
 
 启动应用：
@@ -66,7 +88,7 @@ SPRING_DATASOURCE_PASSWORD="$DB_PASSWORD" \
 java -jar target/ledger-reconciliation-platform-0.1.0-SNAPSHOT.jar
 ```
 
-Flyway 会在应用启动时自动执行待执行迁移。启动后打开 <http://localhost:8080/login>，使用 `.env` 中的 `APP_ADMIN_USERNAME` 和 `APP_ADMIN_PASSWORD` 登录。可用 `curl --fail http://localhost:8080/actuator/health` 检查健康状态。
+Flyway 会在应用启动时自动执行待执行迁移。启动后打开 <http://localhost:8080/login>，使用 `.env` 中的 `APP_ADMIN_USERNAME` 和 `APP_ADMIN_PASSWORD` 登录。可用 `curl --fail http://localhost:8080/actuator/health` 检查 PostgreSQL 和 RabbitMQ 均可用。
 
 ## 2. 账户、充值和转账
 
@@ -190,23 +212,66 @@ SPRING_DATASOURCE_PASSWORD="$DB_PASSWORD" \
 
 该验证会输出 `elapsedMs`、`channelRowsPerSecond`、`channelRows`、`resultRows` 和 `restartCount`。它只校验正确性和恢复语义，不设固定耗时阈值。
 
-## 7. 停止和清理
+## 7. 可靠消息与站内通知
 
-停止 Java 进程：`Ctrl-C`。停止 Docker Compose 数据库：
+支付成功和对账完成时，业务事务会在同一个 PostgreSQL 事务中写入 Transactional Outbox。后台 Publisher 使用行锁领取待发送事件，投递到 RabbitMQ，并在收到 publisher confirm 后把事件标记为已投递。消息采用 **at-least-once** 语义，消费者以 `eventId` 做幂等消费，因此重复投递不会创建重复通知。
+
+RabbitMQ 负责业务事件分发和站内通知，不会替代 Spring Batch；批量对账、检查点和失败恢复仍由 Spring Batch 负责。
+
+### 7.1 验证正常通知
+
+1. 按第 2 节完成一笔充值或转账，或按第 6 节完成一个对账批次。
+2. 打开**站内通知**（`/admin/notifications`），应看到“资金操作成功”或“对账完成”。未读通知可点击**标记已读**。
+3. 打开**消息运维**（`/admin/messaging`），检查 Outbox 的待投递、投递中、已投递、失败事件数量，以及 RabbitMQ 主队列和死信队列深度。
+
+### 7.2 演示 Broker 中断与 Outbox 恢复
+
+在应用保持运行时停止 Broker：
 
 ```sh
-docker compose stop
+docker compose stop rabbitmq
 ```
 
-`docker compose stop` 会保留 named volume。删除本地数据前，先确认目标只包括 `ledger_platform` 和 `ledger_platform_test`；删除数据库和 volume 是破坏性操作，不要对共享或生产数据库执行。
+此时提交一笔模拟支付，业务数据和 Outbox 事件仍在同一数据库事务中保存，但发布会按退避策略重试。恢复 Broker：
 
-## 8. 常见错误
+```sh
+docker compose start rabbitmq
+```
+
+短暂中断时，事件最终变为**已投递**并生成一条通知。如果事件已耗尽 10 次发布尝试而变为**投递失败**，先确认 Broker 已恢复，再到 `/admin/messaging` 点击**重新投递**。不要直接修改 Outbox 表。
+
+### 7.3 演示三次消费重试和 DLQ
+
+下面的命令向支付事件路由键发送缺少必填字段的 JSON。管理 API 的 `%2F` 表示 RabbitMQ 默认 vhost `/`：
+
+```sh
+curl --fail -u "$RABBITMQ_USERNAME:$RABBITMQ_PASSWORD" \
+  -H 'content-type: application/json' \
+  -X POST http://localhost:15672/api/exchanges/%2F/ledger.events/publish \
+  -d '{"properties":{"content_type":"application/json","delivery_mode":2},"routing_key":"payment.succeeded.v1","payload":"{}","payload_encoding":"string"}'
+```
+
+Listener 会总共尝试 3 次，退避约 1 秒和 2 秒，然后拒绝消息并由 RabbitMQ 路由到 `notification.events.v1.dlq`。等待约 4 秒后刷新 `/admin/messaging`，死信队列深度应增加；也可在 <http://localhost:15672> 查看队列。该消息不会创建通知或消费去重记录。
+
+## 8. 停止和清理
+
+停止宿主机 Java 进程：`Ctrl-C`。停止 Compose 三个服务：
+
+```sh
+docker compose down
+```
+
+`docker compose down` 不带 `--volumes` 时会保留 named volume。删除本地数据前，先确认目标只包括本项目的 PostgreSQL 和 RabbitMQ volume；删除数据库或 volume 是破坏性操作，不要对共享或生产环境执行。
+
+## 9. 常见错误
 
 - **Connection refused**：确认 PostgreSQL 17 正在运行、`5432` 未被其他实例占用，并检查 `DB_URL`。
+- **RabbitMQ connection refused**：确认 RabbitMQ 4 正在运行、`5672` 可访问，并检查 `RABBITMQ_HOST`、用户名和密码。
+- **消息运维页显示队列不可用**：应用仍可从 PostgreSQL 读取 Outbox；恢复 RabbitMQ 后刷新页面，Publisher 会继续重试待投递事件。
 - **Password authentication failed**：确认数据库角色密码和 `DB_PASSWORD` 相同；旧 Compose volume 会保留首次初始化的密码。
 - **Database does not exist**：创建 `ledger_platform` 和 `ledger_platform_test`，再重新运行测试或应用。
 - **`app.admin.username is required` / `app.admin.password is required`**：在启动应用的同一终端执行 `set -a; . ./.env; set +a`。
 - **付款账户余额不足**：这是业务保护，不会写入转账 journal；补足余额后用新幂等键提交。
 - **反向操作 `INSUFFICIENT_FUNDS`**：补足源钱包后，用新幂等键重试全额退款或全额冲正。
 - **幂等键冲突**：同一 key 的请求参数不能变化；更换唯一 key 后再提交。
-- **端口已占用**：确认 PostgreSQL 实例与 Docker Compose 没有同时使用同一端口，再停止冲突实例后重试。
+- **端口已占用**：确认本机服务与 Docker Compose 没有同时使用 `5432`、`5672`、`8080` 或 `15672`，停止冲突实例后重试。

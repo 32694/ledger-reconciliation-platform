@@ -28,10 +28,11 @@ import org.springframework.test.context.jdbc.Sql.ExecutionPhase;
 import org.springframework.test.context.jdbc.SqlMergeMode;
 import org.springframework.test.context.jdbc.SqlMergeMode.MergeMode;
 
-@ApplicationModuleTest(extraIncludes = {"accounts", "ledger", "audit"})
+@ApplicationModuleTest(extraIncludes = {"accounts", "ledger", "audit", "messaging"})
 @ActiveProfiles("test")
 @SqlMergeMode(MergeMode.MERGE)
 @Sql(statements = {
+    "DELETE FROM messaging.outbox_event",
     "DELETE FROM audit.audit_event",
     "DELETE FROM payments.payment_instruction",
     "DELETE FROM accounts.customer_account",
@@ -40,6 +41,7 @@ import org.springframework.test.context.jdbc.SqlMergeMode.MergeMode;
     "DELETE FROM ledger.ledger_account"
 }, executionPhase = ExecutionPhase.BEFORE_TEST_METHOD)
 @Sql(statements = {
+    "DELETE FROM messaging.outbox_event",
     "DELETE FROM audit.audit_event",
     "DELETE FROM payments.payment_instruction",
     "DELETE FROM accounts.customer_account",
@@ -106,6 +108,7 @@ class TopUpModuleTest {
                     assertThat(event.summary()).isEqualTo("TOP_UP CNY 5000 SUCCEEDED");
                     assertThat(event.correlationReference()).isEqualTo(first.channelReference());
                 });
+        assertSuccessfulPaymentEvent(first);
     }
 
     @Test
@@ -257,6 +260,7 @@ class TopUpModuleTest {
         assertThat(failed.failureReason()).isEqualTo("BALANCE_LIMIT_EXCEEDED");
         assertThat(accountsApi.balance(account.id()).cents()).isEqualTo(Long.MAX_VALUE);
         assertThat(paymentsApi.findRecent(1)).containsExactly(failed);
+        assertThat(paymentEventCount(failed.id())).isZero();
     }
 
     @Test
@@ -341,6 +345,7 @@ class TopUpModuleTest {
                         AuditOutcome.FAILED,
                         "TRANSFER CNY 600 FAILED INSUFFICIENT_FUNDS",
                         transfer.channelReference());
+        assertThat(paymentEventCount(transfer.id())).isZero();
     }
 
     @Test
@@ -1117,6 +1122,35 @@ class TopUpModuleTest {
                         AuditOutcome.SUCCEEDED,
                         payment.type() + " CNY " + payment.amountCents() + " SUCCEEDED",
                         payment.channelReference());
+    }
+
+    private void assertSuccessfulPaymentEvent(PaymentView payment) {
+        assertThat(jdbcTemplate.queryForList("""
+                SELECT event_type, aggregate_type, aggregate_id, schema_version,
+                       payload = jsonb_build_object(
+                           'paymentType', ?,
+                           'amountCents', CAST(? AS bigint),
+                           'channelReference', ?
+                       ) AS payload_matches
+                FROM messaging.outbox_event
+                WHERE aggregate_type = 'PAYMENT' AND aggregate_id = ?
+                """, payment.type(), payment.amountCents(), payment.channelReference(),
+                payment.id().toString()))
+                .singleElement()
+                .satisfies(row -> {
+                    assertThat(row.get("event_type")).isEqualTo("PAYMENT_SUCCEEDED");
+                    assertThat(row.get("aggregate_type")).isEqualTo("PAYMENT");
+                    assertThat(row.get("aggregate_id")).isEqualTo(payment.id().toString());
+                    assertThat(row.get("schema_version")).isEqualTo(1);
+                    assertThat(row.get("payload_matches")).isEqualTo(true);
+                });
+    }
+
+    private long paymentEventCount(UUID paymentId) {
+        return count("""
+                SELECT COUNT(*) FROM messaging.outbox_event
+                WHERE aggregate_type = 'PAYMENT' AND aggregate_id = ?
+                """, paymentId.toString());
     }
 
     private UUID platformCashAccountId() {

@@ -1,0 +1,10 @@
+spring:
+  rabbitmq:
+    dynamic: true
+    listener:
+      simple:
+        auto-startup: true
+
+app:
+  messaging:
+    publisher-enabled: true

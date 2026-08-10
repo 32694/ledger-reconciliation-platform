@@ -15,8 +15,17 @@ spring:
     jdbc:
       initialize-schema: never
       table-prefix: batch.BATCH_
+  rabbitmq:
+    username: ledger_app
+    password: ledger_app
+    dynamic: false
+    listener:
+      simple:
+        auto-startup: false
 
 app:
   admin:
     username: test-admin
     password: test-password
+  messaging:
+    publisher-enabled: false

@@ -14,6 +14,8 @@ class DocumentationTest {
     @ParameterizedTest
     @ValueSource(strings = {
         ".env.example",
+        ".dockerignore",
+        "Dockerfile",
         "compose.yaml",
         "docs/USER_GUIDE.md",
         "docs/MIGRATION.md"
@@ -22,6 +24,45 @@ class DocumentationTest {
         assertThat(Files.isRegularFile(Path.of(relativePath)))
                 .as("%s should be a regular file", relativePath)
                 .isTrue();
+    }
+
+    @org.junit.jupiter.api.Test
+    void composeDefinesPortableApplicationDatabaseAndRabbitMqServices() throws IOException {
+        String compose = Files.readString(Path.of("compose.yaml"));
+        String application = Files.readString(Path.of("src/main/resources/application.yml"));
+        String environment = Files.readString(Path.of(".env.example"));
+
+        assertThat(compose)
+                .contains("app:", "db:", "rabbitmq:", "15672:15672")
+                .contains("condition: service_healthy")
+                .contains("OUTBOX_PUBLISH_INTERVAL: ${OUTBOX_PUBLISH_INTERVAL:-PT1S}")
+                .contains("DB_PASSWORD:?", "RABBITMQ_PASSWORD:?", "APP_ADMIN_PASSWORD:?")
+                .doesNotContain("demo-password-2026");
+        assertThat(application)
+                .contains("publish-interval: ${OUTBOX_PUBLISH_INTERVAL:PT1S}")
+                .contains("username: ${RABBITMQ_USERNAME}", "password: ${RABBITMQ_PASSWORD}")
+                .doesNotContain("${RABBITMQ_USERNAME:", "${RABBITMQ_PASSWORD:");
+        assertThat(environment).contains("OUTBOX_PUBLISH_INTERVAL=PT1S");
+    }
+
+    @org.junit.jupiter.api.Test
+    void documentsReliableMessagingOperationsAndMigration() throws IOException {
+        String readme = Files.readString(Path.of("README.md"));
+        String guide = Files.readString(Path.of("docs/USER_GUIDE.md"));
+        String migrationGuide = Files.readString(Path.of("docs/MIGRATION.md"));
+
+        assertThat(readme)
+                .contains("Transactional Outbox", "RabbitMQ", "at-least-once", "幂等消费");
+        assertThat(guide)
+                .contains("/admin/notifications", "/admin/messaging")
+                .contains("notification.events.v1.dlq")
+                .contains("docker compose up --build")
+                .contains("publisher confirm")
+                .contains("不会替代 Spring Batch");
+        assertThat(migrationGuide)
+                .contains("V16__add_outbox_and_notifications.sql")
+                .contains("RabbitMQ 4")
+                .contains("15672");
     }
 
     @org.junit.jupiter.api.Test

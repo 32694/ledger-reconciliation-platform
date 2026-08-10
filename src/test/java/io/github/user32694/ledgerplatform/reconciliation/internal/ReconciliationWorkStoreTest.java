@@ -29,6 +29,7 @@ import org.springframework.test.context.jdbc.Sql;
 })
 @ActiveProfiles("test")
 @Sql(statements = {
+        "DELETE FROM messaging.outbox_event",
         "DELETE FROM audit.audit_event",
         "TRUNCATE reconciliation.reconciliation_case_event",
         "DELETE FROM reconciliation.reconciliation_resolution",
@@ -38,6 +39,9 @@ import org.springframework.test.context.jdbc.Sql;
         "DELETE FROM reconciliation.channel_statement_entry",
         "DELETE FROM reconciliation.reconciliation_batch"
 })
+@Sql(
+        statements = "DELETE FROM messaging.outbox_event",
+        executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD)
 class ReconciliationWorkStoreTest {
     private static final UUID BATCH_ID = UUID.fromString("10000000-0000-0000-0000-000000000001");
     private static final UUID FIRST_RUN_ID = UUID.fromString("20000000-0000-0000-0000-000000000001");
