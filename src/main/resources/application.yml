@@ -17,6 +17,14 @@ spring:
     jdbc:
       initialize-schema: never
       table-prefix: batch.BATCH_
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:ledger_app}
+    password: ${RABBITMQ_PASSWORD:ledger_app}
+    connection-timeout: 2s
+    publisher-confirm-type: correlated
+    publisher-returns: true
   servlet:
     multipart:
       max-file-size: 20MB
@@ -32,3 +40,9 @@ app:
   admin:
     username: ${APP_ADMIN_USERNAME:}
     password: ${APP_ADMIN_PASSWORD:}
+  messaging:
+    publisher-enabled: true
+    publish-interval: PT1S
+    batch-size: 50
+    confirm-timeout: PT5S
+    stale-lock-timeout: PT60S
