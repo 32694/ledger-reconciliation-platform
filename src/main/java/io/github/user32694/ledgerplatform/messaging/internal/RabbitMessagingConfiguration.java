@@ -4,17 +4,23 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.user32694.ledgerplatform.messaging.EventType;
 import io.github.user32694.ledgerplatform.messaging.RabbitTopology;
 import java.time.Clock;
+import org.springframework.amqp.core.AcknowledgeMode;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.QueueBuilder;
 import org.springframework.amqp.core.TopicExchange;
+import org.springframework.amqp.rabbit.config.RetryInterceptorBuilder;
+import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
+import org.springframework.amqp.rabbit.connection.ConnectionFactory;
+import org.springframework.amqp.rabbit.retry.RejectAndDontRequeueRecoverer;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.amqp.RabbitTemplateCustomizer;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.retry.interceptor.RetryOperationsInterceptor;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 @Configuration
@@ -82,6 +88,23 @@ class RabbitMessagingConfiguration {
             template.setMessageConverter(converter);
             template.setMandatory(true);
         };
+    }
+
+    @Bean
+    SimpleRabbitListenerContainerFactory notificationListenerContainerFactory(
+            ConnectionFactory connectionFactory) {
+        RetryOperationsInterceptor retryAdvice = RetryInterceptorBuilder.stateless()
+                .maxAttempts(3)
+                .backOffOptions(1_000, 2.0, 2_000)
+                .recoverer(new RejectAndDontRequeueRecoverer())
+                .build();
+
+        var factory = new SimpleRabbitListenerContainerFactory();
+        factory.setConnectionFactory(connectionFactory);
+        factory.setAcknowledgeMode(AcknowledgeMode.AUTO);
+        factory.setDefaultRequeueRejected(false);
+        factory.setAdviceChain(retryAdvice);
+        return factory;
     }
 
     @Bean
