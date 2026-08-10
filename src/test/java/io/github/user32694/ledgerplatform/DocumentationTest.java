@@ -38,6 +38,26 @@ class DocumentationTest {
     }
 
     @org.junit.jupiter.api.Test
+    void documentsReliableMessagingOperationsAndMigration() throws IOException {
+        String readme = Files.readString(Path.of("README.md"));
+        String guide = Files.readString(Path.of("docs/USER_GUIDE.md"));
+        String migrationGuide = Files.readString(Path.of("docs/MIGRATION.md"));
+
+        assertThat(readme)
+                .contains("Transactional Outbox", "RabbitMQ", "at-least-once", "幂等消费");
+        assertThat(guide)
+                .contains("/admin/notifications", "/admin/messaging")
+                .contains("notification.events.v1.dlq")
+                .contains("docker compose up --build")
+                .contains("publisher confirm")
+                .contains("不会替代 Spring Batch");
+        assertThat(migrationGuide)
+                .contains("V16__add_outbox_and_notifications.sql")
+                .contains("RabbitMQ 4")
+                .contains("15672");
+    }
+
+    @org.junit.jupiter.api.Test
     void documentsAutomaticReconciliationMilestone() throws IOException {
         String readme = Files.readString(Path.of("README.md"));
         String guide = Files.readString(Path.of("docs/USER_GUIDE.md"));
