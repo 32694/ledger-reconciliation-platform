@@ -441,8 +441,8 @@ spring:
   rabbitmq:
     host: ${RABBITMQ_HOST:localhost}
     port: ${RABBITMQ_PORT:5672}
-    username: ${RABBITMQ_USERNAME:ledger_app}
-    password: ${RABBITMQ_PASSWORD:ledger_app}
+    username: ${RABBITMQ_USERNAME}
+    password: ${RABBITMQ_PASSWORD}
     connection-timeout: 2s
     publisher-confirm-type: correlated
     publisher-returns: true

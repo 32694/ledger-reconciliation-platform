@@ -4,8 +4,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.user32694.ledgerplatform.accounts.AccountsApi;
 import io.github.user32694.ledgerplatform.notifications.NotificationView;
 import io.github.user32694.ledgerplatform.notifications.NotificationsApi;
+import io.github.user32694.ledgerplatform.payments.PaymentsApi;
+import io.github.user32694.ledgerplatform.payments.TopUpCommand;
+import io.github.user32694.ledgerplatform.reconciliation.BatchStatus;
+import io.github.user32694.ledgerplatform.reconciliation.ReconciliationApi;
+import io.github.user32694.ledgerplatform.reconciliation.StatementUpload;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
@@ -37,6 +43,9 @@ class MessagingRabbitIT {
 
     @Autowired OutboxApi outboxApi;
     @Autowired NotificationsApi notificationsApi;
+    @Autowired AccountsApi accountsApi;
+    @Autowired PaymentsApi paymentsApi;
+    @Autowired ReconciliationApi reconciliationApi;
     @Autowired ObjectMapper objectMapper;
     @Autowired RabbitAdmin rabbitAdmin;
     @Autowired RabbitTemplate rabbitTemplate;
@@ -71,27 +80,55 @@ class MessagingRabbitIT {
     @Test
     void retainsOutboxDuringBrokerInterruptionAndPublishesAfterRecovery() throws IOException {
         String brokerAddress = connectionFactory.getHost() + ":" + connectionFactory.getPort();
-        routeRabbitConnectionTo("127.0.0.1:" + unusedTcpPort());
-        UUID eventId = appendPaymentEvent();
-
-        await().atMost(TEN_SECONDS).untilAsserted(() -> {
-            Map<String, Object> outbox = outboxState(eventId);
-            assertThat(outbox).containsEntry("status", "PENDING");
-            assertThat(((Number) outbox.get("attempt_count")).intValue()).isPositive();
-            assertThat(countByEventId("notification.notification", eventId)).isZero();
-        });
-
+        UUID eventId;
         try {
-            routeRabbitConnectionTo(brokerAddress);
-            await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
-                assertThat(outboxStatus(eventId)).isEqualTo("PUBLISHED");
-                assertThat(notificationsApi.findRecent(100))
-                        .extracting(NotificationView::eventId)
-                        .contains(eventId);
+            routeRabbitConnectionTo("127.0.0.1:" + unusedTcpPort());
+            var account = accountsApi.create("Broker interruption customer " + UUID.randomUUID());
+            var payment = paymentsApi.topUp(new TopUpCommand(
+                    "rabbit-outage-" + UUID.randomUUID(), account.id(), 500));
+            eventId = eventIdFor("PAYMENT", payment.id());
+
+            assertThat(payment.status()).isEqualTo("SUCCEEDED");
+            assertThat(paymentsApi.get(payment.id()).status()).isEqualTo("SUCCEEDED");
+            await().atMost(TEN_SECONDS).untilAsserted(() -> {
+                Map<String, Object> outbox = outboxState(eventId);
+                assertThat(outbox).containsEntry("status", "PENDING");
+                assertThat(((Number) outbox.get("attempt_count")).intValue()).isPositive();
+                assertThat(countByEventId("notification.notification", eventId)).isZero();
             });
         } finally {
             routeRabbitConnectionTo(brokerAddress);
         }
+
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+            assertThat(outboxStatus(eventId)).isEqualTo("PUBLISHED");
+            assertThat(notificationsApi.findRecent(100))
+                    .extracting(NotificationView::eventId)
+                    .contains(eventId);
+        });
+    }
+
+    @Test
+    void completesReconciliationAndCreatesNotification() {
+        String reference = "RABBIT-RECON-" + UUID.randomUUID();
+        byte[] statement = ("channel_transaction_id,amount_cents,occurred_at\n"
+                        + reference + ",1,2030-01-15T09:30:00Z\n")
+                .getBytes(StandardCharsets.UTF_8);
+        var batch = reconciliationApi.importStatement(new StatementUpload(
+                "ALIPAY", reference + ".csv", statement, "rabbit-it"));
+
+        reconciliationApi.startRun(batch.id(), "rabbit-it");
+
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
+                assertThat(reconciliationApi.getBatch(batch.id()).status())
+                        .isEqualTo(BatchStatus.COMPLETED));
+        UUID eventId = eventIdFor("RECONCILIATION_BATCH", batch.id());
+        await().atMost(TEN_SECONDS).untilAsserted(() -> {
+            assertThat(outboxStatus(eventId)).isEqualTo("PUBLISHED");
+            assertThat(notificationsApi.findRecent(100))
+                    .extracting(NotificationView::eventId)
+                    .contains(eventId);
+        });
     }
 
     @Test
@@ -206,6 +243,17 @@ class MessagingRabbitIT {
     private Map<String, Object> outboxState(UUID eventId) {
         return jdbcTemplate.queryForMap(
                 "SELECT status, attempt_count FROM messaging.outbox_event WHERE id = ?", eventId);
+    }
+
+    private UUID eventIdFor(String aggregateType, UUID aggregateId) {
+        return jdbcTemplate.queryForObject(
+                """
+                SELECT id FROM messaging.outbox_event
+                WHERE aggregate_type = ? AND aggregate_id = ?
+                """,
+                UUID.class,
+                aggregateType,
+                aggregateId.toString());
     }
 
     private int countByEventId(String table, UUID eventId) {

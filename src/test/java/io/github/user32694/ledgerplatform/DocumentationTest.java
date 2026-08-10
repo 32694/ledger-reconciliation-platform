@@ -38,7 +38,10 @@ class DocumentationTest {
                 .contains("OUTBOX_PUBLISH_INTERVAL: ${OUTBOX_PUBLISH_INTERVAL:-PT1S}")
                 .contains("DB_PASSWORD:?", "RABBITMQ_PASSWORD:?", "APP_ADMIN_PASSWORD:?")
                 .doesNotContain("demo-password-2026");
-        assertThat(application).contains("publish-interval: ${OUTBOX_PUBLISH_INTERVAL:PT1S}");
+        assertThat(application)
+                .contains("publish-interval: ${OUTBOX_PUBLISH_INTERVAL:PT1S}")
+                .contains("username: ${RABBITMQ_USERNAME}", "password: ${RABBITMQ_PASSWORD}")
+                .doesNotContain("${RABBITMQ_USERNAME:", "${RABBITMQ_PASSWORD:");
         assertThat(environment).contains("OUTBOX_PUBLISH_INTERVAL=PT1S");
     }
 
