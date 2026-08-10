@@ -38,6 +38,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.mock.web.MockHttpSession;
 import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.test.context.ActiveProfiles;
@@ -565,6 +566,7 @@ class ReconciliationWebTest {
                 .andExpect(content().string(containsString("已处理 / 总数")))
                 .andExpect(content().string(containsString("7 / 12")))
                 .andExpect(content().string(containsString("58%")))
+                .andExpect(content().string(containsString("aria-label=\"对账进度\"")))
                 .andExpect(content().string(containsString("批处理实例 ID")))
                 .andExpect(content().string(containsString("17")))
                 .andExpect(content().string(containsString("批处理执行 ID")))
@@ -593,6 +595,29 @@ class ReconciliationWebTest {
                 .andExpect(status().isForbidden());
         mockMvc.perform(post("/admin/reconciliation/{batchId}/run", batch.id()))
                 .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void restartFailureRedirectsToListWithVisibleChineseError() throws Exception {
+        var batch = importBatch("restart-error.csv", "CH-RESTART-ERROR");
+        markBatchFailed(batch.id(), "timeout");
+        UUID runId = insertRunWithProgress(
+                batch.id(), 1, "FAILED", "failure-admin", "finalizeReconciliationStep",
+                0, 0, null, 999999L, 0, "timeout");
+        var session = new MockHttpSession();
+
+        mockMvc.perform(post("/admin/reconciliation/runs/{runId}/restart", runId)
+                        .with(csrf())
+                        .session(session))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/admin/reconciliation"))
+                .andExpect(result -> assertThat(result.getFlashMap().get("runError"))
+                        .isEqualTo("无法从断点继续，请稍后重试"));
+
+        mockMvc.perform(get("/admin/reconciliation").session(session))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("无法从断点继续，请稍后重试")));
     }
 
     @Test

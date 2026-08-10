@@ -9,6 +9,7 @@
         </div>
         <a class="button button-primary" th:href="@{/admin/reconciliation/import}">导入渠道账单</a>
     </div>
+    <p class="alert alert-error" th:if="${runError}" th:text="${runError}">无法从断点继续，请稍后重试</p>
     <section class="table-section">
         <div class="section-heading">
             <div>
