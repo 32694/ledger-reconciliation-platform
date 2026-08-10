@@ -128,9 +128,10 @@ class TopUpModuleTest {
         var account = accountsApi.create("Bounded Query Customer");
         var first = paymentsApi.topUp(new TopUpCommand("bounded-1", account.id(), 100));
         var second = paymentsApi.topUp(new TopUpCommand("bounded-2", account.id(), 200));
+        var secondCompletedAt = first.occurredAt().plusSeconds(1);
         jdbcTemplate.update(
                 "UPDATE payments.payment_instruction SET completed_at = ? WHERE id = ?",
-                Timestamp.from(first.occurredAt().plusSeconds(1)), second.id());
+                Timestamp.from(secondCompletedAt), second.id());
 
         Map<String, PaymentView> result = paymentsApi.findSucceededTopUpsByReferences(
                 new LinkedHashSet<>(List.of(first.channelReference(), "missing-reference")),
@@ -140,7 +141,7 @@ class TopUpModuleTest {
         assertThat(result.get(first.channelReference())).isEqualTo(first);
         var orderedResult = paymentsApi.findSucceededTopUpsByReferences(
                 new LinkedHashSet<>(List.of(second.channelReference(), first.channelReference())),
-                first.occurredAt(), second.occurredAt());
+                first.occurredAt(), secondCompletedAt);
         assertThat(orderedResult.keySet())
                 .containsExactly(first.channelReference(), second.channelReference());
         assertThat(paymentsApi.findSucceededTopUpsByReferences(
