@@ -14,4 +14,10 @@ public record ReconciliationRunView(
         Instant completedAt,
         int matchedRows,
         int differenceRows,
-        String errorMessage) {}
+        String errorMessage,
+        Long batchJobInstanceId,
+        Long batchJobExecutionId,
+        String currentStep,
+        int processedItems,
+        int totalItems,
+        int restartCount) {}

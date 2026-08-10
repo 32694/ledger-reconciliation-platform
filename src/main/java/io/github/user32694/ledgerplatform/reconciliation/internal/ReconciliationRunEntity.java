@@ -50,6 +50,24 @@ class ReconciliationRunEntity {
     @Column(name = "error_message", length = 2000)
     private String errorMessage;
 
+    @Column(name = "batch_job_instance_id")
+    private Long batchJobInstanceId;
+
+    @Column(name = "batch_job_execution_id")
+    private Long batchJobExecutionId;
+
+    @Column(name = "current_step", length = 64)
+    private String currentStep;
+
+    @Column(name = "processed_items", nullable = false)
+    private int processedItems;
+
+    @Column(name = "total_items", nullable = false)
+    private int totalItems;
+
+    @Column(name = "restart_count", nullable = false)
+    private int restartCount;
+
     @Version
     @Column(nullable = false)
     private long version;
@@ -80,7 +98,13 @@ class ReconciliationRunEntity {
                 completedAt,
                 matchedRows,
                 differenceRows,
-                errorMessage);
+                errorMessage,
+                batchJobInstanceId,
+                batchJobExecutionId,
+                currentStep,
+                processedItems,
+                totalItems,
+                restartCount);
     }
 
     UUID id() {
@@ -99,12 +123,41 @@ class ReconciliationRunEntity {
         return requestedBy;
     }
 
-    void start(Instant now) {
-        if (status != RunStatus.QUEUED) {
+    void start(Long jobInstanceId, Long jobExecutionId, Instant now) {
+        if (status != RunStatus.QUEUED && status != RunStatus.FAILED) {
             throw new IllegalStateException("Run cannot start from " + status);
         }
+        if (status == RunStatus.FAILED) {
+            restartCount++;
+        }
         status = RunStatus.RUNNING;
+        batchJobInstanceId = jobInstanceId;
+        batchJobExecutionId = jobExecutionId;
         startedAt = normalize(now);
+        completedAt = null;
+        errorMessage = null;
+    }
+
+    void start(Instant now) {
+        start(null, null, now);
+    }
+
+    void setTotalItems(int totalItems) {
+        this.totalItems = Math.max(0, totalItems);
+        processedItems = Math.min(processedItems, this.totalItems);
+    }
+
+    void updateProgress(String step, int processedItems) {
+        currentStep = step;
+        this.processedItems = Math.min(totalItems, Math.max(this.processedItems, processedItems));
+    }
+
+    Long batchJobExecutionId() {
+        return batchJobExecutionId;
+    }
+
+    int restartCount() {
+        return restartCount;
     }
 
     void succeed(int matchedRows, int differenceRows, Instant now) {
@@ -122,7 +175,7 @@ class ReconciliationRunEntity {
             return false;
         }
         status = RunStatus.FAILED;
-        errorMessage = message;
+        errorMessage = message == null ? null : message.substring(0, Math.min(message.length(), 2000));
         completedAt = normalize(now);
         return true;
     }

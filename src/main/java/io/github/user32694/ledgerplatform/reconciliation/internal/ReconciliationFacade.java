@@ -24,22 +24,26 @@ import java.util.Collections;
 import java.util.UUID;
 import java.util.function.Function;
 import org.springframework.stereotype.Service;
+import org.springframework.batch.core.launch.JobOperator;
 
 @Service
 public class ReconciliationFacade implements ReconciliationApi {
     private final ReconciliationImportService importService;
     private final ReconciliationStore store;
-    private final ReconciliationTaskDispatcher taskDispatcher;
+    private final ReconciliationJobLauncher jobLauncher;
+    private final JobOperator jobOperator;
     private final PaymentsApi paymentsApi;
 
     public ReconciliationFacade(
             ReconciliationImportService importService,
             ReconciliationStore store,
-            ReconciliationTaskDispatcher taskDispatcher,
+            ReconciliationJobLauncher jobLauncher,
+            JobOperator jobOperator,
             PaymentsApi paymentsApi) {
         this.importService = importService;
         this.store = store;
-        this.taskDispatcher = taskDispatcher;
+        this.jobLauncher = jobLauncher;
+        this.jobOperator = jobOperator;
         this.paymentsApi = paymentsApi;
     }
 
@@ -71,9 +75,25 @@ public class ReconciliationFacade implements ReconciliationApi {
         }
         var queued = store.queueRun(batchId, operator.strip());
         if (queued.created()) {
-            taskDispatcher.submit(queued.run().id());
+            jobLauncher.submit(queued.run().id());
         }
         return queued.run();
+    }
+
+    @Override
+    public ReconciliationRunView restartRun(UUID runId, String operator) {
+        if (runId == null) {
+            throw new IllegalArgumentException("Run id is required");
+        }
+        if (operator == null || operator.isBlank()) {
+            throw new IllegalArgumentException("Operator is required");
+        }
+        try {
+            jobOperator.restart(store.restartableExecutionId(runId));
+        } catch (Exception exception) {
+            throw new IllegalStateException("Run cannot restart: " + runId, exception);
+        }
+        return store.getRun(runId);
     }
 
     @Override

@@ -77,7 +77,7 @@ class ReconciliationWebTest {
     @Autowired AccountsApi accountsApi;
     @Autowired PaymentsApi paymentsApi;
     @Autowired JdbcTemplate jdbcTemplate;
-    @Autowired @Qualifier("reconciliationTaskExecutor") ThreadPoolTaskExecutor taskExecutor;
+    @Autowired @Qualifier("reconciliationBatchTaskExecutor") ThreadPoolTaskExecutor taskExecutor;
 
     @BeforeEach
     void resetReconciliationRuleFixture() {

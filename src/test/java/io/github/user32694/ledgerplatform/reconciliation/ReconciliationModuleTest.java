@@ -513,7 +513,7 @@ class ReconciliationModuleTest {
     }
 
     @Test
-    void startupRecoveryFailsQueuedAndRunningRuns() {
+    void startupRecoveryResubmitsQueuedAndFailsUnknownRunningExecutions() throws InterruptedException {
         var queuedBatch = reconciliationApi.importStatement(new StatementUpload(
                 "ALIPAY", "abandoned-queued.csv", csv("CH-ABANDONED-QUEUED,1,2026-01-15T09:30:00Z\n"), "admin"));
         var runningBatch = reconciliationApi.importStatement(new StatementUpload(
@@ -539,8 +539,9 @@ class ReconciliationModuleTest {
         jdbcTemplate.update(
                 """
                 INSERT INTO reconciliation.reconciliation_run
-                    (id, batch_id, attempt_number, status, requested_by, requested_at, started_at)
-                VALUES (?, ?, 1, 'RUNNING', 'operator-running', ?, ?)
+                    (id, batch_id, attempt_number, status, requested_by, requested_at, started_at,
+                     batch_job_execution_id)
+                VALUES (?, ?, 1, 'RUNNING', 'operator-running', ?, ?, 999999)
                 """,
                 runningRunId,
                 runningBatch.id(),
@@ -560,12 +561,8 @@ class ReconciliationModuleTest {
         eventPublisher.publishEvent(new ApplicationReadyEvent(
                 new SpringApplication(), new String[0], applicationContext, Duration.ZERO));
 
-        assertThat(reconciliationApi.findRuns(queuedBatch.id()))
-                .singleElement()
-                .satisfies(run -> {
-                    assertThat(run.status()).isEqualTo(RunStatus.FAILED);
-                    assertThat(run.errorMessage()).isEqualTo("Application restarted before run completion");
-                });
+        var recoveredQueued = awaitRunStatus(queuedBatch.id(), RunStatus.SUCCEEDED);
+        assertThat(recoveredQueued.status()).isEqualTo(RunStatus.SUCCEEDED);
         assertThat(reconciliationApi.findRuns(runningBatch.id()))
                 .singleElement()
                 .satisfies(run -> {

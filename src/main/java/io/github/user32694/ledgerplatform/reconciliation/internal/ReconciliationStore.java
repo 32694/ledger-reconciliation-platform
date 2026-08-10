@@ -89,8 +89,30 @@ class ReconciliationStore {
         return new QueuedRun(queued.toView(), true);
     }
 
+    @Transactional(readOnly = true)
+    long restartableExecutionId(UUID runId) {
+        var run = runRepository.findById(runId)
+                .orElseThrow(() -> new IllegalArgumentException("Run does not exist: " + runId));
+        if (run.status() != RunStatus.FAILED || run.batchJobExecutionId() == null) {
+            throw new IllegalStateException("Run is not restartable: " + runId);
+        }
+        return run.batchJobExecutionId();
+    }
+
+    @Transactional(readOnly = true)
+    ReconciliationRunView getRun(UUID runId) {
+        return runRepository.findById(runId)
+                .map(ReconciliationRunEntity::toView)
+                .orElseThrow(() -> new IllegalArgumentException("Run does not exist: " + runId));
+    }
+
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     ReconciliationRunView markRunRunning(UUID runId) {
+        return beginRun(runId, null, null);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    ReconciliationRunView beginRun(UUID runId, Long jobInstanceId, Long jobExecutionId) {
         var run = findRunForUpdate(runId);
         var batch = findEntity(run.batchId());
         if (run.status() == RunStatus.RUNNING) {
@@ -101,9 +123,25 @@ class ReconciliationStore {
             return run.toView();
         }
         var startedAt = Instant.now();
-        run.start(startedAt);
+        run.start(jobInstanceId, jobExecutionId, startedAt);
         batch.start(startedAt);
         return run.toView();
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    void initializeRunTotal(UUID runId, int totalItems) {
+        findRunForUpdate(runId).setTotalItems(totalItems);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    void recordChunkProgress(UUID runId, String stepName, int processedInStep) {
+        var run = findRunForUpdate(runId);
+        int previousStepRead = switch (stepName) {
+            case "matchStatementEntriesStep" -> 0;
+            case "findInternalOnlyPaymentsStep" -> findEntity(run.batchId()).totalRows();
+            default -> run.toView().processedItems();
+        };
+        run.updateProgress(stepName, previousStepRead + Math.max(0, processedInStep));
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -231,29 +269,21 @@ class ReconciliationStore {
                 run.id().toString()));
     }
 
-    @Transactional
-    void recoverAbandonedRuns(String message, Instant recoveryCutoff) {
-        var activeRuns = runRepository.findAllByStatusInAndRequestedAtLessThan(
-                List.of(RunStatus.QUEUED, RunStatus.RUNNING), recoveryCutoff);
-        for (var run : activeRuns) {
-            if (!run.fail(message, Instant.now())) {
-                continue;
-            }
-            var batch = findEntity(run.batchId());
-            if (batch.status() == BatchStatus.RUNNING) {
-                batch.failReconciliation(message, Instant.now());
-            } else {
-                batch.failQueuedReconciliation(message, Instant.now());
-            }
-            auditApi.record(reconciliationAudit(
-                    run.requestedBy(),
-                    AuditAction.RECONCILIATION_RUN,
-                    "RECONCILIATION_BATCH",
-                    batch.id(),
-                    AuditOutcome.FAILED,
-                    "对账运行因应用重启失败",
-                    run.id().toString()));
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    void failRunUnlessSucceeded(UUID runId, String message) {
+        var run = findRunForUpdate(runId);
+        if (run.status() != RunStatus.SUCCEEDED) {
+            failRun(runId, message);
         }
+    }
+
+    @Transactional(readOnly = true)
+    List<ReconciliationRunView> findRecoverableRuns(Instant recoveryCutoff) {
+        return runRepository.findAllRecoverableBefore(
+                        List.of(RunStatus.QUEUED, RunStatus.RUNNING), recoveryCutoff)
+                .stream()
+                .map(ReconciliationRunEntity::toView)
+                .toList();
     }
 
     @Transactional(readOnly = true)

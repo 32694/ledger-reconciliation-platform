@@ -26,12 +26,14 @@ class ReconciliationJobConfiguration {
             Step prepareReconciliationStep,
             Step matchStatementEntriesStep,
             Step findInternalOnlyPaymentsStep,
-            Step finalizeReconciliationStep) {
+            Step finalizeReconciliationStep,
+            ReconciliationJobExecutionListener reconciliationJobExecutionListener) {
         return new JobBuilder("reconciliationJob", jobRepository)
                 .start(prepareReconciliationStep)
                 .next(matchStatementEntriesStep)
                 .next(findInternalOnlyPaymentsStep)
                 .next(finalizeReconciliationStep)
+                .listener(reconciliationJobExecutionListener)
                 .build();
     }
 
@@ -39,10 +41,15 @@ class ReconciliationJobConfiguration {
     Step prepareReconciliationStep(
             JobRepository jobRepository,
             PlatformTransactionManager transactionManager,
-            ReconciliationStore store) {
+            ReconciliationStore store,
+            PaymentsApi paymentsApi) {
         return new StepBuilder("prepareReconciliationStep", jobRepository)
                 .tasklet((contribution, chunkContext) -> {
-                    store.markRunRunning(runId(chunkContext.getStepContext().getJobParameters().get("runId")));
+                    UUID runId = runId(chunkContext.getStepContext().getJobParameters().get("runId"));
+                    var batch = store.getBatchForRun(runId);
+                    store.initializeRunTotal(runId, Math.toIntExact(
+                            Math.min(Integer.MAX_VALUE, (long) batch.totalRows()
+                                    + paymentsApi.countSucceededTopUps(batch.queryStart(), batch.queryEnd()))));
                     return org.springframework.batch.repeat.RepeatStatus.FINISHED;
                 }, transactionManager)
                 .build();
@@ -54,7 +61,8 @@ class ReconciliationJobConfiguration {
             PlatformTransactionManager transactionManager,
             StatementMatchItemReader statementMatchItemReader,
             ItemProcessor<ReconciliationWorkItem, ReconciliationWorkResult> reconciliationWorkItemProcessor,
-            ItemWriter<ReconciliationWorkResult> reconciliationWorkItemWriter) {
+            ItemWriter<ReconciliationWorkResult> reconciliationWorkItemWriter,
+            ReconciliationChunkProgressListener reconciliationChunkProgressListener) {
         return new StepBuilder("matchStatementEntriesStep", jobRepository)
                 .<ReconciliationWorkItem, ReconciliationWorkResult>chunk(CHUNK_SIZE, transactionManager)
                 .reader(statementMatchItemReader)
@@ -63,6 +71,7 @@ class ReconciliationJobConfiguration {
                 .faultTolerant()
                 .retry(TransientDataAccessException.class)
                 .retryLimit(3)
+                .listener(reconciliationChunkProgressListener)
                 .build();
     }
 
@@ -72,7 +81,8 @@ class ReconciliationJobConfiguration {
             PlatformTransactionManager transactionManager,
             InternalOnlyPaymentItemReader internalOnlyPaymentItemReader,
             ItemProcessor<ReconciliationWorkItem, ReconciliationWorkResult> reconciliationWorkItemProcessor,
-            ItemWriter<ReconciliationWorkResult> reconciliationWorkItemWriter) {
+            ItemWriter<ReconciliationWorkResult> reconciliationWorkItemWriter,
+            ReconciliationChunkProgressListener reconciliationChunkProgressListener) {
         return new StepBuilder("findInternalOnlyPaymentsStep", jobRepository)
                 .<ReconciliationWorkItem, ReconciliationWorkResult>chunk(CHUNK_SIZE, transactionManager)
                 .reader(internalOnlyPaymentItemReader)
@@ -81,6 +91,7 @@ class ReconciliationJobConfiguration {
                 .faultTolerant()
                 .retry(TransientDataAccessException.class)
                 .retryLimit(3)
+                .listener(reconciliationChunkProgressListener)
                 .build();
     }
 
