@@ -2,6 +2,7 @@ package io.github.user32694.ledgerplatform.messaging.internal;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import io.github.user32694.ledgerplatform.messaging.EventType;
+import io.github.user32694.ledgerplatform.messaging.OutboxEventView;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -93,6 +94,21 @@ class OutboxEventEntity {
         this.lastError = lastError;
         this.occurredAt = occurredAt.truncatedTo(ChronoUnit.MICROS);
         this.createdAt = createdAt.truncatedTo(ChronoUnit.MICROS);
+    }
+
+    OutboxEventView toView() {
+        return new OutboxEventView(
+                id,
+                aggregateType,
+                aggregateId,
+                eventType.name(),
+                status.name(),
+                attemptCount,
+                nextAttemptAt,
+                publishedAt,
+                lastError,
+                occurredAt,
+                createdAt);
     }
 }
 

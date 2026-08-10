@@ -52,6 +52,9 @@ import org.springframework.test.web.servlet.MockMvc;
     "DELETE FROM reconciliation.channel_statement_entry",
     "DELETE FROM reconciliation.reconciliation_batch",
     "DELETE FROM audit.audit_event",
+    "DELETE FROM notification.notification",
+    "DELETE FROM notification.consumed_message",
+    "DELETE FROM messaging.outbox_event",
     "DELETE FROM payments.payment_instruction",
     "DELETE FROM accounts.customer_account",
     "DELETE FROM ledger.ledger_entry",
@@ -66,6 +69,9 @@ import org.springframework.test.web.servlet.MockMvc;
     "DELETE FROM reconciliation.channel_statement_entry",
     "DELETE FROM reconciliation.reconciliation_batch",
     "DELETE FROM audit.audit_event",
+    "DELETE FROM notification.notification",
+    "DELETE FROM notification.consumed_message",
+    "DELETE FROM messaging.outbox_event",
     "DELETE FROM payments.payment_instruction",
     "DELETE FROM accounts.customer_account",
     "DELETE FROM ledger.ledger_entry",
@@ -78,6 +84,33 @@ class AdminWebTest {
     @Autowired AuditApi auditApi;
     @Autowired PaymentsApi paymentsApi;
     @Autowired JdbcTemplate jdbcTemplate;
+
+    private UUID insertFailedOutboxEvent() {
+        UUID eventId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO messaging.outbox_event
+                    (id, aggregate_type, aggregate_id, event_type, schema_version, payload,
+                     status, attempt_count, next_attempt_at, occurred_at, created_at,
+                     last_error)
+                VALUES (?, 'PAYMENT', ?, 'PAYMENT_SUCCEEDED', 1,
+                        '{"paymentType":"TOP_UP","amountCents":100,"channelReference":"WEB"}'::jsonb,
+                        'FAILED', 3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
+                        'broker unavailable')
+                """, eventId, UUID.randomUUID().toString());
+        return eventId;
+    }
+
+    private UUID insertNotification() {
+        UUID notificationId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO notification.notification
+                    (id, event_id, notification_type, title, content,
+                     aggregate_type, aggregate_id, created_at)
+                VALUES (?, ?, 'PAYMENT_SUCCEEDED', '资金操作成功', '充值 1.00 元，渠道流水：WEB',
+                        'PAYMENT', ?, CURRENT_TIMESTAMP)
+                """, notificationId, UUID.randomUUID(), UUID.randomUUID().toString());
+        return notificationId;
+    }
 
     private UUID insertReconciliationOperationsSummary() {
         UUID batchId = UUID.randomUUID();
@@ -277,6 +310,55 @@ class AdminWebTest {
                 .andExpect(content().string(matchesPattern(
                         "(?s).*<a[^>]*id=\"refresh-payments\"[^>]*"
                                 + "href=\"/admin/payments/transfer\"[^>]*>.*")));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void rendersMessagingAndNotificationOperationsPages() throws Exception {
+        insertFailedOutboxEvent();
+        insertNotification();
+
+        mockMvc.perform(get("/admin/messaging"))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/messaging"))
+                .andExpect(content().string(containsString("消息运维")))
+                .andExpect(content().string(containsString("待投递")))
+                .andExpect(content().string(containsString("失败事件")))
+                .andExpect(content().string(containsString("死信队列")))
+                .andExpect(content().string(containsString("客户通知")));
+
+        mockMvc.perform(get("/admin/notifications"))
+                .andExpect(status().isOk())
+                .andExpect(view().name("admin/notifications"))
+                .andExpect(content().string(containsString("站内通知")))
+                .andExpect(content().string(containsString("资金操作成功")))
+                .andExpect(content().string(containsString("标记已读")));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void protectsMessagingOperationsWithCsrfAndSupportsActions() throws Exception {
+        UUID failedEventId = insertFailedOutboxEvent();
+        UUID notificationId = insertNotification();
+
+        mockMvc.perform(post("/admin/messaging/{id}/retry", failedEventId))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/admin/notifications/{id}/read", notificationId))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(post("/admin/messaging/{id}/retry", failedEventId).with(csrf()))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/admin/messaging"));
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT status FROM messaging.outbox_event WHERE id = ?", String.class, failedEventId))
+                .isEqualTo("PENDING");
+
+        mockMvc.perform(post("/admin/notifications/{id}/read", notificationId).with(csrf()))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/admin/notifications"));
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT read_at FROM notification.notification WHERE id = ?", Object.class, notificationId))
+                .isNotNull();
     }
 
     @Test

@@ -23,6 +23,8 @@
             <a th:href="@{/admin/reconciliation}" th:classappend="${activeNav == 'reconciliation'} ? ' active'">自动对账</a>
             <a th:href="@{/admin/reconciliation/rules}" th:classappend="${activeNav == 'reconciliation-rules'} ? ' active'">对账规则</a>
             <a th:href="@{/admin/reconciliation/cases}" th:classappend="${activeNav == 'reconciliation-cases'} ? ' active'">异常工作台</a>
+            <a th:href="@{/admin/notifications}" th:classappend="${activeNav == 'notifications'} ? ' active'">客户通知</a>
+            <a th:href="@{/admin/messaging}" th:classappend="${activeNav == 'messaging'} ? ' active'">消息运维</a>
             <a th:href="@{/admin/audit}" th:classappend="${activeNav == 'audit'} ? ' active'">审计日志</a>
         </nav>
         <form class="logout-form" method="post" th:action="@{/logout}">

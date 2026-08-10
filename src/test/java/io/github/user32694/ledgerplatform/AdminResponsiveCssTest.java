@@ -27,4 +27,14 @@ class AdminResponsiveCssTest {
                 .contains(".reconciliation-run-actions { flex-wrap: wrap;")
                 .contains(".reconciliation-progress { grid-template-columns: minmax(0, 1fr) auto; }");
     }
+
+    @Test
+    void messagingTablesWrapLongOperationalValuesAndEmphasizeUnreadRows() throws IOException {
+        String css = Files.readString(Path.of("src/main/resources/static/css/admin.css"));
+
+        assertThat(css)
+                .contains(".wrap-cell { white-space: normal; overflow-wrap: anywhere;")
+                .contains(".notification-unread")
+                .contains(".queue-unavailable");
+    }
 }

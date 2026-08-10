@@ -3,20 +3,38 @@ package io.github.user32694.ledgerplatform.messaging.internal;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.user32694.ledgerplatform.messaging.OutboxApi;
 import io.github.user32694.ledgerplatform.messaging.OutboxCommand;
+import io.github.user32694.ledgerplatform.messaging.MessagingOperationsApi;
+import io.github.user32694.ledgerplatform.messaging.OutboxEventView;
+import io.github.user32694.ledgerplatform.messaging.OutboxSummary;
+import io.github.user32694.ledgerplatform.messaging.QueueDepths;
+import java.time.Clock;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.UUID;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
-class OutboxService implements OutboxApi {
+class OutboxService implements OutboxApi, MessagingOperationsApi {
     private final ObjectMapper objectMapper;
     private final OutboxEventRepository repository;
+    private final OutboxStore outboxStore;
+    private final RabbitQueueProbe queueProbe;
+    private final Clock clock;
 
-    OutboxService(ObjectMapper objectMapper, OutboxEventRepository repository) {
+    OutboxService(
+            ObjectMapper objectMapper,
+            OutboxEventRepository repository,
+            OutboxStore outboxStore,
+            RabbitQueueProbe queueProbe,
+            Clock clock) {
         this.objectMapper = objectMapper;
         this.repository = repository;
+        this.outboxStore = outboxStore;
+        this.queueProbe = queueProbe;
+        this.clock = clock;
     }
 
     @Override
@@ -59,6 +77,37 @@ class OutboxService implements OutboxApi {
                 createdAt);
         repository.save(event);
         return eventId;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public OutboxSummary summary() {
+        return new OutboxSummary(
+                repository.countByStatus(OutboxStatus.PENDING),
+                repository.countByStatus(OutboxStatus.PUBLISHING),
+                repository.countByStatus(OutboxStatus.PUBLISHED),
+                repository.countByStatus(OutboxStatus.FAILED));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<OutboxEventView> findRecent(int limit) {
+        if (limit < 1 || limit > 100) {
+            throw new IllegalArgumentException("Limit must be between 1 and 100");
+        }
+        return repository.findAllByOrderByCreatedAtDescIdDesc(PageRequest.of(0, limit)).stream()
+                .map(OutboxEventEntity::toView)
+                .toList();
+    }
+
+    @Override
+    public QueueDepths queueDepths() {
+        return queueProbe.queueDepths();
+    }
+
+    @Override
+    public void retryFailed(UUID eventId) {
+        outboxStore.retryFailed(eventId, Instant.now(clock).truncatedTo(ChronoUnit.MICROS));
     }
 
     private static String requireText(String value, String field, int maximumCodePoints) {
