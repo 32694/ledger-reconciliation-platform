@@ -201,6 +201,16 @@ class DocumentationTest {
                 .contains("保存草稿")
                 .contains("发布")
                 .contains("只使用已发布版本")
+                .contains("### 6.1 管理对账规则")
+                .contains("### 6.2 导入并运行对账")
+                .contains("### 6.3 在异常工作台处理差异")
+                .contains("### 6.4 演示流程")
+                .contains("### 6.5 100,000 行演示")
+                .contains("任一已启用渠道")
+                .contains("支付宝、微信支付或银联")
                 .contains("-Preconciliation-performance");
+        assertThat(guide)
+                .doesNotContain("### 6.2 在异常工作台处理差异")
+                .doesNotContain("SYNTHETIC_CHANNEL");
     }
 }
