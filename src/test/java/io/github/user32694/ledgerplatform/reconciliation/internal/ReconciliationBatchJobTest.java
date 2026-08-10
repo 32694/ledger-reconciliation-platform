@@ -25,6 +25,7 @@ import org.springframework.batch.core.JobParametersBuilder;
 import org.springframework.batch.core.StepExecution;
 import org.springframework.batch.core.launch.JobLauncher;
 import org.springframework.batch.core.explore.JobExplorer;
+import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.SpringApplication;
@@ -55,6 +56,8 @@ class ReconciliationBatchJobTest {
     @Autowired @Qualifier("jobLauncher") JobLauncher jobLauncher;
     @Autowired @Qualifier("reconciliationJob") Job reconciliationJob;
     @Autowired JobExplorer jobExplorer;
+    @Autowired JobRepository jobRepository;
+    @Autowired ReconciliationJobExecutionListener jobExecutionListener;
     @Autowired ApplicationEventPublisher eventPublisher;
     @Autowired ConfigurableApplicationContext applicationContext;
 
@@ -234,6 +237,56 @@ class ReconciliationBatchJobTest {
         assertThat(completed.attemptNumber()).isEqualTo(queued.attemptNumber());
         assertThat(completed.batchJobInstanceId()).isEqualTo(firstExecution.getJobInstance().getInstanceId());
         assertThat(completed.processedItems()).isLessThanOrEqualTo(completed.totalItems());
+    }
+
+    @Test
+    @Sql(statements = {
+        "ALTER TABLE reconciliation.reconciliation_result DROP CONSTRAINT IF EXISTS ck_test_stopped_failure",
+        "ALTER TABLE reconciliation.reconciliation_result ADD CONSTRAINT ck_test_stopped_failure CHECK (FALSE)"
+    }, executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+    @Sql(statements = {
+        "ALTER TABLE reconciliation.reconciliation_result DROP CONSTRAINT IF EXISTS ck_test_stopped_failure"
+    }, executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD)
+    void stopsAJobAndRestartsItThroughThePublicRunApi() throws Exception {
+        var batch = reconciliationApi.importStatement(new StatementUpload(
+                "ALIPAY", "batch-stopped.csv", channelOnlyCsv(1), "importer"));
+        var queued = store.queueRun(batch.id(), "batch-operator").run();
+        JobExecution firstExecution = jobLauncher.run(reconciliationJob, new JobParametersBuilder()
+                .addString("runId", queued.id().toString(), true)
+                .toJobParameters());
+        assertThat(firstExecution.getStatus()).isEqualTo(BatchStatus.FAILED);
+
+        jdbcTemplate.update("""
+                UPDATE reconciliation.reconciliation_run
+                SET status = 'RUNNING', requested_at = ?, completed_at = NULL, error_message = NULL
+                WHERE id = ?
+                """, java.sql.Timestamp.from(Instant.parse("2026-01-15T10:00:00Z")), queued.id());
+        jdbcTemplate.update("""
+                UPDATE reconciliation.reconciliation_batch
+                SET status = 'RUNNING', completed_at = NULL, error_message = NULL
+                WHERE id = ?
+                """, batch.id());
+
+        firstExecution.setStatus(BatchStatus.STOPPED);
+        firstExecution.setEndTime(java.time.LocalDateTime.now());
+        firstExecution.setExitStatus(new org.springframework.batch.core.ExitStatus("STOPPED"));
+        jobRepository.update(firstExecution);
+        jobExecutionListener.afterJob(firstExecution);
+
+        var stopped = reconciliationApi.findRuns(batch.id()).get(0);
+        assertThat(stopped.status())
+                .isEqualTo(io.github.user32694.ledgerplatform.reconciliation.RunStatus.FAILED);
+        assertThat(stopped.errorMessage()).isEqualTo("JobExecution stopped");
+
+        jdbcTemplate.execute(
+                "ALTER TABLE reconciliation.reconciliation_result DROP CONSTRAINT ck_test_stopped_failure");
+        reconciliationApi.restartRun(queued.id(), "manual-operator");
+        var completed = awaitRun(batch.id(), run ->
+                run.status() == io.github.user32694.ledgerplatform.reconciliation.RunStatus.SUCCEEDED);
+        assertThat(completed.id()).isEqualTo(queued.id());
+        assertThat(completed.attemptNumber()).isEqualTo(queued.attemptNumber());
+        assertThat(completed.batchJobInstanceId()).isEqualTo(firstExecution.getJobInstance().getInstanceId());
+        assertThat(completed.restartCount()).isOne();
     }
 
     private io.github.user32694.ledgerplatform.reconciliation.ReconciliationRunView awaitRun(

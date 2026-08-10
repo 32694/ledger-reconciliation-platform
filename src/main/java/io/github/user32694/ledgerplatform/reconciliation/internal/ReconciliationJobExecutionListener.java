@@ -21,8 +21,9 @@ class ReconciliationJobExecutionListener implements JobExecutionListener {
 
     @Override
     public void afterJob(JobExecution jobExecution) {
-        if (jobExecution.getStatus() == BatchStatus.FAILED) {
-            store.failRunUnlessSucceeded(runId(jobExecution), stableMessage(jobExecution));
+        if (jobExecution.getStatus() == BatchStatus.FAILED
+                || jobExecution.getStatus() == BatchStatus.STOPPED) {
+            store.failRunUnlessSucceeded(runId(jobExecution), stableFailureMessage(jobExecution));
         }
     }
 
@@ -30,7 +31,10 @@ class ReconciliationJobExecutionListener implements JobExecutionListener {
         return UUID.fromString(execution.getJobParameters().getString("runId"));
     }
 
-    private static String stableMessage(JobExecution execution) {
+    static String stableFailureMessage(JobExecution execution) {
+        if (execution.getStatus() == BatchStatus.STOPPED) {
+            return "JobExecution stopped";
+        }
         String message = execution.getAllFailureExceptions().stream()
                 .findFirst()
                 .map(failure -> failure.getClass().getSimpleName()

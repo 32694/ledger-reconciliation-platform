@@ -7,10 +7,20 @@ import org.junit.jupiter.api.Test;
 import org.springframework.batch.core.Job;
 import org.springframework.batch.core.JobExecution;
 import org.springframework.batch.core.JobParameters;
+import org.springframework.batch.core.JobExecution;
+import org.springframework.batch.core.BatchStatus;
 import org.springframework.batch.core.launch.JobLauncher;
 import org.springframework.core.task.TaskRejectedException;
 
 class ReconciliationJobLauncherTest {
+    @Test
+    void usesAStableRecoverableMessageForStoppedExecutions() {
+        var execution = new JobExecution(1L, new org.springframework.batch.core.JobParameters());
+        execution.setStatus(BatchStatus.STOPPED);
+
+        assertThat(ReconciliationJobExecutionListener.stableFailureMessage(execution))
+                .isEqualTo("JobExecution stopped");
+    }
     @Test
     void launchesWithRunIdAsTheOnlyIdentifyingParameter() throws Exception {
         UUID runId = UUID.randomUUID();
