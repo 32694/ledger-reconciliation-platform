@@ -14,6 +14,7 @@ record ClaimedOutboxEvent(
         int schemaVersion,
         JsonNode payload,
         int attemptCount,
+        Instant lockedAt,
         Instant occurredAt) {
 
     EventEnvelope toEnvelope() {

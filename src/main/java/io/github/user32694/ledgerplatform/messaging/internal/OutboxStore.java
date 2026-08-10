@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.user32694.ledgerplatform.messaging.EventType;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -32,6 +33,7 @@ class OutboxStore {
         if (limit <= 0) {
             throw new IllegalArgumentException("Claim limit must be positive");
         }
+        Instant claimTime = now.truncatedTo(ChronoUnit.MICROS);
         return jdbcTemplate.query(
                 """
                 WITH candidates AS (
@@ -50,7 +52,7 @@ class OutboxStore {
                 WHERE event.id = candidates.id
                 RETURNING event.id, event.aggregate_type, event.aggregate_id, event.event_type,
                           event.schema_version, event.payload::text AS payload,
-                          event.attempt_count, event.occurred_at
+                          event.attempt_count, event.locked_at, event.occurred_at
                 """,
                 (resultSet, rowNumber) -> {
                     try {
@@ -62,50 +64,69 @@ class OutboxStore {
                                 resultSet.getInt("schema_version"),
                                 objectMapper.readTree(resultSet.getString("payload")),
                                 resultSet.getInt("attempt_count"),
+                                resultSet.getTimestamp("locked_at").toInstant(),
                                 resultSet.getTimestamp("occurred_at").toInstant());
                     } catch (JsonProcessingException exception) {
                         throw new IllegalStateException("Outbox payload is not valid JSON", exception);
                     }
                 },
-                Timestamp.from(now),
+                Timestamp.from(claimTime),
                 limit,
-                Timestamp.from(now));
+                Timestamp.from(claimTime));
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    void recordPublished(UUID id, Instant publishedAt) {
+    void recordPublished(
+            UUID id,
+            int expectedAttemptCount,
+            Instant expectedLockedAt,
+            Instant publishedAt) {
         requireNonNull(id, "Event id");
+        requirePositiveAttempt(expectedAttemptCount);
+        requireNonNull(expectedLockedAt, "Expected lock time");
         requireNonNull(publishedAt, "Published time");
         int updated = jdbcTemplate.update(
                 """
                 UPDATE messaging.outbox_event
                 SET status = 'PUBLISHED', published_at = ?, locked_at = NULL, last_error = NULL
                 WHERE id = ? AND status = 'PUBLISHING'
+                  AND attempt_count = ? AND locked_at = ?
                 """,
                 Timestamp.from(publishedAt),
-                id);
+                id,
+                expectedAttemptCount,
+                Timestamp.from(expectedLockedAt));
         requireSingleUpdate(updated, id, "publish");
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    void recordFailure(UUID id, String error, Instant now) {
+    void recordFailure(
+            UUID id,
+            int expectedAttemptCount,
+            Instant expectedLockedAt,
+            String error,
+            Instant now) {
         requireNonNull(id, "Event id");
+        requirePositiveAttempt(expectedAttemptCount);
+        requireNonNull(expectedLockedAt, "Expected lock time");
         requireNonNull(now, "Failure time");
-        var rows = jdbcTemplate.query(
+        var attempts = jdbcTemplate.query(
                 """
-                SELECT status, attempt_count
+                SELECT attempt_count
                 FROM messaging.outbox_event
-                WHERE id = ?
+                WHERE id = ? AND status = 'PUBLISHING'
+                  AND attempt_count = ? AND locked_at = ?
                 FOR UPDATE
                 """,
-                (resultSet, rowNumber) -> new FailureState(
-                        resultSet.getString("status"), resultSet.getInt("attempt_count")),
-                id);
-        if (rows.size() != 1 || !"PUBLISHING".equals(rows.get(0).status())) {
-            throw new IllegalStateException("Outbox event is not being published: " + id);
+                (resultSet, rowNumber) -> resultSet.getInt("attempt_count"),
+                id,
+                expectedAttemptCount,
+                Timestamp.from(expectedLockedAt));
+        if (attempts.size() != 1) {
+            throw new IllegalStateException("Outbox event publishing lease does not match: " + id);
         }
 
-        int attemptCount = rows.get(0).attemptCount();
+        int attemptCount = attempts.get(0);
         String normalizedError = normalizeError(error);
         if (attemptCount >= MAX_ATTEMPTS) {
             jdbcTemplate.update(
@@ -176,11 +197,15 @@ class OutboxStore {
         }
     }
 
+    private static void requirePositiveAttempt(int attemptCount) {
+        if (attemptCount <= 0) {
+            throw new IllegalArgumentException("Expected attempt count must be positive");
+        }
+    }
+
     private static void requireSingleUpdate(int updated, UUID id, String transition) {
         if (updated != 1) {
             throw new IllegalStateException("Could not " + transition + " outbox event: " + id);
         }
     }
-
-    private record FailureState(String status, int attemptCount) {}
 }

@@ -56,6 +56,7 @@ class OutboxStoreTest {
             assertThat(event.schemaVersion()).isEqualTo(1);
             assertThat(event.payload().get("paymentType").asText()).isEqualTo("TOP_UP");
             assertThat(event.attemptCount()).isEqualTo(1);
+            assertThat(event.lockedAt()).isEqualTo(NOW);
             assertThat(event.occurredAt()).isEqualTo(OCCURRED_AT);
             assertThat(event.toEnvelope()).satisfies(envelope -> {
                 assertThat(envelope.eventId()).isEqualTo(FIRST_ID);
@@ -115,7 +116,7 @@ class OutboxStoreTest {
         insert(FIRST_ID, "PUBLISHING", 2, NOW.minusSeconds(5), NOW, null, "old error", NOW.minusSeconds(10));
         Instant publishedAt = NOW.plusSeconds(3);
 
-        store.recordPublished(FIRST_ID, publishedAt);
+        store.recordPublished(FIRST_ID, 2, NOW, publishedAt);
 
         assertThat(row(FIRST_ID))
                 .containsEntry("status", "PUBLISHED")
@@ -128,7 +129,7 @@ class OutboxStoreTest {
     void rejectsPublishingAnEventThatIsNotBeingPublished() {
         insert(FIRST_ID, "PENDING", 0, NOW, null, null, null, NOW);
 
-        assertThatThrownBy(() -> store.recordPublished(FIRST_ID, NOW))
+        assertThatThrownBy(() -> store.recordPublished(FIRST_ID, 1, NOW, NOW))
                 .isInstanceOf(IllegalStateException.class);
         assertThat(row(FIRST_ID)).containsEntry("status", "PENDING");
     }
@@ -137,7 +138,7 @@ class OutboxStoreTest {
     void firstFailureSchedulesOneSecondRetry() {
         insert(FIRST_ID, "PUBLISHING", 1, NOW.minusSeconds(5), NOW.minusSeconds(1), null, null, NOW.minusSeconds(10));
 
-        store.recordFailure(FIRST_ID, "broker unavailable", NOW);
+        store.recordFailure(FIRST_ID, 1, NOW.minusSeconds(1), "broker unavailable", NOW);
 
         assertThat(row(FIRST_ID))
                 .containsEntry("status", "PENDING")
@@ -152,8 +153,8 @@ class OutboxStoreTest {
         insert(FIRST_ID, "PUBLISHING", 4, NOW.minusSeconds(5), NOW.minusSeconds(1), null, null, NOW.minusSeconds(10));
         insert(SECOND_ID, "PUBLISHING", 7, NOW.minusSeconds(5), NOW.minusSeconds(1), null, null, NOW.minusSeconds(10));
 
-        store.recordFailure(FIRST_ID, "attempt four", NOW);
-        store.recordFailure(SECOND_ID, "attempt seven", NOW);
+        store.recordFailure(FIRST_ID, 4, NOW.minusSeconds(1), "attempt four", NOW);
+        store.recordFailure(SECOND_ID, 7, NOW.minusSeconds(1), "attempt seven", NOW);
 
         assertThat(row(FIRST_ID)).containsEntry("next_attempt_at", Timestamp.from(NOW.plusSeconds(8)));
         assertThat(row(SECOND_ID)).containsEntry("next_attempt_at", Timestamp.from(NOW.plusSeconds(60)));
@@ -163,7 +164,7 @@ class OutboxStoreTest {
     void tenthFailureBecomesFailedWithoutSchedulingAnotherRetry() {
         insert(FIRST_ID, "PUBLISHING", 10, NOW.minusSeconds(5), NOW.minusSeconds(1), null, null, NOW.minusSeconds(10));
 
-        store.recordFailure(FIRST_ID, "ten attempts", NOW);
+        store.recordFailure(FIRST_ID, 10, NOW.minusSeconds(1), "ten attempts", NOW);
 
         assertThat(row(FIRST_ID))
                 .containsEntry("status", "FAILED")
@@ -178,8 +179,8 @@ class OutboxStoreTest {
         insert(FIRST_ID, "PUBLISHING", 1, NOW.minusSeconds(5), NOW.minusSeconds(1), null, null, NOW.minusSeconds(10));
         insert(SECOND_ID, "PUBLISHING", 1, NOW.minusSeconds(5), NOW.minusSeconds(1), null, null, NOW.minusSeconds(10));
 
-        store.recordFailure(FIRST_ID, null, NOW);
-        store.recordFailure(SECOND_ID, "  ", NOW);
+        store.recordFailure(FIRST_ID, 1, NOW.minusSeconds(1), null, NOW);
+        store.recordFailure(SECOND_ID, 1, NOW.minusSeconds(1), "  ", NOW);
 
         assertThat((String) row(FIRST_ID).get("last_error")).isNotBlank();
         assertThat((String) row(SECOND_ID).get("last_error")).isNotBlank();
@@ -190,7 +191,7 @@ class OutboxStoreTest {
         insert(FIRST_ID, "PUBLISHING", 1, NOW.minusSeconds(5), NOW.minusSeconds(1), null, null, NOW.minusSeconds(10));
         String error = "\uD83D\uDE00".repeat(2_001);
 
-        store.recordFailure(FIRST_ID, error, NOW);
+        store.recordFailure(FIRST_ID, 1, NOW.minusSeconds(1), error, NOW);
 
         String saved = (String) row(FIRST_ID).get("last_error");
         assertThat(saved.codePointCount(0, saved.length())).isEqualTo(2_000);
@@ -201,9 +202,51 @@ class OutboxStoreTest {
     void rejectsFailingAnEventThatIsNotBeingPublished() {
         insert(FIRST_ID, "PENDING", 1, NOW, null, null, null, NOW);
 
-        assertThatThrownBy(() -> store.recordFailure(FIRST_ID, "error", NOW))
+        assertThatThrownBy(() -> store.recordFailure(FIRST_ID, 1, NOW, "error", NOW))
                 .isInstanceOf(IllegalStateException.class);
         assertThat(row(FIRST_ID)).containsEntry("status", "PENDING");
+    }
+
+    @Test
+    void rejectsDelayedCompletionFromARecoveredAndReclaimedLease() {
+        Instant firstClaimTime = NOW.plusNanos(123_456_789);
+        Instant expectedFirstLock = Instant.parse("2026-08-10T08:00:00.123456Z");
+        Instant secondClaimTime = firstClaimTime.plusNanos(2_000);
+        Instant expectedSecondLock = Instant.parse("2026-08-10T08:00:00.123458Z");
+        insert(FIRST_ID, "PENDING", 0, NOW.minusSeconds(1), null, null, null, NOW.minusSeconds(2));
+
+        ClaimedOutboxEvent firstClaim = store.claimDue(firstClaimTime, 1).get(0);
+        assertThat(firstClaim.attemptCount()).isEqualTo(1);
+        assertThat(firstClaim.lockedAt()).isEqualTo(expectedFirstLock);
+        assertThat(store.recoverStale(expectedFirstLock.plusNanos(1_000))).isEqualTo(1);
+
+        ClaimedOutboxEvent secondClaim = store.claimDue(secondClaimTime, 1).get(0);
+        assertThat(secondClaim.attemptCount()).isEqualTo(2);
+        assertThat(secondClaim.lockedAt()).isEqualTo(expectedSecondLock);
+
+        assertThatThrownBy(() -> store.recordPublished(
+                        firstClaim.id(),
+                        firstClaim.attemptCount(),
+                        firstClaim.lockedAt(),
+                        NOW.plusSeconds(1)))
+                .isInstanceOf(IllegalStateException.class);
+        assertSecondClaimRemainsActive(secondClaim);
+
+        assertThatThrownBy(() -> store.recordFailure(
+                        firstClaim.id(),
+                        firstClaim.attemptCount(),
+                        firstClaim.lockedAt(),
+                        "delayed failure",
+                        NOW.plusSeconds(1)))
+                .isInstanceOf(IllegalStateException.class);
+        assertSecondClaimRemainsActive(secondClaim);
+
+        store.recordPublished(
+                secondClaim.id(),
+                secondClaim.attemptCount(),
+                secondClaim.lockedAt(),
+                NOW.plusSeconds(2));
+        assertThat(row(FIRST_ID)).containsEntry("status", "PUBLISHED");
     }
 
     @Test
@@ -257,13 +300,36 @@ class OutboxStoreTest {
 
     @Test
     void rejectsNullRequiredArguments() {
-        assertThatThrownBy(() -> store.recordPublished(null, NOW)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> store.recordPublished(FIRST_ID, null)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> store.recordFailure(null, "error", NOW)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> store.recordFailure(FIRST_ID, "error", null)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> store.recordPublished(null, 1, NOW, NOW))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> store.recordPublished(FIRST_ID, 1, null, NOW))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> store.recordPublished(FIRST_ID, 1, NOW, null))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> store.recordFailure(null, 1, NOW, "error", NOW))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> store.recordFailure(FIRST_ID, 1, null, "error", NOW))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> store.recordFailure(FIRST_ID, 1, NOW, "error", null))
+                .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> store.recoverStale(null)).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> store.retryFailed(null, NOW)).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> store.retryFailed(FIRST_ID, null)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void rejectsNonPositiveExpectedAttemptCounts() {
+        assertThatThrownBy(() -> store.recordPublished(FIRST_ID, 0, NOW, NOW))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> store.recordFailure(FIRST_ID, -1, NOW, "error", NOW))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    private void assertSecondClaimRemainsActive(ClaimedOutboxEvent secondClaim) {
+        assertThat(row(secondClaim.id()))
+                .containsEntry("status", "PUBLISHING")
+                .containsEntry("attempt_count", secondClaim.attemptCount())
+                .containsEntry("locked_at", Timestamp.from(secondClaim.lockedAt()));
     }
 
     private void insert(
