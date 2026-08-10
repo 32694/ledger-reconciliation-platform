@@ -123,10 +123,10 @@ class ReconciliationBatchJobTest {
     }
 
     private static byte[] csv(Object... values) {
-        return ("transaction_id,amount_cents,occurred_at\\n"
-                + "%s,%s,%s\\n".formatted(values[0], values[1], values[2])
-                + "%s,%s,%s\\n".formatted(values[3], values[4], values[5])
-                + "%s,%s,%s\\n".formatted(values[6], values[7], values[8]))
+        return ("transaction_id,amount_cents,occurred_at\n"
+                + "%s,%s,%s\n".formatted(values[0], values[1], values[2])
+                + "%s,%s,%s\n".formatted(values[3], values[4], values[5])
+                + "%s,%s,%s\n".formatted(values[6], values[7], values[8]))
                 .getBytes(StandardCharsets.UTF_8);
     }
 
