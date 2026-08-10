@@ -62,29 +62,36 @@ class ReconciliationJobRecovery {
     @EventListener(ApplicationReadyEvent.class)
     void recover() {
         for (var run : store.findRecoverableRuns(recoveryCutoff)) {
+            if (run.status() == RunStatus.RUNNING && run.batchJobExecutionId() != null) {
+                recoverStaleRunning(run);
+                continue;
+            }
             switch (actionFor(run)) {
                 case SUBMIT -> jobLauncher.submit(run.id());
-                case RESTART -> restartAbandonedExecution(run.id(), run.batchJobExecutionId());
+                case RESTART -> recoverStaleRunning(run);
                 case FAIL -> store.failRun(run.id(), ABANDONED_MESSAGE);
             }
         }
     }
 
-    private void restartAbandonedExecution(java.util.UUID runId, long executionId) {
+    private void recoverStaleRunning(ReconciliationRunView run) {
+        long executionId = run.batchJobExecutionId();
         var execution = jobExplorer.getJobExecution(executionId);
         if (execution == null) {
-            store.failRun(runId, ABANDONED_MESSAGE);
+            store.failRun(run.id(), ABANDONED_MESSAGE);
             return;
         }
         execution.setStatus(BatchStatus.FAILED);
         execution.setEndTime(java.time.LocalDateTime.now());
         execution.setExitStatus(new org.springframework.batch.core.ExitStatus("FAILED", ABANDONED_MESSAGE));
         jobRepository.update(execution);
-        store.failRun(runId, ABANDONED_MESSAGE);
-        try {
-            jobOperator.restart(executionId);
-        } catch (Exception exception) {
-            // The failed run remains available for an explicit operator restart.
+        store.failRun(run.id(), ABANDONED_MESSAGE);
+        if (run.restartCount() == 0) {
+            try {
+                jobOperator.restart(executionId);
+            } catch (Exception exception) {
+                // The failed run remains available for an explicit operator restart.
+            }
         }
     }
 }

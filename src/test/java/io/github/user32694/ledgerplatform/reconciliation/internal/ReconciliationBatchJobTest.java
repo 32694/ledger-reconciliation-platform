@@ -24,11 +24,18 @@ import org.springframework.batch.core.JobExecution;
 import org.springframework.batch.core.JobParametersBuilder;
 import org.springframework.batch.core.StepExecution;
 import org.springframework.batch.core.launch.JobLauncher;
+import org.springframework.batch.core.explore.JobExplorer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.jdbc.Sql;
+import java.time.Duration;
 
 @SpringBootTest(properties = {
         "app.admin.username=admin",
@@ -45,8 +52,11 @@ class ReconciliationBatchJobTest {
     @Autowired PaymentsApi paymentsApi;
     @Autowired ReconciliationStore store;
     @Autowired JdbcTemplate jdbcTemplate;
-    @Autowired JobLauncher jobLauncher;
+    @Autowired @Qualifier("jobLauncher") JobLauncher jobLauncher;
     @Autowired @Qualifier("reconciliationJob") Job reconciliationJob;
+    @Autowired JobExplorer jobExplorer;
+    @Autowired ApplicationEventPublisher eventPublisher;
+    @Autowired ConfigurableApplicationContext applicationContext;
 
     @BeforeEach
     void cleanBefore() {
@@ -135,11 +145,111 @@ class ReconciliationBatchJobTest {
         assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);
         assertThat(step(execution, "matchStatementEntriesStep").getReadCount()).isEqualTo(501);
         assertThat(step(execution, "matchStatementEntriesStep").getWriteCount()).isEqualTo(501);
+        assertThat(step(execution, "matchStatementEntriesStep").getCommitCount()).isGreaterThanOrEqualTo(2);
+        assertThat(reconciliationApi.findRuns(batch.id()))
+                .singleElement()
+                .satisfies(completed -> {
+                    assertThat(completed.processedItems()).isEqualTo(501);
+                    assertThat(completed.processedItems()).isLessThanOrEqualTo(completed.totalItems());
+                });
         assertThat(reconciliationApi.findResults(batch.id(), ResultType.CHANNEL_ONLY, null))
                 .hasSize(501)
                 .allSatisfy(result -> assertThat(result.resultType()).isEqualTo(ResultType.CHANNEL_ONLY));
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM reconciliation.reconciliation_result_work", Integer.class)).isZero();
+    }
+
+    @Test
+    @Sql(statements = {
+        "ALTER TABLE reconciliation.reconciliation_result DROP CONSTRAINT IF EXISTS ck_test_restart_failure",
+        "ALTER TABLE reconciliation.reconciliation_result ADD CONSTRAINT ck_test_restart_failure CHECK (FALSE)"
+    }, executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+    @Sql(statements = {
+        "ALTER TABLE reconciliation.reconciliation_result DROP CONSTRAINT IF EXISTS ck_test_restart_failure"
+    }, executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD)
+    void manuallyRestartsTheSameRunAfterTheSingleAutomaticRecoveryFails() throws Exception {
+        var batch = reconciliationApi.importStatement(new StatementUpload(
+                "ALIPAY", "batch-restart.csv", channelOnlyCsv(501), "importer"));
+        var queued = store.queueRun(batch.id(), "batch-operator").run();
+
+        JobExecution firstExecution = jobLauncher.run(reconciliationJob, new JobParametersBuilder()
+                .addString("runId", queued.id().toString(), true)
+                .toJobParameters());
+        assertThat(firstExecution.getStatus()).isEqualTo(BatchStatus.FAILED);
+
+        jdbcTemplate.update("""
+                UPDATE reconciliation.reconciliation_run
+                SET status = 'RUNNING', requested_at = ?, completed_at = NULL
+                WHERE id = ?
+                """, java.sql.Timestamp.from(Instant.parse("2026-01-15T10:00:00Z")), queued.id());
+        jdbcTemplate.update("""
+                UPDATE reconciliation.reconciliation_batch
+                SET status = 'RUNNING', completed_at = NULL
+                WHERE id = ?
+                """, batch.id());
+
+        eventPublisher.publishEvent(new ApplicationReadyEvent(
+                new SpringApplication(), new String[0], applicationContext, Duration.ZERO));
+        var automaticallyFailed = awaitRun(batch.id(), run ->
+                run.status() == io.github.user32694.ledgerplatform.reconciliation.RunStatus.FAILED
+                        && run.restartCount() == 1);
+        assertThat(automaticallyFailed.id()).isEqualTo(queued.id());
+        assertThat(automaticallyFailed.attemptNumber()).isEqualTo(queued.attemptNumber());
+        assertThat(automaticallyFailed.batchJobInstanceId()).isEqualTo(firstExecution.getJobInstance().getInstanceId());
+        assertThat(jobExplorer.getJobExecution(automaticallyFailed.batchJobExecutionId()))
+                .satisfies(failedExecution -> {
+                    assertThat(failedExecution.getStatus()).isEqualTo(BatchStatus.FAILED);
+                    assertThat(failedExecution.getEndTime()).isNotNull();
+                });
+
+        jdbcTemplate.update("""
+                UPDATE reconciliation.reconciliation_run
+                SET status = 'RUNNING', requested_at = ?, completed_at = NULL
+                WHERE id = ?
+                """, java.sql.Timestamp.from(Instant.parse("2026-01-15T10:00:00Z")), queued.id());
+        jdbcTemplate.update("""
+                UPDATE reconciliation.reconciliation_batch
+                SET status = 'RUNNING', completed_at = NULL
+                WHERE id = ?
+                """, batch.id());
+        eventPublisher.publishEvent(new ApplicationReadyEvent(
+                new SpringApplication(), new String[0], applicationContext, Duration.ZERO));
+        var manuallyRequired = awaitRun(batch.id(), run ->
+                run.status() == io.github.user32694.ledgerplatform.reconciliation.RunStatus.FAILED
+                        && run.restartCount() == 1);
+        assertThat(jobExplorer.getJobExecution(manuallyRequired.batchJobExecutionId()))
+                .satisfies(failedExecution -> {
+                    assertThat(failedExecution.getStatus()).isEqualTo(BatchStatus.FAILED);
+                    assertThat(failedExecution.getEndTime()).isNotNull();
+                });
+
+        jdbcTemplate.execute(
+                "ALTER TABLE reconciliation.reconciliation_result DROP CONSTRAINT ck_test_restart_failure");
+        reconciliationApi.restartRun(queued.id(), "manual-operator");
+        var completed = awaitRun(batch.id(), run ->
+                run.status() == io.github.user32694.ledgerplatform.reconciliation.RunStatus.SUCCEEDED
+                        && run.restartCount() == 2);
+
+        assertThat(completed.id()).isEqualTo(queued.id());
+        assertThat(completed.attemptNumber()).isEqualTo(queued.attemptNumber());
+        assertThat(completed.batchJobInstanceId()).isEqualTo(firstExecution.getJobInstance().getInstanceId());
+        assertThat(completed.processedItems()).isLessThanOrEqualTo(completed.totalItems());
+    }
+
+    private io.github.user32694.ledgerplatform.reconciliation.ReconciliationRunView awaitRun(
+            UUID batchId,
+            java.util.function.Predicate<io.github.user32694.ledgerplatform.reconciliation.ReconciliationRunView>
+                    condition) throws InterruptedException {
+        long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        io.github.user32694.ledgerplatform.reconciliation.ReconciliationRunView latest = null;
+        while (System.nanoTime() < deadline) {
+            latest = reconciliationApi.findRuns(batchId).get(0);
+            if (condition.test(latest)) {
+                return latest;
+            }
+            Thread.sleep(20);
+        }
+        throw new AssertionError("Timed out waiting for reconciliation run; latest=" + latest);
     }
 
     private static StepExecution step(JobExecution execution, String name) {

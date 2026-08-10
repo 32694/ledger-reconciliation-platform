@@ -52,6 +52,22 @@ class ReconciliationRunRecoveryTest {
                 .isEqualTo(ReconciliationJobRecovery.RecoveryAction.FAIL);
     }
 
+    @Test
+    void keepsCommittedProgressMonotonicAndWithinTheDeclaredTotal() {
+        var run = runningRun(81L, 91L);
+        run.setTotalItems(1_000);
+
+        run.updateProgress("matchStatementEntriesStep", 500);
+        assertThat(run.toView().processedItems()).isEqualTo(500);
+
+        run.updateProgress("matchStatementEntriesStep", 400);
+        assertThat(run.toView().processedItems()).isEqualTo(500);
+
+        run.updateProgress("findInternalOnlyPaymentsStep", 1_200);
+        assertThat(run.toView().processedItems()).isEqualTo(1_000);
+        assertThat(run.toView().processedItems()).isLessThanOrEqualTo(run.toView().totalItems());
+    }
+
     private static ReconciliationRunEntity runningRun(Long instanceId, Long executionId) {
         var run = ReconciliationRunEntity.queued(
                 UUID.randomUUID(), 1, "operator", Instant.parse("2026-01-15T10:00:00Z"));
