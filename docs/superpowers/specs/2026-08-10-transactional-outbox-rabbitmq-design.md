@@ -73,6 +73,7 @@
   "eventId": "c3bbc59e-e517-4ff0-83ae-cf6a27710a91",
   "eventType": "PAYMENT_SUCCEEDED",
   "schemaVersion": 1,
+  "aggregateType": "PAYMENT",
   "aggregateId": "0cd7a0a1-6696-4ba8-a703-597d3455ec21",
   "occurredAt": "2026-08-10T10:00:00Z",
   "payload": {
