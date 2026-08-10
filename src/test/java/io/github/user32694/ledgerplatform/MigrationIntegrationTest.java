@@ -103,19 +103,10 @@ class MigrationIntegrationTest {
                         "notification.notification");
 
         var eventId = UUID.randomUUID();
-        jdbcTemplate.update("""
-                INSERT INTO notification.notification
-                    (id, event_id, notification_type, title, content, aggregate_type, aggregate_id, created_at)
-                VALUES (?, ?, 'PAYMENT', 'Payment created', 'Payment payment-1 was created',
-                        'payment', 'payment-1', CURRENT_TIMESTAMP)
-                """, UUID.randomUUID(), eventId);
+        insertNotification(eventId);
 
-        assertThatThrownBy(() -> jdbcTemplate.update("""
-                INSERT INTO notification.notification
-                    (id, event_id, notification_type, title, content, aggregate_type, aggregate_id, created_at)
-                VALUES (?, ?, 'PAYMENT', 'Payment created', 'Payment payment-1 was created',
-                        'payment', 'payment-1', CURRENT_TIMESTAMP)
-                """, UUID.randomUUID(), eventId)).isInstanceOf(DataIntegrityViolationException.class);
+        assertThatThrownBy(() -> insertNotification(eventId))
+                .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
@@ -1033,6 +1024,15 @@ class MigrationIntegrationTest {
                 "LEGACY-" + accountId.toString().replace("-", "").substring(0, 25),
                 ledgerAccountId);
         return accountId;
+    }
+
+    private void insertNotification(UUID eventId) {
+        jdbcTemplate.update("""
+                INSERT INTO notification.notification
+                    (id, event_id, notification_type, title, content, aggregate_type, aggregate_id, created_at)
+                VALUES (?, ?, 'PAYMENT', 'Payment created', 'Payment payment-1 was created',
+                        'payment', 'payment-1', CURRENT_TIMESTAMP)
+                """, UUID.randomUUID(), eventId);
     }
 
     private UUID insertLegacyPayment(
