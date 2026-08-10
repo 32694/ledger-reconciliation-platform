@@ -6,6 +6,7 @@ import io.github.user32694.ledgerplatform.notifications.NotificationView;
 import io.github.user32694.ledgerplatform.notifications.NotificationsApi;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -67,9 +68,11 @@ class NotificationService implements NotificationsApi {
         if (id == null) {
             throw new IllegalArgumentException("Notification id is required");
         }
-        repository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("Notification does not exist: " + id))
-                .markRead(Instant.now());
+        Instant readAt = Instant.now().truncatedTo(ChronoUnit.MICROS);
+        if (repository.markReadIfUnread(id, readAt) == 1 || repository.existsById(id)) {
+            return;
+        }
+        throw new IllegalArgumentException("Notification does not exist: " + id);
     }
 
     private static ValidatedEvent validate(EventEnvelope event) {
@@ -99,15 +102,15 @@ class NotificationService implements NotificationsApi {
                     aggregateType,
                     aggregateId,
                     requireText(event.payload(), "paymentType"),
-                    requireLong(event.payload(), "amountCents", false),
+                    requirePositiveLong(event.payload(), "amountCents"),
                     requireText(event.payload(), "channelReference"));
             case RECONCILIATION_COMPLETED -> new ValidatedReconciliation(
                     aggregateType,
                     aggregateId,
                     requireText(event.payload(), "batchId"),
                     requireText(event.payload(), "runId"),
-                    requireLong(event.payload(), "matchedRows", true),
-                    requireLong(event.payload(), "differenceRows", true));
+                    requireNonNegativeLong(event.payload(), "matchedRows"),
+                    requireNonNegativeLong(event.payload(), "differenceRows"));
         };
     }
 
@@ -141,16 +144,28 @@ class NotificationService implements NotificationsApi {
         return requireText(value.textValue(), field, Integer.MAX_VALUE);
     }
 
-    private static long requireLong(JsonNode payload, String field, boolean nonNegative) {
+    private static long requirePositiveLong(JsonNode payload, String field) {
+        long result = requireLong(payload, field);
+        if (result <= 0) {
+            throw new IllegalArgumentException(field + " must be positive");
+        }
+        return result;
+    }
+
+    private static long requireNonNegativeLong(JsonNode payload, String field) {
+        long result = requireLong(payload, field);
+        if (result < 0) {
+            throw new IllegalArgumentException(field + " must not be negative");
+        }
+        return result;
+    }
+
+    private static long requireLong(JsonNode payload, String field) {
         JsonNode value = payload.get(field);
         if (value == null || !value.isIntegralNumber() || !value.canConvertToLong()) {
             throw new IllegalArgumentException(field + " must be an integral long");
         }
-        long result = value.longValue();
-        if (nonNegative && result < 0) {
-            throw new IllegalArgumentException(field + " must not be negative");
-        }
-        return result;
+        return value.longValue();
     }
 
     private static String requireText(String value, String field, int maximumCodePoints) {

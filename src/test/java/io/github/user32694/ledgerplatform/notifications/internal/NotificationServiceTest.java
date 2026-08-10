@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.user32694.ledgerplatform.messaging.EventEnvelope;
 import io.github.user32694.ledgerplatform.messaging.EventType;
+import io.github.user32694.ledgerplatform.messaging.RabbitTopology;
 import io.github.user32694.ledgerplatform.notifications.NotificationView;
 import io.github.user32694.ledgerplatform.notifications.NotificationsApi;
 import java.sql.Timestamp;
@@ -19,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -26,6 +28,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.context.jdbc.Sql;
+import org.springframework.transaction.annotation.Transactional;
 
 @SpringBootTest
 @ActiveProfiles("test")
@@ -69,6 +72,11 @@ class NotificationServiceTest {
         });
         assertThat(count("notification.consumed_message")).isEqualTo(1);
         assertThat(count("notification.notification")).isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject(
+                        "SELECT queue_name FROM notification.consumed_message WHERE event_id = ?",
+                        String.class,
+                        envelope.eventId()))
+                .isEqualTo(RabbitTopology.NOTIFICATION_QUEUE);
     }
 
     @Test
@@ -86,7 +94,7 @@ class NotificationServiceTest {
                           "batchId": "%s",
                           "runId": "%s",
                           "matchedRows": 12,
-                          "differenceRows": 3,
+                          "differenceRows": 0,
                           "ignored": true
                         }
                         """.formatted(batchId, UUID.randomUUID())));
@@ -96,7 +104,7 @@ class NotificationServiceTest {
         assertThat(notificationsApi.findRecent(100)).singleElement().satisfies(notification -> {
             assertThat(notification.notificationType()).isEqualTo("RECONCILIATION_COMPLETED");
             assertThat(notification.title()).isEqualTo("对账完成");
-            assertThat(notification.content()).contains("匹配 12 条").contains("差异 3 条");
+            assertThat(notification.content()).contains("匹配 12 条").contains("差异 0 条");
         });
     }
 
@@ -122,6 +130,18 @@ class NotificationServiceTest {
     @MethodSource("invalidEnvelopes")
     void rejectsMissingOrWrongTypedFieldsWithoutClaiming(
             String description, EventEnvelope envelope) {
+        assertThatThrownBy(() -> service.consume(envelope))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        assertTablesEmpty();
+    }
+
+    @ParameterizedTest
+    @ValueSource(longs = {0, -1})
+    void rejectsNonPositivePaymentAmountsWithoutClaiming(long amountCents) throws Exception {
+        var envelope = paymentEnvelope(
+                UUID.randomUUID(), "TOP_UP", amountCents, "TOPUP-INVALID-AMOUNT");
+
         assertThatThrownBy(() -> service.consume(envelope))
                 .isInstanceOf(IllegalArgumentException.class);
 
@@ -174,6 +194,25 @@ class NotificationServiceTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> notificationsApi.markRead(UUID.randomUUID()))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @Transactional
+    void repositoryConditionallyWritesOnlyTheFirstReadTime() {
+        UUID notificationId = UUID.randomUUID();
+        insertNotification(notificationId, Instant.parse("2026-08-10T02:00:00Z"));
+        Instant firstReadAt = Instant.parse("2026-08-10T03:00:00.123456Z");
+        Instant secondReadAt = Instant.parse("2026-08-10T04:00:00.654321Z");
+
+        assertThat(repository.markReadIfUnread(notificationId, firstReadAt)).isEqualTo(1);
+        assertThat(repository.markReadIfUnread(notificationId, secondReadAt)).isZero();
+
+        assertThat(jdbcTemplate.queryForObject(
+                                "SELECT read_at FROM notification.notification WHERE id = ?",
+                                Timestamp.class,
+                                notificationId)
+                        .toInstant())
+                .isEqualTo(firstReadAt);
     }
 
     private static Stream<Arguments> invalidEnvelopes() throws Exception {

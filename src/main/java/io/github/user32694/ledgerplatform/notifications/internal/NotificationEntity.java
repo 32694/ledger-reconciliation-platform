@@ -60,12 +60,6 @@ class NotificationEntity {
         this.createdAt = normalize(createdAt);
     }
 
-    void markRead(Instant readAt) {
-        if (this.readAt == null) {
-            this.readAt = normalize(readAt);
-        }
-    }
-
     NotificationView toView() {
         return new NotificationView(
                 id,

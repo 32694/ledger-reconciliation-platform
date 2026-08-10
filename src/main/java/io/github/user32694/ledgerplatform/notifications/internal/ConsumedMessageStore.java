@@ -1,6 +1,7 @@
 package io.github.user32694.ledgerplatform.notifications.internal;
 
 import io.github.user32694.ledgerplatform.messaging.EventEnvelope;
+import io.github.user32694.ledgerplatform.messaging.RabbitTopology;
 import java.sql.Timestamp;
 import java.time.Instant;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -18,8 +19,12 @@ class ConsumedMessageStore {
         return jdbcTemplate.update("""
                 INSERT INTO notification.consumed_message
                     (event_id, queue_name, event_type, consumed_at)
-                VALUES (?, 'notification.events.v1', ?, ?)
+                VALUES (?, ?, ?, ?)
                 ON CONFLICT (event_id) DO NOTHING
-                """, event.eventId(), event.eventType().name(), Timestamp.from(consumedAt)) == 1;
+                """,
+                event.eventId(),
+                RabbitTopology.NOTIFICATION_QUEUE,
+                event.eventType().name(),
+                Timestamp.from(consumedAt)) == 1;
     }
 }
