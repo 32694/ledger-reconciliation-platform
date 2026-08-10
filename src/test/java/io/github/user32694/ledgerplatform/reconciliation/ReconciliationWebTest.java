@@ -731,7 +731,7 @@ class ReconciliationWebTest {
 
         mockMvc.perform(get("/admin/reconciliation/{batchId}", batch.id()))
                 .andExpect(status().isOk())
-                .andExpect(content().string(containsString("对账任务失败，可重新发起")));
+                .andExpect(content().string(containsString("对账任务失败，请选择恢复方式")));
 
         mockMvc.perform(post("/admin/reconciliation/{batchId}/run", batch.id()).with(csrf()))
                 .andExpect(status().is3xxRedirection())
@@ -1180,9 +1180,11 @@ class ReconciliationWebTest {
         int formEnd = page.indexOf("</form>", actionIndex);
         assertThat(formStart).isGreaterThanOrEqualTo(0);
         assertThat(formEnd).isGreaterThan(actionIndex);
-        assertThat(page.substring(formStart, formEnd))
+        String form = page.substring(formStart, formEnd);
+        assertThat(form)
                 .contains("name=\"_csrf\"")
                 .contains(buttonLabel);
+        assertThat(form.split("name=\"_csrf\"", -1)).hasSize(2);
     }
 
     private void insertRun(
