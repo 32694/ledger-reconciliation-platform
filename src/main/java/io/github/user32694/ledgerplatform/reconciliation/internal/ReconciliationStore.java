@@ -335,6 +335,13 @@ class ReconciliationStore {
     }
 
     @Transactional(readOnly = true)
+    ReconciliationBatchView getBatchForRun(UUID runId) {
+        var run = runRepository.findById(runId)
+                .orElseThrow(() -> new IllegalArgumentException("Run does not exist: " + runId));
+        return getBatch(run.batchId());
+    }
+
+    @Transactional(readOnly = true)
     List<ReconciliationMatcher.StatementEntrySnapshot> findStatementEntries(UUID batchId) {
         return entryRepository.findAllByBatchIdOrderByLineNumber(batchId).stream()
                 .map(entry -> new ReconciliationMatcher.StatementEntrySnapshot(
