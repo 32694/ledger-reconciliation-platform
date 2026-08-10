@@ -28,7 +28,7 @@
 
 近期资金操作表中的每条记录都可以打开交易详情。成功的充值可以提交**全额退款**，成功的转账可以提交**全额冲正**；操作要求填写原因和唯一幂等键。反向操作成功后，原交易保持不变，详情页互相显示原交易和反向交易链接，账本中保留两份不可变 journal。失败反向操作会保留底层失败码（例如 `INSUFFICIENT_FUNDS`），补足源钱包后必须使用新幂等键重试。
 
-异步对账使用 Spring Batch，以 500 行为一个提交检查点。导入时选择已启用渠道，并锁定该渠道规则或默认规则的已发布、不可变版本。批次详情通过 HTMX 展示运行进度；可从失败前的检查点继续同一次运行，也可新建尝试重新处理。单个数据库只能由一个应用实例执行对账；需要多副本时，必须由部署环境提供外部 leader 或 lease，应用本身不进行跨实例抢占。
+异步对账使用 Spring Batch，以 500 行为一个提交检查点。导入时选择已启用渠道，并锁定该渠道规则或默认规则的已发布、不可变版本。批次详情通过 HTMX 展示运行进度；可从失败前的检查点继续同一次运行，也可新建尝试重新处理。单个数据库只能由一个应用实例执行对账；多副本必须由部署环境的外部 leader election、lease 和 heartbeat 保证唯一调度者并检测失联，应用自身不实现这些协调机制。
 
 对账差异在**异常工作台**中按待处理、处理中和已解决流转，认领、取消认领和解决操作形成不可变时间线，并同步写入审计日志。解决差异只记录运营结论，不会自动修改账本、支付或渠道账单事实。完整格式和操作步骤见[用户手册](docs/USER_GUIDE.md)。管理员业务动作会通过应用接口只追加地写入审计事件，应用不提供修改或删除入口；可在审计日志页按 action 和 outcome 筛选。
 
@@ -67,6 +67,9 @@ docker compose up -d
 准备好 `ledger_platform_test` 后运行：
 
 ```sh
+SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/ledger_platform_test \
+SPRING_DATASOURCE_USERNAME="$DB_USERNAME" \
+SPRING_DATASOURCE_PASSWORD="$DB_PASSWORD" \
 ./mvnw clean verify
 ```
 
@@ -83,6 +86,9 @@ scripts/generate-reconciliation-demo.sh ./reconciliation-demo.csv 100000
 性能验证是 opt-in，不包含在默认测试中：
 
 ```sh
+SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/ledger_platform_test \
+SPRING_DATASOURCE_USERNAME="$DB_USERNAME" \
+SPRING_DATASOURCE_PASSWORD="$DB_PASSWORD" \
 ./mvnw -Preconciliation-performance -Dit.test=ReconciliationPerformanceIT verify
 ```
 

@@ -101,7 +101,7 @@ PGPASSWORD="$DB_PASSWORD" pg_restore \
 
 不要在应用运行时手动执行迁移脚本，也不要让旧版本应用和新版本应用同时写同一个数据库。
 
-异步对账使用 Spring Batch，元数据表由 Flyway 在 `batch` schema 管理。已提交的 500 行检查点可用于同一运行的恢复；管理员也可以明确选择新建尝试。每个数据库只能运行一个应用实例。多副本部署必须由外部 leader 或 lease 选出唯一调度者，不能假设应用会在实例之间自动接管运行。
+异步对账使用 Spring Batch，元数据表由 Flyway 在 `batch` schema 管理。已提交的 500 行检查点可用于同一运行的恢复；管理员也可以明确选择新建尝试。每个数据库只能运行一个应用实例。多副本部署必须由外部 leader election、lease 和 heartbeat 选出唯一调度者并检测失联；应用自身不实现这些协调机制，不能假设应用会在实例之间自动接管运行。
 
 ## 5. 升级校验
 
@@ -112,6 +112,9 @@ java -version
 psql --version
 git remote -v
 git status --short
+SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/ledger_platform_test \
+SPRING_DATASOURCE_USERNAME="$DB_USERNAME" \
+SPRING_DATASOURCE_PASSWORD="$DB_PASSWORD" \
 ./mvnw clean verify
 ```
 

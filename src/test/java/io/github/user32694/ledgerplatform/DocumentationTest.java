@@ -178,4 +178,29 @@ class DocumentationTest {
                 .contains("V1-V8")
                 .contains("不可直接修改已执行");
     }
+
+    @org.junit.jupiter.api.Test
+    void documentsPortableReconciliationRulesAndPerformanceVerification() throws IOException {
+        String readme = Files.readString(Path.of("README.md"));
+        String guide = Files.readString(Path.of("docs/USER_GUIDE.md"));
+        String migrationGuide = Files.readString(Path.of("docs/MIGRATION.md"));
+
+        for (String document : java.util.List.of(readme, guide, migrationGuide)) {
+            assertThat(document)
+                    .contains("SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/ledger_platform_test")
+                    .contains("SPRING_DATASOURCE_USERNAME=\"$DB_USERNAME\"")
+                    .contains("SPRING_DATASOURCE_PASSWORD=\"$DB_PASSWORD\"")
+                    .contains("leader election")
+                    .contains("lease")
+                    .contains("heartbeat")
+                    .contains("应用自身不实现");
+        }
+        assertThat(readme).contains("-Preconciliation-performance");
+        assertThat(guide)
+                .contains("/admin/reconciliation/rules")
+                .contains("保存草稿")
+                .contains("发布")
+                .contains("只使用已发布版本")
+                .contains("-Preconciliation-performance");
+    }
 }

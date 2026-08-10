@@ -48,6 +48,9 @@ SPRING_DATASOURCE_PASSWORD="$DB_PASSWORD" \
 完整验收（编译、测试、打包）：
 
 ```sh
+SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/ledger_platform_test \
+SPRING_DATASOURCE_USERNAME="$DB_USERNAME" \
+SPRING_DATASOURCE_PASSWORD="$DB_PASSWORD" \
 ./mvnw clean verify
 ```
 
@@ -105,7 +108,13 @@ Flyway 会在应用启动时自动执行待执行迁移。启动后打开 <http:
 
 ## 6. 异步对账和异常处理
 
-### 6.1 导入并运行对账
+### 6.1 管理对账规则
+
+1. 进入**对账规则**（`/admin/reconciliation/rules`），选择**默认规则**或某个**渠道规则**。
+2. 填写金额容差（cents）和查询窗口（小时），点击**保存草稿**。
+3. 核对草稿后点击**发布**。导入只使用已发布版本；保存草稿不会改变任何已导入批次。
+
+### 6.2 导入并运行对账
 
 在左侧导航进入**自动对账**（`/admin/reconciliation`），点击**导入渠道账单**，选择一个 `SYNTHETIC_CHANNEL` 的 UTF-8 CSV，再点击**导入账单**。固定表头为：
 
@@ -124,7 +133,7 @@ channel_transaction_id,amount_cents,occurred_at
 
 `QUEUED` 或 `RUNNING` 时，批次详情使用 HTMX 每 `2` 秒刷新一次状态；进入终态后停止刷新。失败后有两种明确选择：**从检查点继续**会重启同一次运行并保留已提交的工作结果；**新建尝试**会创建下一次 attempt，重新处理该批次。运行历史按“第 N 次”倒序保留，失败历史不会被覆盖。
 
-Batch 元数据位于 Flyway 管理的 `batch` schema。应用启动时会恢复仍可重启的同一运行；已完成检查点不会重复写入。每个数据库同时只能运行一个应用实例；部署多副本时必须由外部 leader 或 lease 保证只有一个实例调度该数据库的对账任务。
+Batch 元数据位于 Flyway 管理的 `batch` schema。应用启动时会恢复仍可重启的同一运行；已完成检查点不会重复写入。每个数据库同时只能运行一个应用实例；多副本必须由外部 leader election、lease 和 heartbeat 保证唯一调度者并检测失联，应用自身不实现这些协调机制。
 
 系统只把成功充值作为渠道候选，结果类型如下：
 
@@ -173,6 +182,9 @@ scripts/generate-reconciliation-demo.sh ./reconciliation-demo.csv 100000
 导入该文件后，在批次详情观察总数、当前步骤和已处理进度。需要运行完整的 opt-in 性能验证时，先按本手册导出数据库环境变量，再执行：
 
 ```sh
+SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/ledger_platform_test \
+SPRING_DATASOURCE_USERNAME="$DB_USERNAME" \
+SPRING_DATASOURCE_PASSWORD="$DB_PASSWORD" \
 ./mvnw -Preconciliation-performance -Dit.test=ReconciliationPerformanceIT verify
 ```
 
