@@ -92,9 +92,17 @@ class ReconciliationStore {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     ReconciliationRunView markRunRunning(UUID runId) {
         var run = findRunForUpdate(runId);
-        run.start(Instant.now());
         var batch = findEntity(run.batchId());
-        batch.start(Instant.now());
+        if (run.status() == RunStatus.RUNNING) {
+            if (batch.status() != BatchStatus.RUNNING) {
+                throw new IllegalStateException(
+                        "Running run requires a RUNNING batch, but was " + batch.status());
+            }
+            return run.toView();
+        }
+        var startedAt = Instant.now();
+        run.start(startedAt);
+        batch.start(startedAt);
         return run.toView();
     }
 

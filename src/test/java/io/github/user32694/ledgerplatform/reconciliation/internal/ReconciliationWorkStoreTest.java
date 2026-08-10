@@ -1,12 +1,15 @@
 package io.github.user32694.ledgerplatform.reconciliation.internal;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.user32694.ledgerplatform.audit.AuditAction;
 import io.github.user32694.ledgerplatform.audit.AuditApi;
 import io.github.user32694.ledgerplatform.audit.AuditOutcome;
 import io.github.user32694.ledgerplatform.reconciliation.ResolutionStatus;
 import io.github.user32694.ledgerplatform.reconciliation.ResultType;
+import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -42,6 +45,49 @@ class ReconciliationWorkStoreTest {
     @Autowired ReconciliationStore store;
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired AuditApi auditApi;
+
+    @Test
+    void keepsAnAlreadyRunningRunAndBatchStartTimeUnchanged() {
+        var startedAt = Instant.parse("2026-08-10T01:02:03Z");
+        insertBatch("RUNNING", 2);
+        insertRun(SECOND_RUN_ID, 2, "RUNNING");
+        jdbcTemplate.update(
+                "UPDATE reconciliation.reconciliation_batch SET started_at = ? WHERE id = ?",
+                Timestamp.from(startedAt), BATCH_ID);
+        jdbcTemplate.update(
+                "UPDATE reconciliation.reconciliation_run SET started_at = ? WHERE id = ?",
+                Timestamp.from(startedAt), SECOND_RUN_ID);
+
+        var first = store.markRunRunning(SECOND_RUN_ID);
+        var repeated = store.markRunRunning(SECOND_RUN_ID);
+
+        assertThat(first.status()).isEqualTo(io.github.user32694.ledgerplatform.reconciliation.RunStatus.RUNNING);
+        assertThat(repeated.startedAt()).isEqualTo(startedAt);
+        assertThat(jdbcTemplate.queryForObject(
+                        "SELECT started_at FROM reconciliation.reconciliation_batch WHERE id = ?",
+                        Timestamp.class, BATCH_ID).toInstant())
+                .isEqualTo(startedAt);
+    }
+
+    @Test
+    void rejectsAnAlreadyRunningRunWhenItsBatchIsNotRunning() {
+        insertBatch("IMPORTED", 2);
+        insertRun(SECOND_RUN_ID, 2, "RUNNING");
+
+        assertThatThrownBy(() -> store.markRunRunning(SECOND_RUN_ID))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Running run requires a RUNNING batch, but was IMPORTED");
+    }
+
+    @Test
+    void stillRejectsStartingRunsInOtherStates() {
+        insertBatch("RUNNING", 2);
+        insertRun(FIRST_RUN_ID, 1, "FAILED");
+
+        assertThatThrownBy(() -> store.markRunRunning(FIRST_RUN_ID))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Run cannot start from FAILED");
+    }
 
     @Test
     void writesWorkIdempotentlyPerRunWithoutPublishingCanonicalResults() {

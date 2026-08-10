@@ -12,6 +12,7 @@ import io.github.user32694.ledgerplatform.reconciliation.ResolutionStatus;
 import io.github.user32694.ledgerplatform.reconciliation.ResultType;
 import io.github.user32694.ledgerplatform.reconciliation.StatementUpload;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
@@ -118,6 +119,29 @@ class ReconciliationBatchJobTest {
         assertThat(internalOnly.id()).isNotNull();
     }
 
+    @Test
+    void processesTheFirstStatementBeyondTheFiveHundredRowPageBoundary() throws Exception {
+        var batch = reconciliationApi.importStatement(new StatementUpload(
+                "ALIPAY", "batch-job-501.csv", channelOnlyCsv(501), "importer"));
+        assertThat(batch.status())
+                .withFailMessage("对账单导入失败: %s", batch.errorMessage())
+                .isEqualTo(io.github.user32694.ledgerplatform.reconciliation.BatchStatus.IMPORTED);
+        var run = store.queueRun(batch.id(), "batch-operator").run();
+
+        JobExecution execution = jobLauncher.run(reconciliationJob, new JobParametersBuilder()
+                .addString("runId", run.id().toString(), true)
+                .toJobParameters());
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);
+        assertThat(step(execution, "matchStatementEntriesStep").getReadCount()).isEqualTo(501);
+        assertThat(step(execution, "matchStatementEntriesStep").getWriteCount()).isEqualTo(501);
+        assertThat(reconciliationApi.findResults(batch.id(), ResultType.CHANNEL_ONLY, null))
+                .hasSize(501)
+                .allSatisfy(result -> assertThat(result.resultType()).isEqualTo(ResultType.CHANNEL_ONLY));
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM reconciliation.reconciliation_result_work", Integer.class)).isZero();
+    }
+
     private static StepExecution step(JobExecution execution, String name) {
         return execution.getStepExecutions().stream()
                 .filter(step -> step.getStepName().equals(name))
@@ -131,6 +155,19 @@ class ReconciliationBatchJobTest {
                 + "%s,%s,%s\n".formatted(values[3], values[4], values[5])
                 + "%s,%s,%s\n".formatted(values[6], values[7], values[8]))
                 .getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static byte[] channelOnlyCsv(int rowCount) {
+        var csv = new StringBuilder("channel_transaction_id,amount_cents,occurred_at\n");
+        var occurredAt = Instant.parse("2026-08-10T00:00:00Z");
+        for (int index = 1; index <= rowCount; index++) {
+            csv.append("batch-channel-only-")
+                    .append(index)
+                    .append(",100,")
+                    .append(occurredAt.plus(index, ChronoUnit.SECONDS))
+                    .append('\n');
+        }
+        return csv.toString().getBytes(StandardCharsets.UTF_8);
     }
 
     private void cleanDatabase() {

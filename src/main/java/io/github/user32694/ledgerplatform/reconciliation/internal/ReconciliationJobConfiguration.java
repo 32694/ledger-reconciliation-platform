@@ -118,7 +118,7 @@ class ReconciliationJobConfiguration {
 
     @Bean
     @StepScope
-    ItemProcessor<ReconciliationWorkItem, ReconciliationWorkResult> reconciliationWorkItemProcessor(
+    ReconciliationWorkItemProcessor reconciliationWorkItemProcessor(
             @Value("#{jobParameters['runId']}") String runId,
             ReconciliationStore store,
             ReconciliationRuleMatcher matcher) {
@@ -128,7 +128,7 @@ class ReconciliationJobConfiguration {
 
     @Bean
     @StepScope
-    ItemWriter<ReconciliationWorkResult> reconciliationWorkItemWriter(
+    ReconciliationWorkItemWriter reconciliationWorkItemWriter(
             @Value("#{jobParameters['runId']}") String runId,
             ReconciliationStore store) {
         UUID id = runId(runId);
