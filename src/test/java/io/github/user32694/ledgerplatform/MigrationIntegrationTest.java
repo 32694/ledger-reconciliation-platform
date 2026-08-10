@@ -116,7 +116,11 @@ class MigrationIntegrationTest {
                 VALUES (?, ?, 'PAYMENT', 'Payment created', 'Payment payment-1 was created',
                         'payment', 'payment-1', CURRENT_TIMESTAMP)
                 """, UUID.randomUUID(), eventId)).isInstanceOf(DataIntegrityViolationException.class);
+    }
 
+    @Test
+    @Transactional
+    void rejectsInvalidOutboxEventStatus() {
         assertThatThrownBy(() -> jdbcTemplate.update("""
                 INSERT INTO messaging.outbox_event
                     (id, aggregate_type, aggregate_id, event_type, schema_version, payload, status,
