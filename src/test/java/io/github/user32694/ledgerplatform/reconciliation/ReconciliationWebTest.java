@@ -544,6 +544,58 @@ class ReconciliationWebTest {
     }
 
     @Test
+    @WithMockUser(roles = "ADMIN")
+    void detailShowsLockedRuleProgressAndDistinctFailedRunRecoveryActions() throws Exception {
+        var draft = reconciliationRulesApi.saveDraft(
+                ALIPAY_RULE_ID, new ReconciliationRuleDraftCommand(125, 24, "fixture-editor"));
+        reconciliationRulesApi.publish(ALIPAY_RULE_ID, draft.id(), 125, 24, "fixture-publisher");
+        var batch = importBatch("progress.csv", "CH-PROGRESS");
+        markBatchFailed(batch.id(), "timeout");
+        UUID runId = insertRunWithProgress(
+                batch.id(), 1, "FAILED", "failure-admin", "matchStatementEntriesStep",
+                7, 12, 17L, 19L, 1, "timeout");
+
+        String page = mockMvc.perform(get("/admin/reconciliation/{batchId}", batch.id()))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("支付宝")))
+                .andExpect(content().string(containsString("规则版本 1")))
+                .andExpect(content().string(containsString("1.25 元")))
+                .andExpect(content().string(containsString("24 小时")))
+                .andExpect(content().string(containsString("匹配渠道账单")))
+                .andExpect(content().string(containsString("已处理 / 总数")))
+                .andExpect(content().string(containsString("7 / 12")))
+                .andExpect(content().string(containsString("58%")))
+                .andExpect(content().string(containsString("批处理实例 ID")))
+                .andExpect(content().string(containsString("17")))
+                .andExpect(content().string(containsString("批处理执行 ID")))
+                .andExpect(content().string(containsString("19")))
+                .andExpect(content().string(containsString("执行失败")))
+                .andExpect(content().string(containsString("重启次数")))
+                .andExpect(content().string(containsString("1")))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        assertRecoveryForm(page, "/admin/reconciliation/runs/" + runId + "/restart", "从断点继续");
+        assertRecoveryForm(page, "/admin/reconciliation/" + batch.id() + "/run", "重新发起对账");
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void failedRunRecoveryPostsRequireCsrf() throws Exception {
+        var batch = importBatch("recovery-csrf.csv", "CH-RECOVERY-CSRF");
+        markBatchFailed(batch.id(), "timeout");
+        UUID runId = insertRunWithProgress(
+                batch.id(), 1, "FAILED", "failure-admin", "finalizeReconciliationStep",
+                0, 0, null, null, 0, "timeout");
+
+        mockMvc.perform(post("/admin/reconciliation/runs/{runId}/restart", runId))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/admin/reconciliation/{batchId}/run", batch.id()))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
     @WithMockUser(username = "run-admin", roles = "ADMIN")
     void startsBatchForAuthenticatedOperatorWithoutWaitingForExecution() throws Exception {
         var batch = reconciliationApi.importStatement(new StatementUpload(
@@ -594,6 +646,15 @@ class ReconciliationWebTest {
                 .andExpect(content().string(containsString("hx-trigger=\"every 2s\"")))
                 .andExpect(content().string(containsString("hx-target=\"this\"")))
                 .andExpect(content().string(containsString("hx-swap=\"outerHTML\"")));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void runStatusFragmentUsesChineseStepLabelsAndBoundedIntegerProgress() throws Exception {
+        assertRunStatusFragment("prepare", "prepareReconciliationStep", 0, 0, "准备任务", "0%");
+        assertRunStatusFragment("statement", "matchStatementEntriesStep", 7, 12, "匹配渠道账单", "58%");
+        assertRunStatusFragment("internal", "findInternalOnlyPaymentsStep", 13, 12, "扫描内部单边", "100%");
+        assertRunStatusFragment("finalize", "finalizeReconciliationStep", 1, 1, "汇总结果", "100%");
     }
 
     @Test
@@ -1112,6 +1173,18 @@ class ReconciliationWebTest {
             String amountToleranceCents,
             String queryWindowHours) {}
 
+    private static void assertRecoveryForm(String page, String action, String buttonLabel) {
+        int actionIndex = page.indexOf("action=\"" + action + "\"");
+        assertThat(actionIndex).isGreaterThanOrEqualTo(0);
+        int formStart = page.lastIndexOf("<form", actionIndex);
+        int formEnd = page.indexOf("</form>", actionIndex);
+        assertThat(formStart).isGreaterThanOrEqualTo(0);
+        assertThat(formEnd).isGreaterThan(actionIndex);
+        assertThat(page.substring(formStart, formEnd))
+                .contains("name=\"_csrf\"")
+                .contains(buttonLabel);
+    }
+
     private void insertRun(
             UUID batchId,
             int attempt,
@@ -1134,6 +1207,53 @@ class ReconciliationWebTest {
                 startedAt == null ? null : Timestamp.from(startedAt),
                 completedAt == null ? null : Timestamp.from(completedAt),
                 matchedRows, differenceRows, errorMessage);
+    }
+
+    private UUID insertRunWithProgress(
+            UUID batchId,
+            int attempt,
+            String runStatus,
+            String requestedBy,
+            String currentStep,
+            int processedItems,
+            int totalItems,
+            Long batchJobInstanceId,
+            Long batchJobExecutionId,
+            int restartCount,
+            String errorMessage) {
+        UUID runId = UUID.randomUUID();
+        Instant requestedAt = Instant.parse("2026-01-15T10:00:00Z").plusSeconds(attempt * 60L);
+        Instant startedAt = runStatus.equals("QUEUED") ? null : requestedAt.plusSeconds(1);
+        Instant completedAt = runStatus.equals("QUEUED") || runStatus.equals("RUNNING")
+                ? null : requestedAt.plusSeconds(3);
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_run
+                    (id, batch_id, attempt_number, status, requested_by, requested_at,
+                     started_at, completed_at, matched_rows, difference_rows, error_message,
+                     batch_job_instance_id, batch_job_execution_id, current_step, processed_items,
+                     total_items, restart_count, version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, 0)
+                """,
+                runId, batchId, attempt, runStatus, requestedBy, Timestamp.from(requestedAt),
+                startedAt == null ? null : Timestamp.from(startedAt),
+                completedAt == null ? null : Timestamp.from(completedAt), errorMessage,
+                batchJobInstanceId, batchJobExecutionId, currentStep, processedItems, totalItems,
+                restartCount);
+        return runId;
+    }
+
+    private void assertRunStatusFragment(
+            String suffix, String currentStep, int processedItems, int totalItems,
+            String expectedStepLabel, String expectedProgress) throws Exception {
+        var batch = importBatch("step-" + suffix + ".csv", "CH-STEP-" + suffix.toUpperCase());
+        insertRunWithProgress(
+                batch.id(), 1, "RUNNING", "progress-admin", currentStep,
+                processedItems, totalItems, null, null, 0, null);
+
+        mockMvc.perform(get("/admin/reconciliation/{batchId}/run-status", batch.id()))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString(expectedStepLabel)))
+                .andExpect(content().string(containsString(expectedProgress)));
     }
 
     private void markBatchFailed(UUID batchId, String errorMessage) {

@@ -1,10 +1,35 @@
 <!doctype html>
 <html lang="zh-CN" xmlns:th="http://www.thymeleaf.org">
 <body>
-<div th:fragment="status" th:if="${run != null}" hx-target="this" hx-swap="outerHTML"
+<section class="reconciliation-run-status" th:fragment="status" th:if="${run != null}" hx-target="this" hx-swap="outerHTML"
      th:attr="hx-get=${run.active ? '/admin/reconciliation/' + batchId + '/run-status' : null},
               hx-trigger=${run.active ? 'every 2s' : null}">
-    <span class="status" th:text="${run.statusLabel}">等待执行</span>
-</div>
+    <div class="reconciliation-run-heading">
+        <div><h2>批处理进度</h2><p th:text="${run.statusLabel}">等待执行</p></div>
+        <span class="status" th:text="${run.statusLabel}">等待执行</span>
+    </div>
+    <div class="reconciliation-progress">
+        <progress max="100" th:value="${run.progressPercent}">0%</progress>
+        <span th:text="${run.progressPercent + '%'}">0%</span>
+        <span th:text="${'已处理 / 总数 ' + run.processedItems + ' / ' + run.totalItems}">已处理 / 总数 0 / 0</span>
+    </div>
+    <dl class="reconciliation-run-details">
+        <div><dt>当前步骤</dt><dd th:text="${run.currentStepLabel}">准备任务</dd></div>
+        <div><dt>批处理状态</dt><dd th:text="${run.statusLabel}">等待执行</dd></div>
+        <div><dt>批处理实例 ID</dt><dd class="mono" th:text="${run.batchJobInstanceId != null ? run.batchJobInstanceId : '-'}">-</dd></div>
+        <div><dt>批处理执行 ID</dt><dd class="mono" th:text="${run.batchJobExecutionId != null ? run.batchJobExecutionId : '-'}">-</dd></div>
+        <div><dt>重启次数</dt><dd th:text="${run.restartCount}">0</dd></div>
+    </dl>
+    <div class="reconciliation-run-actions" th:if="${run.status.name() == 'FAILED'}">
+        <form method="post" th:action="@{/admin/reconciliation/runs/{runId}/restart(runId=${run.id})}">
+            <input type="hidden" th:name="${_csrf.parameterName}" th:value="${_csrf.token}">
+            <button class="button button-secondary" type="submit">从断点继续</button>
+        </form>
+        <form method="post" th:action="@{/admin/reconciliation/{batchId}/run(batchId=${batchId})}">
+            <input type="hidden" th:name="${_csrf.parameterName}" th:value="${_csrf.token}">
+            <button class="button button-primary" type="submit">重新发起对账</button>
+        </form>
+    </div>
+</section>
 </body>
 </html>

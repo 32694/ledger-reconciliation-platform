@@ -12,6 +12,7 @@ import io.github.user32694.ledgerplatform.reconciliation.ResultType;
 import io.github.user32694.ledgerplatform.reconciliation.RunStatus;
 import io.github.user32694.ledgerplatform.reconciliation.StatementUpload;
 import jakarta.servlet.http.HttpServletResponse;
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -163,6 +164,20 @@ public class ReconciliationWebController {
         return "redirect:/admin/reconciliation/" + batchId;
     }
 
+    @PostMapping("/runs/{runId}/restart")
+    String restart(
+            @PathVariable UUID runId,
+            Authentication authentication,
+            RedirectAttributes redirectAttributes) {
+        try {
+            var run = reconciliationApi.restartRun(runId, authentication.getName());
+            return "redirect:/admin/reconciliation/" + run.batchId();
+        } catch (RuntimeException exception) {
+            redirectAttributes.addFlashAttribute("runError", "无法从断点继续，请稍后重试");
+            return "redirect:/admin/reconciliation";
+        }
+    }
+
     @GetMapping("/{batchId}/run-status")
     String runStatus(
             @PathVariable UUID batchId,
@@ -191,6 +206,7 @@ public class ReconciliationWebController {
         return new BatchRow(
                 batch.id(), batch.fileName(), batch.status(), statusLabel(batch.status()),
                 batch.channelDisplayName(), batch.ruleVersionNumber(),
+                formatCents(batch.amountToleranceCents()), batch.queryWindowHours(),
                 batch.totalRows(), batch.matchedRows(), batch.differenceRows(), batch.errorMessage(),
                 caseProgressLabel(batch, progress), latestRun);
     }
@@ -209,7 +225,32 @@ public class ReconciliationWebController {
                 run.requestedBy(), run.requestedAt(), run.startedAt(), run.completedAt(),
                 durationLabel(run.startedAt(), run.completedAt()),
                 run.matchedRows(), run.differenceRows(), run.errorMessage(),
-                run.status() == RunStatus.QUEUED || run.status() == RunStatus.RUNNING);
+                run.status() == RunStatus.QUEUED || run.status() == RunStatus.RUNNING,
+                run.batchJobInstanceId(), run.batchJobExecutionId(), currentStepLabel(run.currentStep()),
+                run.processedItems(), run.totalItems(), progressPercent(run.processedItems(), run.totalItems()),
+                run.restartCount());
+    }
+
+    private static String formatCents(long cents) {
+        return BigDecimal.valueOf(cents, 2).toPlainString() + " 元";
+    }
+
+    private static String currentStepLabel(String step) {
+        return switch (step == null ? "prepareReconciliationStep" : step) {
+            case "prepareReconciliationStep" -> "准备任务";
+            case "matchStatementEntriesStep" -> "匹配渠道账单";
+            case "findInternalOnlyPaymentsStep" -> "扫描内部单边";
+            case "finalizeReconciliationStep" -> "汇总结果";
+            default -> "准备任务";
+        };
+    }
+
+    private static int progressPercent(int processedItems, int totalItems) {
+        if (totalItems <= 0) {
+            return 0;
+        }
+        long percentage = Math.max(0, (long) processedItems) * 100 / totalItems;
+        return (int) Math.min(100, percentage);
     }
 
     private static String durationLabel(Instant startedAt, Instant completedAt) {
@@ -284,6 +325,8 @@ public class ReconciliationWebController {
             String statusLabel,
             String channelDisplayName,
             int ruleVersionNumber,
+            String amountToleranceLabel,
+            int queryWindowHours,
             int totalRows,
             int matchedRows,
             int differenceRows,
@@ -321,7 +364,14 @@ public class ReconciliationWebController {
             int matchedRows,
             int differenceRows,
             String errorMessage,
-            boolean active) {}
+            boolean active,
+            Long batchJobInstanceId,
+            Long batchJobExecutionId,
+            String currentStepLabel,
+            int processedItems,
+            int totalItems,
+            int progressPercent,
+            int restartCount) {}
 
     private void populateImportForm(Model model, String selectedChannelCode) {
         model.addAttribute("channels", reconciliationRulesApi.findChannels(false));
