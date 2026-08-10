@@ -7,6 +7,9 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
+import jakarta.persistence.FetchType;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import jakarta.persistence.Version;
 import java.time.Instant;
@@ -30,6 +33,20 @@ class ReconciliationBatchEntity {
     @Column(name = "file_sha256", nullable = false, unique = true, length = 64, columnDefinition = "char(64)")
     @JdbcTypeCode(SqlTypes.CHAR)
     private String fileSha256;
+
+    @Column(name = "channel_id", nullable = false, updatable = false)
+    private UUID channelId;
+
+    @Column(name = "rule_version_id", nullable = false, updatable = false)
+    private UUID ruleVersionId;
+
+    @ManyToOne(fetch = FetchType.EAGER)
+    @JoinColumn(name = "channel_id", insertable = false, updatable = false)
+    private ReconciliationChannelEntity channel;
+
+    @ManyToOne(fetch = FetchType.EAGER)
+    @JoinColumn(name = "rule_version_id", insertable = false, updatable = false)
+    private ReconciliationRuleVersionEntity ruleVersion;
 
     @Column(name = "period_start")
     private Instant periodStart;
@@ -74,6 +91,8 @@ class ReconciliationBatchEntity {
     static ReconciliationBatchEntity imported(
             String fileName,
             String fileSha256,
+            UUID channelId,
+            UUID ruleVersionId,
             Instant periodStart,
             Instant periodEnd,
             int totalRows,
@@ -84,6 +103,8 @@ class ReconciliationBatchEntity {
         batch.sourceType = "SYNTHETIC_CHANNEL";
         batch.fileName = fileName;
         batch.fileSha256 = fileSha256;
+        batch.channelId = channelId;
+        batch.ruleVersionId = ruleVersionId;
         batch.periodStart = normalize(periodStart);
         batch.periodEnd = normalize(periodEnd);
         batch.status = BatchStatus.IMPORTED;
@@ -94,12 +115,20 @@ class ReconciliationBatchEntity {
     }
 
     static ReconciliationBatchEntity importFailed(
-            String fileName, String fileSha256, String errorMessage, String createdBy, Instant createdAt) {
+            String fileName,
+            String fileSha256,
+            UUID channelId,
+            UUID ruleVersionId,
+            String errorMessage,
+            String createdBy,
+            Instant createdAt) {
         var batch = new ReconciliationBatchEntity();
         batch.id = UUID.randomUUID();
         batch.sourceType = "SYNTHETIC_CHANNEL";
         batch.fileName = fileName;
         batch.fileSha256 = fileSha256;
+        batch.channelId = channelId;
+        batch.ruleVersionId = ruleVersionId;
         batch.status = BatchStatus.IMPORT_FAILED;
         batch.errorMessage = errorMessage;
         batch.createdBy = createdBy;
@@ -177,6 +206,12 @@ class ReconciliationBatchEntity {
                 sourceType,
                 fileName,
                 fileSha256,
+                channel.code(),
+                channel.displayName(),
+                ruleVersion.id(),
+                ruleVersion.versionNumber(),
+                ruleVersion.amountToleranceCents(),
+                ruleVersion.queryWindowHours(),
                 periodStart,
                 periodEnd,
                 status,

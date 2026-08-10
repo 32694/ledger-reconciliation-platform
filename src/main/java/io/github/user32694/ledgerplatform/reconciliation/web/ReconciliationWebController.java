@@ -4,6 +4,7 @@ import io.github.user32694.ledgerplatform.reconciliation.BatchStatus;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationApi;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationBatchView;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationCaseProgress;
+import io.github.user32694.ledgerplatform.reconciliation.ReconciliationRulesApi;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationResultView;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationRunView;
 import io.github.user32694.ledgerplatform.reconciliation.ResolutionStatus;
@@ -11,6 +12,7 @@ import io.github.user32694.ledgerplatform.reconciliation.ResultType;
 import io.github.user32694.ledgerplatform.reconciliation.RunStatus;
 import io.github.user32694.ledgerplatform.reconciliation.StatementUpload;
 import jakarta.servlet.http.HttpServletResponse;
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -34,9 +36,13 @@ import org.springframework.web.multipart.MultipartFile;
 @RequestMapping("/admin/reconciliation")
 public class ReconciliationWebController {
     private final ReconciliationApi reconciliationApi;
+    private final ReconciliationRulesApi reconciliationRulesApi;
 
-    public ReconciliationWebController(ReconciliationApi reconciliationApi) {
+    public ReconciliationWebController(
+            ReconciliationApi reconciliationApi,
+            ReconciliationRulesApi reconciliationRulesApi) {
         this.reconciliationApi = reconciliationApi;
+        this.reconciliationRulesApi = reconciliationRulesApi;
     }
 
     @GetMapping
@@ -66,29 +72,46 @@ public class ReconciliationWebController {
 
     @GetMapping("/import")
     String importForm(Model model) {
-        model.addAttribute("activeNav", "reconciliation");
+        populateImportForm(model, null);
         return "admin/reconciliation-import";
+    }
+
+    @GetMapping("/import/rule-preview")
+    String rulePreview(@RequestParam String channelCode, Model model) {
+        try {
+            var rule = reconciliationRulesApi.resolvePublishedVersion(channelCode);
+            model.addAttribute("rule", rule);
+            model.addAttribute(
+                    "ruleScopeLabel",
+                    rule.sourceScope() == io.github.user32694.ledgerplatform.reconciliation.RuleScopeType.CHANNEL
+                            ? "渠道规则" : "默认规则");
+        } catch (RuntimeException exception) {
+            model.addAttribute("previewError", "无法解析该渠道的已发布规则");
+        }
+        return "admin/fragments/reconciliation-rule-preview";
     }
 
     @PostMapping("/import")
     String importStatement(
             @RequestParam("file") MultipartFile file,
+            @RequestParam("channelCode") String channelCode,
             Authentication authentication,
             Model model) {
         if (file == null || file.isEmpty()) {
             model.addAttribute("importError", "请选择要导入的 CSV 文件");
-            model.addAttribute("activeNav", "reconciliation");
+            populateImportForm(model, channelCode);
             return "admin/reconciliation-import";
         }
         try {
             var batch = reconciliationApi.importStatement(new StatementUpload(
+                    channelCode,
                     file.getOriginalFilename() == null ? "statement.csv" : file.getOriginalFilename(),
                     file.getBytes(),
                     authentication.getName()));
             return "redirect:/admin/reconciliation/" + batch.id();
         } catch (Exception exception) {
             model.addAttribute("importError", "文件导入失败，请检查格式后重试");
-            model.addAttribute("activeNav", "reconciliation");
+            populateImportForm(model, channelCode);
             return "admin/reconciliation-import";
         }
     }
@@ -141,6 +164,20 @@ public class ReconciliationWebController {
         return "redirect:/admin/reconciliation/" + batchId;
     }
 
+    @PostMapping("/runs/{runId}/restart")
+    String restart(
+            @PathVariable UUID runId,
+            Authentication authentication,
+            RedirectAttributes redirectAttributes) {
+        try {
+            var run = reconciliationApi.restartRun(runId, authentication.getName());
+            return "redirect:/admin/reconciliation/" + run.batchId();
+        } catch (RuntimeException exception) {
+            redirectAttributes.addFlashAttribute("runError", "无法从断点继续，请稍后重试");
+            return "redirect:/admin/reconciliation";
+        }
+    }
+
     @GetMapping("/{batchId}/run-status")
     String runStatus(
             @PathVariable UUID batchId,
@@ -168,6 +205,8 @@ public class ReconciliationWebController {
             ReconciliationCaseProgress progress) {
         return new BatchRow(
                 batch.id(), batch.fileName(), batch.status(), statusLabel(batch.status()),
+                batch.channelDisplayName(), batch.ruleVersionNumber(),
+                formatCents(batch.amountToleranceCents()), batch.queryWindowHours(),
                 batch.totalRows(), batch.matchedRows(), batch.differenceRows(), batch.errorMessage(),
                 caseProgressLabel(batch, progress), latestRun);
     }
@@ -186,7 +225,32 @@ public class ReconciliationWebController {
                 run.requestedBy(), run.requestedAt(), run.startedAt(), run.completedAt(),
                 durationLabel(run.startedAt(), run.completedAt()),
                 run.matchedRows(), run.differenceRows(), run.errorMessage(),
-                run.status() == RunStatus.QUEUED || run.status() == RunStatus.RUNNING);
+                run.status() == RunStatus.QUEUED || run.status() == RunStatus.RUNNING,
+                run.batchJobInstanceId(), run.batchJobExecutionId(), currentStepLabel(run.currentStep()),
+                run.processedItems(), run.totalItems(), progressPercent(run.processedItems(), run.totalItems()),
+                run.restartCount());
+    }
+
+    private static String formatCents(long cents) {
+        return BigDecimal.valueOf(cents, 2).toPlainString() + " 元";
+    }
+
+    private static String currentStepLabel(String step) {
+        return switch (step == null ? "prepareReconciliationStep" : step) {
+            case "prepareReconciliationStep" -> "准备任务";
+            case "matchStatementEntriesStep" -> "匹配渠道账单";
+            case "findInternalOnlyPaymentsStep" -> "扫描内部单边";
+            case "finalizeReconciliationStep" -> "汇总结果";
+            default -> "准备任务";
+        };
+    }
+
+    private static int progressPercent(int processedItems, int totalItems) {
+        if (totalItems <= 0) {
+            return 0;
+        }
+        long percentage = Math.max(0, (long) processedItems) * 100 / totalItems;
+        return (int) Math.min(100, percentage);
     }
 
     private static String durationLabel(Instant startedAt, Instant completedAt) {
@@ -259,6 +323,10 @@ public class ReconciliationWebController {
             String fileName,
             BatchStatus status,
             String statusLabel,
+            String channelDisplayName,
+            int ruleVersionNumber,
+            String amountToleranceLabel,
+            int queryWindowHours,
             int totalRows,
             int matchedRows,
             int differenceRows,
@@ -296,5 +364,18 @@ public class ReconciliationWebController {
             int matchedRows,
             int differenceRows,
             String errorMessage,
-            boolean active) {}
+            boolean active,
+            Long batchJobInstanceId,
+            Long batchJobExecutionId,
+            String currentStepLabel,
+            int processedItems,
+            int totalItems,
+            int progressPercent,
+            int restartCount) {}
+
+    private void populateImportForm(Model model, String selectedChannelCode) {
+        model.addAttribute("channels", reconciliationRulesApi.findChannels(false));
+        model.addAttribute("selectedChannelCode", selectedChannelCode);
+        model.addAttribute("activeNav", "reconciliation");
+    }
 }

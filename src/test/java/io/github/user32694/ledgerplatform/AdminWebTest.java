@@ -956,6 +956,36 @@ class AdminWebTest {
 
     @Test
     @WithMockUser(roles = "ADMIN")
+    void rendersReconciliationRuleAndChannelAggregateLabels() throws Exception {
+        auditApi.record(new AuditCommand(
+                "rule-operator",
+                AuditAction.RECONCILIATION_RULE_PUBLISH,
+                "RECONCILIATION_RULE",
+                "rule-label-marker",
+                AuditOutcome.SUCCEEDED,
+                "规则标签测试",
+                null));
+        auditApi.record(new AuditCommand(
+                "channel-operator",
+                AuditAction.RECONCILIATION_CHANNEL_STATUS_CHANGE,
+                "RECONCILIATION_CHANNEL",
+                "channel-label-marker",
+                AuditOutcome.SUCCEEDED,
+                "渠道标签测试",
+                null));
+
+        mockMvc.perform(get("/admin/audit"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*<span>对账规则</span>\\s*"
+                                + "<span class=\"mono\">rule-label-marker</span>.*")))
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*<span>对账渠道</span>\\s*"
+                                + "<span class=\"mono\">channel-label-marker</span>.*")));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
     void supportsAuditFilterCombinationsAndLimitsDefaultResultsToOneHundred() throws Exception {
         String successMarker = "audit-action-only-" + UUID.randomUUID();
         String failureMarker = "audit-outcome-only-" + UUID.randomUUID();

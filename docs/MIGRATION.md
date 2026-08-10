@@ -12,6 +12,8 @@
   - `V11__allow_reverse_journal_types.sql`：允许账本 journal 使用 `REFUND` 和 `REVERSAL` 类型，不改变应用已有的借贷平衡校验。
   - `V12__add_reconciliation_operations.sql`：增加异步运行 attempt、差异负责人、解决方式和不可变案件时间线，并迁移已有解决记录。
   - `V13__allow_claimed_reconciliation_status.sql`：修复 V12 未替换完全的旧约束，使 `reconciliation_result.resolution_status` 合法接受 `CLAIMED`。
+  - `V14__add_reconciliation_rules_and_work_results.sql`：增加渠道、默认/渠道规则的不可变发布版本、运行进度和结果工作表。
+  - `V15__create_spring_batch_metadata.sql`：在 Flyway 管理的 `batch` schema 创建 Spring Batch PostgreSQL 元数据表。
 - Flyway 会在升级时按版本顺序执行；不要跳过或重排脚本，也不要手动修改 `flyway_schema_history`。
 
 ## 1. 迁移前准备和停机
@@ -29,7 +31,7 @@ git log -1 --oneline
 
 ## 2. 备份 PostgreSQL 数据
 
-数据库备份是可选的；只迁移代码时可跳到下一节。先在源电脑执行 `set -a; source .env; set +a`：
+数据库备份是可选的；只迁移代码时可跳到下一节。先在源电脑执行 `set -a; . ./.env; set +a`：
 
 ```sh
 mkdir -p ../migration-artifacts
@@ -57,11 +59,11 @@ chmod 600 .env
 
 ```sh
 set -a
-source .env
+. ./.env
 set +a
 ```
 
-按照[用户手册](USER_GUIDE.md)启动 PostgreSQL 17（Homebrew 或 Docker Compose 二选一），创建 `ledger_platform` 和 `ledger_platform_test`，并确认使用的是目标电脑的空数据库。若要恢复业务数据，先做只读确认：
+按照[用户手册](USER_GUIDE.md)启动 PostgreSQL 17，创建 `ledger_platform` 和 `ledger_platform_test`，并确认使用的是目标电脑的空数据库。若要恢复业务数据，先做只读确认：
 
 ```sh
 PGPASSWORD="$DB_PASSWORD" psql -h localhost -p 5432 -U "$DB_USERNAME" -d postgres \
@@ -87,19 +89,19 @@ PGPASSWORD="$DB_PASSWORD" pg_restore \
 迁移升级需要短暂停机：
 
 1. 先完成备份并停止旧版本应用。
-2. 更新代码到包含 V9-V13 的提交（`git pull --ff-only` 或重新 clone）。
+2. 更新代码到包含 V9-V15 的提交（`git pull --ff-only` 或重新 clone）。
 3. 启动新版本应用：
 
 ```sh
 ./mvnw spring-boot:run
 ```
 
-4. Flyway 按顺序执行尚未执行的 V9-V13；日志出现 migration 成功后再开放管理页面。V13 是 V12 的旧约束修复，两者不能跳过、重排或合并。
+4. Flyway 按顺序执行尚未执行的 V9-V15；日志出现 migration 成功后再开放管理页面。V13 是 V12 的旧约束修复，V14 引入规则和工作表，V15 引入 `batch` schema；它们不能跳过、重排或合并。
 5. 登录并检查 `/admin/payments/top-up`、`/admin/payments/transfer`、`/admin/reconciliation`、`/admin/reconciliation/cases` 和 `/admin/audit`，确认近期记录、运行历史、案件时间线和审计事件可见。
 
 不要在应用运行时手动执行迁移脚本，也不要让旧版本应用和新版本应用同时写同一个数据库。
 
-异步对账 executor 是应用进程内本地线程池，不是持久化队列或独立 worker。应用重启后，原进程中的执行任务消失；新进程会把遗留的 `QUEUED`/`RUNNING` active run 标记为 `FAILED`，原任务不会续跑，需由管理员重新发起并创建新的 attempt。部署时不得假设多实例之间会转移或接管 active run。
+异步对账使用 Spring Batch，元数据表由 Flyway 在 `batch` schema 管理。已提交的 500 行检查点可用于同一运行的恢复；管理员也可以明确选择新建尝试。每个数据库只能运行一个应用实例。多副本部署必须由外部 leader election、lease 和 heartbeat 选出唯一调度者并检测失联；应用自身不实现这些协调机制，不能假设应用会在实例之间自动接管运行。
 
 ## 5. 升级校验
 
@@ -110,6 +112,9 @@ java -version
 psql --version
 git remote -v
 git status --short
+SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/ledger_platform_test \
+SPRING_DATASOURCE_USERNAME="$DB_USERNAME" \
+SPRING_DATASOURCE_PASSWORD="$DB_PASSWORD" \
 ./mvnw clean verify
 ```
 
@@ -131,12 +136,12 @@ curl --fail http://localhost:8080/actuator/health
 
 ## 6. 回滚边界
 
-Flyway 不提供自动回滚。V12 会新增和回填运营记录，V13 会替换旧约束；这两项数据库变更不可通过切回旧应用自动撤销。发现新版本问题时：
+Flyway 不提供自动回滚。V12 会新增和回填运营记录，V13 会替换旧约束，V14/V15 会新增规则、工作结果和 Batch 元数据；这些数据库变更不可通过切回旧应用自动撤销。发现新版本问题时：
 
-- 如果 V9-V13 尚未执行，只需停止应用并修复代码；不要修改已有 migration 文件。
+- 如果 V9-V15 尚未执行，只需停止应用并修复代码；不要修改已有 migration 文件。
 - 如果 migration 已执行但业务代码有问题，优先修复代码并重新部署；schema 向前兼容时使用新的 migration 继续演进。
 - 如果必须撤回 schema，先停止应用，使用升级前的 PostgreSQL dump 恢复到独立的空数据库，再启动与该 schema 兼容的旧版本。升级后产生的运行历史、案件时间线和审计记录不可回滚到备份中，恢复会永久丢弃这些记录以及同期其他业务写入，必须先确认数据丢失范围。
-- 不要通过删除 `flyway_schema_history`、编辑 checksum 或手工删除 V9-V13 来“回滚”。
+- 不要通过删除 `flyway_schema_history`、编辑 checksum 或手工删除 V9-V15 来“回滚”。
 
 回滚后再次启动时，应用和数据库的 migration 版本必须匹配。恢复完成后重新运行 `./mvnw clean verify` 和健康检查。
 

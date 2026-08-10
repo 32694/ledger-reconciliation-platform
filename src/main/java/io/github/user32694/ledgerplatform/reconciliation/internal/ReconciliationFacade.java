@@ -24,39 +24,32 @@ import java.util.Collections;
 import java.util.UUID;
 import java.util.function.Function;
 import org.springframework.stereotype.Service;
+import org.springframework.batch.core.launch.JobOperator;
 
 @Service
 public class ReconciliationFacade implements ReconciliationApi {
     private final ReconciliationImportService importService;
     private final ReconciliationStore store;
-    private final ReconciliationTaskDispatcher taskDispatcher;
+    private final ReconciliationJobLauncher jobLauncher;
+    private final JobOperator jobOperator;
     private final PaymentsApi paymentsApi;
 
     public ReconciliationFacade(
             ReconciliationImportService importService,
             ReconciliationStore store,
-            ReconciliationTaskDispatcher taskDispatcher,
+            ReconciliationJobLauncher jobLauncher,
+            JobOperator jobOperator,
             PaymentsApi paymentsApi) {
         this.importService = importService;
         this.store = store;
-        this.taskDispatcher = taskDispatcher;
+        this.jobLauncher = jobLauncher;
+        this.jobOperator = jobOperator;
         this.paymentsApi = paymentsApi;
     }
 
     @Override
     public ReconciliationBatchView importStatement(StatementUpload upload) {
-        try {
-            return importService.importStatement(upload);
-        } catch (IllegalArgumentException exception) {
-            if (upload == null || upload.fileName() == null || upload.operator() == null) {
-                throw exception;
-            }
-            String hash = java.util.HexFormat.of().formatHex(
-                    sha256(upload.content() == null ? new byte[0] : upload.content()));
-            return store.findByHash(hash)
-                    .map(ReconciliationBatchEntity::toView)
-                    .orElseThrow(() -> exception);
-        }
+        return importService.importStatement(upload);
     }
 
     @Override
@@ -82,9 +75,36 @@ public class ReconciliationFacade implements ReconciliationApi {
         }
         var queued = store.queueRun(batchId, operator.strip());
         if (queued.created()) {
-            taskDispatcher.submit(queued.run().id());
+            jobLauncher.submit(queued.run().id());
         }
         return queued.run();
+    }
+
+    @Override
+    public ReconciliationRunView restartRun(UUID runId, String operator) {
+        if (runId == null) {
+            throw new IllegalArgumentException("Run id is required");
+        }
+        if (operator == null || operator.isBlank()) {
+            throw new IllegalArgumentException("Operator is required");
+        }
+        String normalizedOperator = operator.strip();
+        try {
+            var executionId = store.restartableExecutionId(runId);
+            boolean submitted;
+            if (executionId.isPresent()) {
+                jobOperator.restart(executionId.get());
+                submitted = true;
+            } else {
+                submitted = jobLauncher.submit(runId);
+            }
+            if (submitted) {
+                store.recordRunRecovery(runId, normalizedOperator, "对账运行由管理员恢复");
+            }
+        } catch (Exception exception) {
+            throw new IllegalStateException("Run cannot restart: " + runId, exception);
+        }
+        return store.getRun(runId);
     }
 
     @Override
@@ -105,9 +125,7 @@ public class ReconciliationFacade implements ReconciliationApi {
         var entries = store.findStatementEntries(batchId).stream()
                 .collect(java.util.stream.Collectors.toMap(
                         ReconciliationMatcher.StatementEntrySnapshot::id, Function.identity()));
-        var payments = batch.periodStart() == null
-                ? List.<PaymentView>of()
-                : paymentsApi.findSucceededTopUps(batch.periodStart(), batch.periodEnd());
+        var payments = findPayments(batch);
         var paymentMap = payments.stream().collect(java.util.stream.Collectors.toMap(
                 PaymentView::id, Function.identity()));
         return store.findResults(batchId).stream()
@@ -205,10 +223,7 @@ public class ReconciliationFacade implements ReconciliationApi {
             var batch = store.getBatch(batchId);
             batches.put(batchId, batch);
             store.findStatementEntries(batchId).forEach(entry -> entries.put(entry.id(), entry));
-            if (batch.periodStart() != null && batch.periodEnd() != null) {
-                paymentsApi.findSucceededTopUps(batch.periodStart(), batch.periodEnd())
-                        .forEach(payment -> payments.put(payment.id(), payment));
-            }
+            findPayments(batch).forEach(payment -> payments.put(payment.id(), payment));
         }
         var resolutions = store.findResolutions(results.stream()
                 .map(ReconciliationResultEntity::id)
@@ -244,7 +259,7 @@ public class ReconciliationFacade implements ReconciliationApi {
         var entries = store.findStatementEntries(result.batchId()).stream()
                 .collect(java.util.stream.Collectors.toMap(
                         ReconciliationMatcher.StatementEntrySnapshot::id, Function.identity()));
-        var payments = paymentsApi.findSucceededTopUps(batch.periodStart(), batch.periodEnd()).stream()
+        var payments = findPayments(batch).stream()
                 .collect(java.util.stream.Collectors.toMap(PaymentView::id, Function.identity()));
         return toResultView(result, entries, payments);
     }
@@ -287,11 +302,13 @@ public class ReconciliationFacade implements ReconciliationApi {
         }
     }
 
-    private static byte[] sha256(byte[] content) {
-        try {
-            return java.security.MessageDigest.getInstance("SHA-256").digest(content);
-        } catch (java.security.NoSuchAlgorithmException exception) {
-            throw new IllegalStateException("SHA-256 is unavailable", exception);
+    private List<PaymentView> findPayments(ReconciliationBatchView batch) {
+        if (batch.status() == io.github.user32694.ledgerplatform.reconciliation.BatchStatus.IMPORT_FAILED
+                || batch.periodStart() == null
+                || batch.periodEnd() == null) {
+            return List.of();
         }
+        return paymentsApi.findSucceededTopUps(batch.queryStart(), batch.queryEnd());
     }
+
 }

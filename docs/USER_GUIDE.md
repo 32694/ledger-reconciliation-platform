@@ -1,6 +1,6 @@
 # 用户手册
 
-本手册说明如何在 macOS 上运行模拟交易账本与自动对账平台。只使用合成数据。运行环境为 JDK 17 和 PostgreSQL 17，应用端口为 `8080`，数据库端口为 `5432`。
+本手册说明如何运行模拟交易账本与自动对账平台。只使用合成数据。运行环境为 Git、JDK 17、Maven Wrapper 和 PostgreSQL 17，应用端口为 `8080`，数据库端口为 `5432`。
 
 ## 1. 本地启动
 
@@ -17,28 +17,13 @@ chmod 600 .env
 
 ```sh
 set -a
-source .env
+. ./.env
 set +a
 ```
 
-### 1.2 选择一个 PostgreSQL 17 实例
+### 1.2 启动 PostgreSQL 17
 
-只选择 Homebrew 或 Docker Compose 其中一种，不能同时占用 `5432`。
-
-Homebrew：
-
-```sh
-brew install postgresql@17
-brew services start postgresql@17
-export PATH="$(brew --prefix postgresql@17)/bin:$PATH"
-psql postgres -c "CREATE ROLE ledger_app WITH LOGIN PASSWORD '$DB_PASSWORD' CREATEDB;"
-PGPASSWORD="$DB_PASSWORD" createdb -h localhost -U "$DB_USERNAME" --owner="$DB_USERNAME" ledger_platform
-PGPASSWORD="$DB_PASSWORD" createdb -h localhost -U "$DB_USERNAME" --owner="$DB_USERNAME" ledger_platform_test
-```
-
-如果角色或数据库已经存在，跳过对应的创建命令即可。
-
-Docker Compose：
+使用已有的 PostgreSQL 17 实例，或使用仓库提供的 Docker Compose：
 
 ```sh
 docker compose up -d
@@ -47,7 +32,7 @@ docker compose exec db psql -U "$DB_USERNAME" -d ledger_platform \
   -c 'CREATE DATABASE ledger_platform_test;'
 ```
 
-等待 `db` 显示 `healthy`。Compose 只启动 PostgreSQL，Java 应用仍在宿主机运行。
+等待 `db` 显示 `healthy`。Compose 只启动 PostgreSQL，Java 应用仍在宿主机运行。若使用已有实例，按所在环境的管理方式创建 `.env` 指向的主库和 `ledger_platform_test` 测试库；不要把本机路径、用户名或凭据写入文档或提交。
 
 ### 1.3 测试、校验和启动
 
@@ -63,6 +48,9 @@ SPRING_DATASOURCE_PASSWORD="$DB_PASSWORD" \
 完整验收（编译、测试、打包）：
 
 ```sh
+SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/ledger_platform_test \
+SPRING_DATASOURCE_USERNAME="$DB_USERNAME" \
+SPRING_DATASOURCE_PASSWORD="$DB_PASSWORD" \
 ./mvnw clean verify
 ```
 
@@ -120,26 +108,32 @@ Flyway 会在应用启动时自动执行待执行迁移。启动后打开 <http:
 
 ## 6. 异步对账和异常处理
 
-### 6.1 导入并运行对账
+### 6.1 管理对账规则
 
-在左侧导航进入**自动对账**（`/admin/reconciliation`），点击**导入渠道账单**，选择一个 `SYNTHETIC_CHANNEL` 的 UTF-8 CSV，再点击**导入账单**。固定表头为：
+1. 进入**对账规则**（`/admin/reconciliation/rules`），选择**默认规则**或某个**渠道规则**。
+2. 填写金额容差（cents）和查询窗口（小时），点击**保存草稿**。
+3. 核对草稿后点击**发布**。导入只使用已发布版本；保存草稿不会改变任何已导入批次。
+
+### 6.2 导入并运行对账
+
+在左侧导航进入**自动对账**（`/admin/reconciliation`），点击**导入渠道账单**，选择任一已启用渠道（例如支付宝、微信支付或银联）的 UTF-8 CSV，再点击**导入账单**。固定表头为：
 
 ```text
 channel_transaction_id,amount_cents,occurred_at
 ```
 
-每行必须包含非空渠道交易号、正整数金额（CNY cents）和 ISO-8601 时间。文件上限为 `2 MB`，数据行上限为 `10,000`。任意一行无效时，整个批次标记为 `IMPORT_FAILED`，不保存明细。
+每行必须包含非空渠道交易号、正整数金额（CNY cents）和 ISO-8601 时间。文件上限为 `20 MB`，数据行上限为 `100,000`。任意一行无效时，整个批次标记为 `IMPORT_FAILED`，不保存明细。
 
-导入成功后自动进入批次详情，可直接点击**开始对账**。查看历史批次时，另一路径是进入**自动对账**列表，再点击对应批次的**查看详情**。对账请求会先持久化为一次 attempt，再交给应用进程内本地线程池异步执行；它不是外部任务队列，也不能跨应用进程接管任务。运行状态的中文含义如下：
+导入前先选择已启用渠道。系统按该渠道的已发布规则版本；没有渠道覆盖规则时使用默认规则。规则版本发布后不可变，导入批次会锁定版本、金额容差和查询窗口，后续发布新版本不会改变历史批次。导入成功后自动进入批次详情，可直接点击**开始对账**；需要查看历史批次时，从**自动对账**列表打开对应详情。任务使用 Spring Batch 分块执行，每 500 行提交一个检查点。运行状态的中文含义如下：
 
-- `QUEUED`：等待执行，任务已记录并等待本进程线程池调度。
+- `QUEUED`：等待执行，任务已记录并等待 Batch 调度。
 - `RUNNING`：对账中，当前 attempt 正在计算和保存结果。
 - `SUCCEEDED`：已完成，本次 attempt 已保存匹配数和差异数。
 - `FAILED`：执行失败，本次 attempt 已结束并保留失败原因。
 
-`QUEUED` 或 `RUNNING` 时，批次详情使用 HTMX 每 `2` 秒刷新一次状态；进入终态后停止刷新。任务失败时，页面显示**重新发起对账**。点击后会新增下一次 attempt，运行历史按“第 N 次”倒序保留，失败的历史 attempt 不会被覆盖。
+`QUEUED` 或 `RUNNING` 时，批次详情使用 HTMX 每 `2` 秒刷新一次状态；进入终态后停止刷新。失败后有两种明确选择：**从检查点继续**会重启同一次运行并保留已提交的工作结果；**新建尝试**会创建下一次 attempt，重新处理该批次。运行历史按“第 N 次”倒序保留，失败历史不会被覆盖。
 
-executor 只存在于单个应用进程。应用重启时，启动恢复会把数据库中仍为 `QUEUED` 或 `RUNNING` 的 active run 标记为 `FAILED`，原任务不会续跑；管理员须在批次详情点击**重新发起对账**，创建新的 attempt。
+Batch 元数据位于 Flyway 管理的 `batch` schema。应用启动时会恢复仍可重启的同一运行；已完成检查点不会重复写入。每个数据库同时只能运行一个应用实例；多副本必须由外部 leader election、lease 和 heartbeat 保证唯一调度者并检测失联，应用自身不实现这些协调机制。
 
 系统只把成功充值作为渠道候选，结果类型如下：
 
@@ -152,7 +146,7 @@ executor 只存在于单个应用进程。应用重启时，启动恢复会把�
 
 相同文件的 SHA-256 digest 具备导入幂等性，重复上传返回原批次。
 
-### 6.2 在异常工作台处理差异
+### 6.3 在异常工作台处理差异
 
 在左侧导航进入**异常工作台**（`/admin/reconciliation/cases`）。默认展示待处理和处理中的差异；可以按结果、处理状态、负责人或**仅看我的**筛选。点击案件的**查看详情**后，状态按 `OPEN` -> `CLAIMED` -> `RESOLVED` 流转：
 
@@ -169,7 +163,7 @@ executor 只存在于单个应用进程。应用重启时，启动恢复会把�
 
 每次认领、取消认领和解决都会追加到案件的**不可变时间线**，并写入**审计日志**（`/admin/audit`）；历史事件不能更新或删除。解决差异只记录运营结论；原支付和账本事实不会被修改，系统不会自动修改账本或渠道账单事实。已匹配结果无需处理，也不能进入案件流程。
 
-### 6.3 演示流程
+### 6.4 演示流程
 
 1. 新建一个 CSV，写入表头和一行不存在于近期充值记录的渠道号，例如 `DEMO-CHANNEL-ONLY,1000,2026-08-09T12:00:00Z`。
 2. 按“**自动对账** -> **导入渠道账单** -> **导入账单**”操作；导入成功后自动进入批次详情，直接点击**开始对账**。观察状态从等待执行、对账中进入已完成。任务很快时，中间状态可能来不及在页面显示，但运行历史仍保留本次 attempt。
@@ -177,13 +171,30 @@ executor 只存在于单个应用进程。应用重启时，启动恢复会把�
 4. 依次点击**认领案件**，选择一种解决方式并填写演示备注，再点击**解决案件**。
 5. 检查案件处理记录和**审计日志**；两处应保留操作事实，而账本流水不会因该解决动作新增或改写 journal。
 
-## 7. 停止和清理
+### 6.5 100,000 行演示
 
-停止 Java 进程：`Ctrl-C`。停止数据库：
+使用固定数据生成器创建 CSV；它只使用 POSIX `sh` 和 `awk`，先写入临时文件再原子移动到目标路径：
 
 ```sh
-brew services stop postgresql@17
-# 或
+scripts/generate-reconciliation-demo.sh ./reconciliation-demo.csv 100000
+```
+
+导入该文件后，在批次详情观察总数、当前步骤和已处理进度。需要运行完整的 opt-in 性能验证时，先按本手册导出数据库环境变量，再执行：
+
+```sh
+SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/ledger_platform_test \
+SPRING_DATASOURCE_USERNAME="$DB_USERNAME" \
+SPRING_DATASOURCE_PASSWORD="$DB_PASSWORD" \
+./mvnw -Preconciliation-performance -Dit.test=ReconciliationPerformanceIT verify
+```
+
+该验证会输出 `elapsedMs`、`channelRowsPerSecond`、`channelRows`、`resultRows` 和 `restartCount`。它只校验正确性和恢复语义，不设固定耗时阈值。
+
+## 7. 停止和清理
+
+停止 Java 进程：`Ctrl-C`。停止 Docker Compose 数据库：
+
+```sh
 docker compose stop
 ```
 
@@ -194,8 +205,8 @@ docker compose stop
 - **Connection refused**：确认 PostgreSQL 17 正在运行、`5432` 未被其他实例占用，并检查 `DB_URL`。
 - **Password authentication failed**：确认数据库角色密码和 `DB_PASSWORD` 相同；旧 Compose volume 会保留首次初始化的密码。
 - **Database does not exist**：创建 `ledger_platform` 和 `ledger_platform_test`，再重新运行测试或应用。
-- **`app.admin.username is required` / `app.admin.password is required`**：在启动应用的同一终端执行 `set -a; source .env; set +a`。
+- **`app.admin.username is required` / `app.admin.password is required`**：在启动应用的同一终端执行 `set -a; . ./.env; set +a`。
 - **付款账户余额不足**：这是业务保护，不会写入转账 journal；补足余额后用新幂等键提交。
 - **反向操作 `INSUFFICIENT_FUNDS`**：补足源钱包后，用新幂等键重试全额退款或全额冲正。
 - **幂等键冲突**：同一 key 的请求参数不能变化；更换唯一 key 后再提交。
-- **端口已占用**：Homebrew PostgreSQL 和 Docker Compose 只能运行一个，停止另一个实例后重试。
+- **端口已占用**：确认 PostgreSQL 实例与 Docker Compose 没有同时使用同一端口，再停止冲突实例后重试。

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{admin/layout :: shell('对账规则历史版本', ${activeNav}, ~{::main})}">
+<main class="content">
+    <div class="page-heading">
+        <div>
+            <p class="eyebrow" th:text="${ruleTitle}">默认规则</p>
+            <h1>历史版本</h1>
+        </div>
+        <a class="button button-secondary" th:href="@{/admin/reconciliation/rules}">返回规则</a>
+    </div>
+    <section class="table-section">
+        <div class="section-heading">
+            <div>
+                <h2>版本记录</h2>
+                <p>已发布版本不可修改</p>
+            </div>
+            <span class="result-count" th:text="${#lists.size(versions) + ' 个版本'}">0 个版本</span>
+        </div>
+        <div class="table-scroll">
+            <table>
+                <thead>
+                <tr>
+                    <th>版本</th>
+                    <th>状态</th>
+                    <th class="numeric">金额容差（元）</th>
+                    <th class="numeric">查询窗口（小时）</th>
+                    <th>创建人</th>
+                    <th>创建时间</th>
+                    <th>发布人</th>
+                    <th>发布时间</th>
+                </tr>
+                </thead>
+                <tbody>
+                <tr th:each="version : ${versions}">
+                    <td th:text="${'版本 ' + version.versionNumber}">版本 1</td>
+                    <td><span class="status"
+                              th:classappend="${version.statusLabel == '已发布'} ? ' status-success' : ' status-danger'"
+                              th:text="${version.statusLabel}">已发布</span></td>
+                    <td class="numeric" th:text="${version.amountLabel}">0.00 元</td>
+                    <td class="numeric" th:text="${version.windowLabel}">0 小时</td>
+                    <td th:text="${version.createdBy}">管理员</td>
+                    <td th:text="${version.createdAt}">2026-01-01T00:00:00Z</td>
+                    <td th:text="${version.publishedBy ?: '--'}">管理员</td>
+                    <td th:text="${version.publishedAt ?: '--'}">2026-01-01T00:00:00Z</td>
+                </tr>
+                <tr th:if="${#lists.isEmpty(versions)}"><td colspan="8" class="empty-state">暂无历史版本</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+</main>
+</html>

@@ -1,6 +1,6 @@
 package io.github.user32694.ledgerplatform.reconciliation;
 
-public record StatementUpload(String fileName, byte[] content, String operator) {
+public record StatementUpload(String channelCode, String fileName, byte[] content, String operator) {
     public StatementUpload {
         content = content == null ? null : content.clone();
     }

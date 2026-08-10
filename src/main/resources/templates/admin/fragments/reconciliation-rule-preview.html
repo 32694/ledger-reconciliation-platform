@@ -1,0 +1,5 @@
+<div th:if="${rule != null}">
+    <small th:text="${'将锁定' + ruleScopeLabel + '版本 ' + rule.versionNumber}">将锁定默认规则版本 1</small>
+    <small th:text="${'金额容差 ' + rule.amountToleranceCents + ' 分，查询窗口 ' + rule.queryWindowHours + ' 小时'}">金额容差 0 分，查询窗口 0 小时</small>
+</div>
+<small th:if="${previewError}" class="field-error" th:text="${previewError}">无法解析规则</small>

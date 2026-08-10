@@ -1,4 +1,4 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="zh-CN" xmlns:th="http://www.thymeleaf.org"
       th:replace="~{admin/layout :: shell('导入渠道账单', ${activeNav}, ~{::main})}">
 <main class="content content-narrow">
@@ -12,12 +12,31 @@
     <p class="alert alert-error" th:if="${importError}" th:text="${importError}">文件导入失败</p>
     <section class="form-surface">
         <form method="post" enctype="multipart/form-data" th:action="@{/admin/reconciliation/import}">
-            <input type="hidden" th:name="${_csrf.parameterName}" th:value="${_csrf.token}">
+            <div class="field">
+                <label for="channelCode">对账渠道</label>
+                <select id="channelCode" name="channelCode" required="required"
+                        hx-get="/admin/reconciliation/import/rule-preview"
+                        hx-target="#rule-preview"
+                        hx-trigger="change"
+                        hx-include="this">
+                    <option value="">请选择对账渠道</option>
+                    <option th:each="channel : ${channels}"
+                            th:value="${channel.code}"
+                            th:text="${channel.displayName}"
+                            th:selected="${channel.code == selectedChannelCode}">支付宝</option>
+                </select>
+                <div id="rule-preview"
+                     hx-get="/admin/reconciliation/import/rule-preview"
+                     hx-trigger="load"
+                     hx-include="#channelCode">
+                    <small>请选择渠道以预览将锁定的规则</small>
+                </div>
+            </div>
             <div class="field">
                 <label for="file">CSV 文件</label>
-                <input id="file" name="file" type="file" accept=".csv,text/csv" required>
+                <input id="file" name="file" type="file" accept=".csv,text/csv" required="required" />
                 <small>固定表头：<span class="mono">channel_transaction_id,amount_cents,occurred_at</span></small>
-                <small>文件使用 UTF-8，最大 2 MB，最多 10,000 行数据。</small>
+                <small>最大 20 MB，最多 100,000 行数据</small>
             </div>
             <div class="form-actions">
                 <button class="button button-primary" type="submit">导入账单</button>

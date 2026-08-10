@@ -58,15 +58,15 @@ class StatementCsvParserTest {
     }
 
     @Test
-    void rejectsMoreThanTenThousandRows() {
+    void rejectsMoreThanOneHundredThousandRows() {
         var builder = new StringBuilder("channel_transaction_id,amount_cents,occurred_at\n");
-        for (int index = 1; index <= 10_001; index++) {
+        for (int index = 1; index <= 100_001; index++) {
             builder.append("CH-").append(index).append(",1,2026-01-01T00:00:00Z\n");
         }
 
         assertThatThrownBy(() -> parser.parse(builder.toString().getBytes(StandardCharsets.UTF_8)))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("10000");
+                .hasMessage("CSV exceeds 100000 data rows at line 100002");
     }
 
     private static byte[] csv(String value) {

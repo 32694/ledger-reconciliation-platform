@@ -1,12 +1,12 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="zh-CN" xmlns:th="http://www.thymeleaf.org" xmlns:sec="http://www.thymeleaf.org/extras/spring-security"
       th:fragment="shell(pageTitle, activeNav, content)">
 <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title th:text="${pageTitle + ' | 交易账本管理平台'}">交易账本管理平台</title>
-    <link rel="stylesheet" th:href="@{/css/admin.css}">
-    <script defer th:src="@{/webjars/htmx.org/dist/htmx.min.js}"></script>
+    <link rel="stylesheet" th:href="@{/css/admin.css}" />
+    <script defer="defer" th:src="@{/webjars/htmx.org/dist/htmx.min.js}"></script>
 </head>
 <body>
 <div class="admin-shell">
@@ -21,6 +21,7 @@
             <a th:href="@{/admin/payments/top-up}" th:classappend="${activeNav == 'payments'} ? ' active'">资金操作</a>
             <a th:href="@{/admin/ledger}" th:classappend="${activeNav == 'ledger'} ? ' active'">账本流水</a>
             <a th:href="@{/admin/reconciliation}" th:classappend="${activeNav == 'reconciliation'} ? ' active'">自动对账</a>
+            <a th:href="@{/admin/reconciliation/rules}" th:classappend="${activeNav == 'reconciliation-rules'} ? ' active'">对账规则</a>
             <a th:href="@{/admin/reconciliation/cases}" th:classappend="${activeNav == 'reconciliation-cases'} ? ' active'">异常工作台</a>
             <a th:href="@{/admin/audit}" th:classappend="${activeNav == 'audit'} ? ' active'">审计日志</a>
         </nav>

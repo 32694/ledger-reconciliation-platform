@@ -22,7 +22,7 @@ import org.springframework.stereotype.Component;
 public final class StatementCsvParser {
     private static final List<String> HEADER = List.of(
             "channel_transaction_id", "amount_cents", "occurred_at");
-    private static final int MAX_ROWS = 10_000;
+    private static final int MAX_ROWS = 100_000;
 
     public ParsedStatement parse(byte[] content) {
         String csvText = decodeUtf8(content);
@@ -51,7 +51,7 @@ public final class StatementCsvParser {
         for (CSVRecord record : parser) {
             int lineNumber = Math.toIntExact(record.getRecordNumber() + 1);
             if (record.getRecordNumber() > MAX_ROWS) {
-                throw new IllegalArgumentException("CSV exceeds 10000 data rows at line " + lineNumber);
+                throw new IllegalArgumentException("CSV exceeds 100000 data rows at line " + lineNumber);
             }
             if (record.size() != HEADER.size()) {
                 throw new IllegalArgumentException("CSV line " + lineNumber + " must contain exactly 3 fields");

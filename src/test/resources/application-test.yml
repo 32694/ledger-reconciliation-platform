@@ -9,6 +9,12 @@ spring:
       ddl-auto: validate
   flyway:
     enabled: true
+  batch:
+    job:
+      enabled: false
+    jdbc:
+      initialize-schema: never
+      table-prefix: batch.BATCH_
 
 app:
   admin:

@@ -10,7 +10,7 @@
 - `accounts`：创建、查询模拟客户账户，余额由账本分录计算。
 - `ledger`：保存平衡且不可变的 journal，展示近期账本流水。
 - `payments`：幂等充值、账户转账，以及成功充值的全额退款、成功转账的全额冲正。
-- `reconciliation`：导入合成渠道账单，异步执行精确匹配对账，记录差异处理。
+- `reconciliation`：导入合成渠道账单，以 Spring Batch 分块执行可恢复对账，记录规则版本和差异处理。
 - `audit`：记录管理员业务动作和结果，提供按 action/outcome 筛选的审计日志页面。
 
 转账采用**双重记账**：一条 `DEBIT` 和一条 `CREDIT` 必须同时入账。PostgreSQL 行锁保证并发扣款按账户串行执行。
@@ -28,7 +28,7 @@
 
 近期资金操作表中的每条记录都可以打开交易详情。成功的充值可以提交**全额退款**，成功的转账可以提交**全额冲正**；操作要求填写原因和唯一幂等键。反向操作成功后，原交易保持不变，详情页互相显示原交易和反向交易链接，账本中保留两份不可变 journal。失败反向操作会保留底层失败码（例如 `INSUFFICIENT_FUNDS`），补足源钱包后必须使用新幂等键重试。
 
-异步对账支持固定 CSV 格式。任务由**应用进程内本地线程池**执行，批次详情通过 HTMX 展示运行状态和历次 attempt；失败后可由管理员重新发起。应用重启会把尚未结束的运行标记为失败，原任务不会续跑，需人工重新发起。
+异步对账使用 Spring Batch，以 500 行为一个提交检查点。导入时选择已启用渠道，并锁定该渠道规则或默认规则的已发布、不可变版本。批次详情通过 HTMX 展示运行进度；可从失败前的检查点继续同一次运行，也可新建尝试重新处理。单个数据库只能由一个应用实例执行对账；多副本必须由部署环境的外部 leader election、lease 和 heartbeat 保证唯一调度者并检测失联，应用自身不实现这些协调机制。
 
 对账差异在**异常工作台**中按待处理、处理中和已解决流转，认领、取消认领和解决操作形成不可变时间线，并同步写入审计日志。解决差异只记录运营结论，不会自动修改账本、支付或渠道账单事实。完整格式和操作步骤见[用户手册](docs/USER_GUIDE.md)。管理员业务动作会通过应用接口只追加地写入审计事件，应用不提供修改或删除入口；可在审计日志页按 action 和 outcome 筛选。
 
@@ -42,9 +42,9 @@
 
 ## 前置条件
 
-- macOS 或其他 Unix-like 系统
+- Git 与 POSIX 兼容 shell
 - JDK 17
-- PostgreSQL 17（Homebrew）或 Docker Desktop（Docker Compose）
+- PostgreSQL 17 或 Docker Compose
 
 ## 快速启动
 
@@ -52,13 +52,13 @@
 cp .env.example .env
 # 修改 .env 中的数据库和管理员密码；密码使用单行单引号值，且不要包含单引号。
 set -a
-source .env
+. ./.env
 set +a
 docker compose up -d
 ./mvnw spring-boot:run
 ```
 
-打开 <http://localhost:8080/login>，使用 `APP_ADMIN_USERNAME` 和 `APP_ADMIN_PASSWORD` 登录。应用不会自动读取 `.env`，每个新终端都需要重新执行 `source`。数据库启动后，Flyway 会在应用启动阶段自动执行待执行迁移。
+打开 <http://localhost:8080/login>，使用 `APP_ADMIN_USERNAME` 和 `APP_ADMIN_PASSWORD` 登录。应用不会自动读取 `.env`，每个新终端都需要重新执行 `set -a; . ./.env; set +a`。数据库启动后，Flyway 会在应用启动阶段自动执行待执行迁移。
 
 完整的本地启动、业务操作、失败重试和常见错误处理见[用户手册](docs/USER_GUIDE.md)；迁移到另一台电脑或迁移 PostgreSQL 数据见[迁移手册](docs/MIGRATION.md)。
 
@@ -67,7 +67,29 @@ docker compose up -d
 准备好 `ledger_platform_test` 后运行：
 
 ```sh
+SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/ledger_platform_test \
+SPRING_DATASOURCE_USERNAME="$DB_USERNAME" \
+SPRING_DATASOURCE_PASSWORD="$DB_PASSWORD" \
 ./mvnw clean verify
 ```
 
 该命令会编译、执行测试并生成可运行的 JAR：`target/ledger-reconciliation-platform-0.1.0-SNAPSHOT.jar`。
+
+## 100,000 行演示
+
+生成确定性渠道账单：
+
+```sh
+scripts/generate-reconciliation-demo.sh ./reconciliation-demo.csv 100000
+```
+
+性能验证是 opt-in，不包含在默认测试中：
+
+```sh
+SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/ledger_platform_test \
+SPRING_DATASOURCE_USERNAME="$DB_USERNAME" \
+SPRING_DATASOURCE_PASSWORD="$DB_PASSWORD" \
+./mvnw -Preconciliation-performance -Dit.test=ReconciliationPerformanceIT verify
+```
+
+该验证会演示 100,000 行分块处理、一次确定性失败后的同一运行恢复，并打印 `elapsedMs`、`channelRowsPerSecond`、`channelRows`、`resultRows` 和 `restartCount`；不以固定耗时阈值判定结果。

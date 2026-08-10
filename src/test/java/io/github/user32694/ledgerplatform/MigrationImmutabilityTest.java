@@ -64,6 +64,30 @@ class MigrationImmutabilityTest {
                 "c0688282edb80c2f5d552bd316fd9112cac3c28d459fdb5fc475acb4927a7a40");
     }
 
+    @Test
+    void v13MatchesThePublishedClaimedStatusMigration()
+            throws IOException, NoSuchAlgorithmException {
+        assertMigrationDigest(
+                "V13__allow_claimed_reconciliation_status.sql",
+                "a29cfb9bc6848ce3460b32dce56e70ae2c3d2abb94241a10cafcfdd80001d303");
+    }
+
+    @Test
+    void v14MatchesThePublishedRulesAndWorkResultsMigration()
+            throws IOException, NoSuchAlgorithmException {
+        assertMigrationDigest(
+                "V14__add_reconciliation_rules_and_work_results.sql",
+                "b76063f9b85305de90eb6c4ee65689d7660c9faf7133f45d9910808848981b94");
+    }
+
+    @Test
+    void v15MatchesThePublishedSpringBatchMetadataMigration()
+            throws IOException, NoSuchAlgorithmException {
+        assertMigrationDigest(
+                "V15__create_spring_batch_metadata.sql",
+                "7f9b2dabf91b2d8ad13975302cfe303c245da59a80d2eb483f821df27554e2d9");
+    }
+
     private void assertMigrationDigest(String name, String expected)
             throws IOException, NoSuchAlgorithmException {
         var digest = MessageDigest.getInstance("SHA-256").digest(readMigration(name));

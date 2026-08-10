@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{admin/layout :: shell('编辑对账规则', ${activeNav}, ~{::main})}">
+<main class="content content-narrow">
+    <div class="page-heading">
+        <div>
+            <p class="eyebrow" th:text="${ruleTitle}">默认规则</p>
+            <h1>编辑对账规则</h1>
+        </div>
+        <div class="actions">
+            <a class="button button-secondary" th:href="@{/admin/reconciliation/rules/{id}/history(id=${rule.id})}">历史版本</a>
+            <a class="button button-secondary" th:href="@{/admin/reconciliation/rules}">返回规则</a>
+        </div>
+    </div>
+    <p class="alert alert-success" th:if="${ruleSuccess}" th:text="${ruleSuccess}">草稿已保存</p>
+    <p class="alert alert-error" th:if="${ruleError}" th:text="${ruleError}">草稿保存失败</p>
+    <h2>当前生效值</h2>
+    <dl class="definition-grid">
+        <div><dt>规则</dt><dd th:text="${ruleTitle}">默认规则</dd></div>
+        <div><dt>适用范围</dt><dd th:text="${scopeLabel}">全局默认</dd></div>
+        <div><dt>生效版本</dt><dd th:text="${effectiveVersionLabel}">版本 1</dd></div>
+        <div><dt>金额容差</dt><dd th:text="${effectiveAmount + ' 元'}">0.00 元</dd></div>
+        <div><dt>查询窗口</dt><dd th:text="${effectiveWindow + ' 小时'}">0 小时</dd></div>
+        <div><dt>草稿状态</dt><dd th:text="${rule.draft == null ? '无待发布草稿' : '待发布草稿'}">无待发布草稿</dd></div>
+    </dl>
+    <form class="form-surface" method="post"
+          th:action="@{/admin/reconciliation/rules/{id}/draft(id=${rule.id})}">
+        <input type="hidden" name="expectedDraftPresent" th:value="${expectedDraftPresent}">
+        <input type="hidden" name="expectedDraftId" th:if="${expectedDraftPresent}" th:value="${expectedDraftId}">
+        <input type="hidden" name="expectedAmountToleranceCents" th:if="${expectedDraftPresent}"
+               th:value="${expectedAmountToleranceCents}">
+        <input type="hidden" name="expectedQueryWindowHours" th:if="${expectedDraftPresent}"
+               th:value="${expectedQueryWindowHours}">
+        <div class="field" th:classappend="${amountError != null} ? ' field-invalid'">
+            <label for="amountTolerance">金额容差（元）</label>
+            <input id="amountTolerance" name="amountTolerance" type="text" inputmode="decimal"
+                   th:value="${amountTolerance}" aria-describedby="amountTolerance-help amountTolerance-error" required>
+            <small id="amountTolerance-help">请输入不小于 0 的金额，最多保留两位小数</small>
+            <p id="amountTolerance-error" class="field-error" th:if="${amountError}"
+               th:text="${amountError}">金额容差无效</p>
+        </div>
+        <div class="field" th:classappend="${windowError != null} ? ' field-invalid'">
+            <label for="queryWindowHours">查询窗口（小时）</label>
+            <input id="queryWindowHours" name="queryWindowHours" type="number" min="0" max="168" step="1"
+                   th:value="${queryWindowHours}" aria-describedby="queryWindowHours-help queryWindowHours-error" required>
+            <small id="queryWindowHours-help">请输入 0 到 168 之间的整数</small>
+            <p id="queryWindowHours-error" class="field-error" th:if="${windowError}"
+               th:text="${windowError}">查询窗口无效</p>
+        </div>
+        <div class="form-actions">
+            <a class="button button-secondary" th:href="@{/admin/reconciliation/rules}">取消</a>
+            <button class="button button-primary" type="submit">保存草稿</button>
+        </div>
+    </form>
+    <div class="publish-action" th:if="${rule.draft != null}">
+        <form class="inline-form" method="post"
+              th:action="@{/admin/reconciliation/rules/{id}/publish(id=${rule.id})}">
+            <span th:text="${'待发布参数：' + pendingSummary}">待发布参数：0.00 元 / 0 小时</span>
+            <input type="hidden" name="expectedDraftId" th:value="${rule.draft.id}">
+            <input type="hidden" name="expectedAmountToleranceCents" th:value="${rule.draft.amountToleranceCents}">
+            <input type="hidden" name="expectedQueryWindowHours" th:value="${rule.draft.queryWindowHours}">
+            <button class="button button-primary" type="submit">发布此版本</button>
+        </form>
+    </div>
+</main>
+</html>

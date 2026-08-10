@@ -16,4 +16,15 @@ class AdminResponsiveCssTest {
                 .contains(".page-heading { align-items: stretch; flex-direction: column; }")
                 .contains(".page-heading .actions { justify-content: flex-start; }");
     }
+
+    @Test
+    void reconciliationProgressHasStableSizeAndMobileWrapping() throws IOException {
+        String css = Files.readString(Path.of("src/main/resources/static/css/admin.css"));
+
+        assertThat(css)
+                .contains(".reconciliation-run-status { min-height: 154px;")
+                .contains(".reconciliation-progress { min-width: 0;")
+                .contains(".reconciliation-run-actions { flex-wrap: wrap;")
+                .contains(".reconciliation-progress { grid-template-columns: minmax(0, 1fr) auto; }");
+    }
 }
