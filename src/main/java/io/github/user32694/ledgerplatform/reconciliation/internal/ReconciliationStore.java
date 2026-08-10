@@ -12,13 +12,16 @@ import io.github.user32694.ledgerplatform.reconciliation.ReconciliationRunView;
 import io.github.user32694.ledgerplatform.reconciliation.ResolutionCode;
 import io.github.user32694.ledgerplatform.reconciliation.ResolutionStatus;
 import io.github.user32694.ledgerplatform.reconciliation.RunStatus;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.Collection;
-import java.util.Map;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import jakarta.persistence.EntityManager;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,8 +34,10 @@ class ReconciliationStore {
     private final ReconciliationResolutionRepository resolutionRepository;
     private final ReconciliationCaseEventRepository caseEventRepository;
     private final ReconciliationRunRepository runRepository;
+    private final ReconciliationResultWorkRepository workRepository;
     private final AuditApi auditApi;
     private final EntityManager entityManager;
+    private final JdbcTemplate jdbcTemplate;
 
     ReconciliationStore(
             ReconciliationBatchRepository batchRepository,
@@ -41,16 +46,20 @@ class ReconciliationStore {
             ReconciliationResolutionRepository resolutionRepository,
             ReconciliationCaseEventRepository caseEventRepository,
             ReconciliationRunRepository runRepository,
+            ReconciliationResultWorkRepository workRepository,
             AuditApi auditApi,
-            EntityManager entityManager) {
+            EntityManager entityManager,
+            JdbcTemplate jdbcTemplate) {
         this.batchRepository = batchRepository;
         this.entryRepository = entryRepository;
         this.resultRepository = resultRepository;
         this.resolutionRepository = resolutionRepository;
         this.caseEventRepository = caseEventRepository;
         this.runRepository = runRepository;
+        this.workRepository = workRepository;
         this.auditApi = auditApi;
         this.entityManager = entityManager;
+        this.jdbcTemplate = jdbcTemplate;
     }
 
     @Transactional
@@ -114,6 +123,81 @@ class ReconciliationStore {
                 AuditOutcome.SUCCEEDED,
                 "对账运行成功",
                 run.id().toString()));
+        return batch.toView();
+    }
+
+    @Transactional
+    void writeWorkResults(
+            UUID runId, UUID batchId, List<ReconciliationWorkResult> results) {
+        if (results.isEmpty()) {
+            return;
+        }
+        var createdAt = Instant.now();
+        jdbcTemplate.batchUpdate("""
+                INSERT INTO reconciliation.reconciliation_result_work
+                    (id, run_id, batch_id, statement_entry_id, payment_id,
+                     result_type, resolution_status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT DO NOTHING
+                """, results, results.size(), (statement, result) -> {
+                    statement.setObject(1, UUID.randomUUID());
+                    statement.setObject(2, runId);
+                    statement.setObject(3, batchId);
+                    statement.setObject(4, result.statementEntryId());
+                    statement.setObject(5, result.paymentId());
+                    statement.setString(6, result.resultType().name());
+                    statement.setString(7, result.resolutionStatus().name());
+                    statement.setTimestamp(8, Timestamp.from(createdAt));
+                });
+    }
+
+    @Transactional(readOnly = true)
+    Set<UUID> findConsumedPaymentIds(UUID runId, Collection<UUID> paymentIds) {
+        if (paymentIds.isEmpty()) {
+            return Set.of();
+        }
+        return workRepository.findConsumedPaymentIds(runId, paymentIds);
+    }
+
+    @Transactional
+    ReconciliationBatchView promoteWorkResults(UUID runId) {
+        var run = findRunForUpdate(runId);
+        var batch = batchRepository.findByIdForUpdate(run.batchId())
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Batch does not exist: " + run.batchId()));
+        resultRepository.deleteAllByBatchId(batch.id());
+        resultRepository.flush();
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_result
+                    (id, batch_id, statement_entry_id, payment_id, result_type,
+                     resolution_status, created_at)
+                SELECT id, batch_id, statement_entry_id, payment_id, result_type,
+                       resolution_status, created_at
+                FROM reconciliation.reconciliation_result_work
+                WHERE run_id = ?
+                """, runId);
+        int matchedRows = jdbcTemplate.queryForObject("""
+                SELECT count(*) FROM reconciliation.reconciliation_result_work
+                WHERE run_id = ? AND result_type = 'MATCHED'
+                """, Integer.class, runId);
+        int totalRows = jdbcTemplate.queryForObject("""
+                SELECT count(*) FROM reconciliation.reconciliation_result_work WHERE run_id = ?
+                """, Integer.class, runId);
+        int differenceRows = totalRows - matchedRows;
+        var now = Instant.now();
+        batch.complete(matchedRows, differenceRows, now);
+        run.succeed(matchedRows, differenceRows, now);
+        auditApi.record(reconciliationAudit(
+                run.requestedBy(),
+                AuditAction.RECONCILIATION_RUN,
+                "RECONCILIATION_BATCH",
+                batch.id(),
+                AuditOutcome.SUCCEEDED,
+                "对账运行成功",
+                run.id().toString()));
+        jdbcTemplate.update("""
+                DELETE FROM reconciliation.reconciliation_result_work WHERE batch_id = ?
+                """, batch.id());
         return batch.toView();
     }
 
