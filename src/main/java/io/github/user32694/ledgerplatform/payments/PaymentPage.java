@@ -9,9 +9,4 @@ public record PaymentPage(List<PaymentView> payments, PaymentPageCursor nextCurs
         Objects.requireNonNull(payments, "payments is required");
         payments = List.copyOf(payments);
     }
-
-    /** Alias for callers that refer to the returned position as a cursor. */
-    public PaymentPageCursor cursor() {
-        return nextCursor;
-    }
 }
