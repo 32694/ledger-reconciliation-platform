@@ -81,9 +81,9 @@ class ModularityTest {
         assertThat(accounts.getAnnotation(ApplicationModule.class).allowedDependencies())
                 .containsExactly("ledger", "audit");
         assertThat(payments.getAnnotation(ApplicationModule.class).allowedDependencies())
-                .containsExactly("accounts", "ledger", "audit");
+                .containsExactly("accounts", "ledger", "audit", "messaging");
         assertThat(reconciliation.getAnnotation(ApplicationModule.class).allowedDependencies())
-                .containsExactly("payments", "audit");
+                .containsExactly("payments", "audit", "messaging");
         assertThat(notifications.getAnnotation(ApplicationModule.class).allowedDependencies())
                 .containsExactly("messaging");
     }

@@ -15,6 +15,7 @@ import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
@@ -46,6 +47,7 @@ import org.springframework.test.context.jdbc.SqlMergeMode.MergeMode;
 @ActiveProfiles("test")
 @SqlMergeMode(MergeMode.MERGE)
 @Sql(statements = {
+        "DELETE FROM messaging.outbox_event",
         "DELETE FROM audit.audit_event",
         "TRUNCATE reconciliation.reconciliation_case_event",
         "DELETE FROM reconciliation.reconciliation_resolution",
@@ -60,6 +62,7 @@ import org.springframework.test.context.jdbc.SqlMergeMode.MergeMode;
         "DELETE FROM ledger.ledger_account"
 }, executionPhase = ExecutionPhase.BEFORE_TEST_METHOD)
 @Sql(statements = {
+        "DELETE FROM messaging.outbox_event",
         "DELETE FROM audit.audit_event",
         "TRUNCATE reconciliation.reconciliation_case_event",
         "DELETE FROM reconciliation.reconciliation_resolution",
@@ -394,7 +397,7 @@ class ReconciliationModuleTest {
 
         var batch = reconciliationApi.importStatement(
                 new StatementUpload("ALIPAY", "matching.csv", csv(rows), "admin"));
-        runToCompletion(batch.id(), "operator-match");
+        var run = runToCompletion(batch.id(), "operator-match");
         var completed = reconciliationApi.getBatch(batch.id());
 
         assertThat(completed.status()).isEqualTo(BatchStatus.COMPLETED);
@@ -415,6 +418,7 @@ class ReconciliationModuleTest {
                     assertThat(event.aggregateId()).isEqualTo(batch.id().toString());
                     assertThat(event.outcome()).isEqualTo(AuditOutcome.SUCCEEDED);
                 });
+        assertReconciliationCompletedEvent(completed, run);
     }
 
     @Test
@@ -492,6 +496,7 @@ class ReconciliationModuleTest {
                     assertThat(event.actor()).isEqualTo("operator-failed");
                     assertThat(event.aggregateId()).isEqualTo(batch.id().toString());
                 });
+        assertThat(reconciliationEventCount(batch.id())).isZero();
     }
 
     @Test
@@ -581,7 +586,8 @@ class ReconciliationModuleTest {
                     assertThat(run.status()).isEqualTo(RunStatus.FAILED);
                     assertThat(run.errorMessage()).isEqualTo("Application restarted before run completion");
                 });
-        assertThat(reconciliationApi.getBatch(queuedBatch.id()))
+        var completedQueuedBatch = reconciliationApi.getBatch(queuedBatch.id());
+        assertThat(completedQueuedBatch)
                 .satisfies(batch -> {
                     assertThat(batch.status()).isEqualTo(BatchStatus.COMPLETED);
                     assertThat(batch.errorMessage()).isNull();
@@ -596,6 +602,9 @@ class ReconciliationModuleTest {
                 .satisfies(run -> assertThat(run.status()).isEqualTo(RunStatus.QUEUED));
         assertThat(reconciliationApi.getBatch(currentProcessBatch.id()).status())
                 .isEqualTo(BatchStatus.IMPORTED);
+        assertReconciliationCompletedEvent(completedQueuedBatch, recoveredQueued);
+        assertThat(reconciliationEventCount(runningBatch.id())).isZero();
+        assertThat(reconciliationEventCount(currentProcessBatch.id())).isZero();
     }
 
     @Test
@@ -1060,6 +1069,37 @@ class ReconciliationModuleTest {
                     'RECONCILIATION_CASE_RELEASE',
                     'RECONCILIATION_CASE_RESOLVE')
                 """, Long.class);
+    }
+
+    private void assertReconciliationCompletedEvent(
+            ReconciliationBatchView batch, ReconciliationRunView run) {
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList("""
+                SELECT event_type, aggregate_type, aggregate_id, schema_version,
+                       payload = jsonb_build_object(
+                           'batchId', ?,
+                           'runId', ?,
+                           'matchedRows', CAST(? AS integer),
+                           'differenceRows', CAST(? AS integer)
+                       ) AS payload_matches
+                FROM messaging.outbox_event
+                WHERE aggregate_type = 'RECONCILIATION_BATCH' AND aggregate_id = ?
+                """, batch.id().toString(), run.id().toString(), batch.matchedRows(),
+                batch.differenceRows(), batch.id().toString());
+
+        assertThat(rows).singleElement().satisfies(row -> {
+            assertThat(row.get("event_type")).isEqualTo("RECONCILIATION_COMPLETED");
+            assertThat(row.get("aggregate_type")).isEqualTo("RECONCILIATION_BATCH");
+            assertThat(row.get("aggregate_id")).isEqualTo(batch.id().toString());
+            assertThat(row.get("schema_version")).isEqualTo(1);
+            assertThat(row.get("payload_matches")).isEqualTo(true);
+        });
+    }
+
+    private long reconciliationEventCount(UUID batchId) {
+        return jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM messaging.outbox_event
+                WHERE aggregate_type = 'RECONCILIATION_BATCH' AND aggregate_id = ?
+                """, Long.class, batchId.toString());
     }
 
     private ReconciliationRunView awaitRunStatus(UUID batchId, RunStatus expected)

@@ -12,8 +12,12 @@ import io.github.user32694.ledgerplatform.ledger.LedgerApi;
 import io.github.user32694.ledgerplatform.ledger.LedgerBalanceLimitExceededException;
 import io.github.user32694.ledgerplatform.ledger.LedgerInsufficientFundsException;
 import io.github.user32694.ledgerplatform.ledger.Money;
+import io.github.user32694.ledgerplatform.messaging.EventType;
+import io.github.user32694.ledgerplatform.messaging.OutboxApi;
+import io.github.user32694.ledgerplatform.messaging.OutboxCommand;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -28,16 +32,19 @@ class PaymentProcessor {
     private final AccountsApi accountsApi;
     private final LedgerApi ledgerApi;
     private final AuditApi auditApi;
+    private final OutboxApi outboxApi;
 
     PaymentProcessor(
             PaymentInstructionRepository repository,
             AccountsApi accountsApi,
             LedgerApi ledgerApi,
-            AuditApi auditApi) {
+            AuditApi auditApi,
+            OutboxApi outboxApi) {
         this.repository = repository;
         this.accountsApi = accountsApi;
         this.ledgerApi = ledgerApi;
         this.auditApi = auditApi;
+        this.outboxApi = outboxApi;
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -91,6 +98,16 @@ class PaymentProcessor {
             }
             payment.succeed(Instant.now());
             auditApi.record(paymentAudit(payment, AuditOutcome.SUCCEEDED));
+            outboxApi.append(new OutboxCommand(
+                    EventType.PAYMENT_SUCCEEDED,
+                    "PAYMENT",
+                    payment.id().toString(),
+                    1,
+                    Map.of(
+                            "paymentType", payment.paymentType(),
+                            "amountCents", payment.amountCents(),
+                            "channelReference", payment.channelReference()),
+                    payment.occurredAt()));
         } catch (LedgerInsufficientFundsException exception) {
             throw new PaymentRejectedException(payment.id(), INSUFFICIENT_FUNDS);
         } catch (LedgerBalanceLimitExceededException exception) {
