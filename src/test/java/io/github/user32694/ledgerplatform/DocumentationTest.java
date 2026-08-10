@@ -14,6 +14,8 @@ class DocumentationTest {
     @ParameterizedTest
     @ValueSource(strings = {
         ".env.example",
+        ".dockerignore",
+        "Dockerfile",
         "compose.yaml",
         "docs/USER_GUIDE.md",
         "docs/MIGRATION.md"
@@ -22,6 +24,17 @@ class DocumentationTest {
         assertThat(Files.isRegularFile(Path.of(relativePath)))
                 .as("%s should be a regular file", relativePath)
                 .isTrue();
+    }
+
+    @org.junit.jupiter.api.Test
+    void composeDefinesPortableApplicationDatabaseAndRabbitMqServices() throws IOException {
+        String compose = Files.readString(Path.of("compose.yaml"));
+
+        assertThat(compose)
+                .contains("app:", "db:", "rabbitmq:", "15672:15672")
+                .contains("condition: service_healthy")
+                .contains("DB_PASSWORD:?", "RABBITMQ_PASSWORD:?", "APP_ADMIN_PASSWORD:?")
+                .doesNotContain("demo-password-2026");
     }
 
     @org.junit.jupiter.api.Test
