@@ -2,6 +2,8 @@ package io.github.user32694.ledgerplatform.reconciliation.internal;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.springframework.batch.core.BatchStatus;
 import org.springframework.batch.core.explore.JobExplorer;
 import org.springframework.batch.core.launch.JobOperator;
@@ -15,6 +17,7 @@ import io.github.user32694.ledgerplatform.reconciliation.RunStatus;
 @Component
 class ReconciliationJobRecovery {
     private static final String ABANDONED_MESSAGE = "Application restarted before run completion";
+    private static final Log LOGGER = LogFactory.getLog(ReconciliationJobRecovery.class);
 
     private final ReconciliationStore store;
     private final ReconciliationJobLauncher jobLauncher;
@@ -62,36 +65,63 @@ class ReconciliationJobRecovery {
     @EventListener(ApplicationReadyEvent.class)
     void recover() {
         for (var run : store.findRecoverableRuns(recoveryCutoff)) {
-            if (run.status() == RunStatus.RUNNING && run.batchJobExecutionId() != null) {
-                recoverStaleRunning(run);
-                continue;
-            }
-            switch (actionFor(run)) {
-                case SUBMIT -> jobLauncher.submit(run.id());
-                case RESTART -> recoverStaleRunning(run);
-                case FAIL -> store.failRun(run.id(), ABANDONED_MESSAGE);
+            try {
+                recover(run);
+            } catch (Exception exception) {
+                String message = stableMessage(exception);
+                try {
+                    store.failRun(run.id(), message);
+                } catch (Exception persistenceException) {
+                    LOGGER.error("Failed to persist recovery failure for run " + run.id(), persistenceException);
+                }
             }
         }
     }
 
-    private void recoverStaleRunning(ReconciliationRunView run) {
-        long executionId = run.batchJobExecutionId();
+    private void recover(ReconciliationRunView run) throws Exception {
+        if (run.status() == RunStatus.QUEUED && run.batchJobExecutionId() == null) {
+            if (store.claimQueuedRecovery(run.id())) {
+                jobLauncher.submit(run.id());
+            }
+            return;
+        }
+        if (run.status() == RunStatus.RUNNING) {
+            recoverStaleRunning(run);
+            return;
+        }
+        store.failRun(run.id(), ABANDONED_MESSAGE);
+    }
+
+    private void recoverStaleRunning(ReconciliationRunView run) throws Exception {
+        Long executionId = run.batchJobExecutionId();
+        if (executionId == null) {
+            store.claimStaleRunningRecovery(
+                    run.id(), null, run.restartCount(), true, ABANDONED_MESSAGE);
+            return;
+        }
         var execution = jobExplorer.getJobExecution(executionId);
         if (execution == null) {
-            store.failRun(run.id(), ABANDONED_MESSAGE);
+            store.claimStaleRunningRecovery(
+                    run.id(), executionId, run.restartCount(), true, ABANDONED_MESSAGE);
+            return;
+        }
+        boolean claimed = store.claimStaleRunningRecovery(
+                run.id(), executionId, run.restartCount(), false, ABANDONED_MESSAGE);
+        if (!claimed) {
             return;
         }
         execution.setStatus(BatchStatus.FAILED);
         execution.setEndTime(java.time.LocalDateTime.now());
         execution.setExitStatus(new org.springframework.batch.core.ExitStatus("FAILED", ABANDONED_MESSAGE));
         jobRepository.update(execution);
-        store.failRun(run.id(), ABANDONED_MESSAGE);
         if (run.restartCount() == 0) {
-            try {
-                jobOperator.restart(executionId);
-            } catch (Exception exception) {
-                // The failed run remains available for an explicit operator restart.
-            }
+            jobOperator.restart(executionId);
         }
+    }
+
+    private static String stableMessage(Exception exception) {
+        String detail = exception.getMessage() == null ? "" : ": " + exception.getMessage();
+        String message = exception.getClass().getSimpleName() + detail;
+        return message.substring(0, Math.min(message.length(), 2000));
     }
 }

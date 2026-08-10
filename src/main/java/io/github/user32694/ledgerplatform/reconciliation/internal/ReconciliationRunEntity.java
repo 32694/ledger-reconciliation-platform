@@ -156,6 +156,16 @@ class ReconciliationRunEntity {
         return batchJobExecutionId;
     }
 
+    void attachExecution(Long jobInstanceId, Long jobExecutionId) {
+        batchJobInstanceId = jobInstanceId;
+        batchJobExecutionId = jobExecutionId;
+    }
+
+    void clearExecution() {
+        batchJobInstanceId = null;
+        batchJobExecutionId = null;
+    }
+
     int restartCount() {
         return restartCount;
     }

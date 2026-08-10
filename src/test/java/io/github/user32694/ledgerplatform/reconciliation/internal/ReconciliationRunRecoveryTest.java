@@ -69,9 +69,13 @@ class ReconciliationRunRecoveryTest {
     }
 
     private static ReconciliationRunEntity runningRun(Long instanceId, Long executionId) {
-        var run = ReconciliationRunEntity.queued(
-                UUID.randomUUID(), 1, "operator", Instant.parse("2026-01-15T10:00:00Z"));
+        var run = queuedRun();
         run.start(instanceId, executionId, Instant.parse("2026-01-15T10:01:00Z"));
         return run;
+    }
+
+    private static ReconciliationRunEntity queuedRun() {
+        return ReconciliationRunEntity.queued(
+                UUID.randomUUID(), 1, "operator", Instant.parse("2026-01-15T10:00:00Z"));
     }
 }

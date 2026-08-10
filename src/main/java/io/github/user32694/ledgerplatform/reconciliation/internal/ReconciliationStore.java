@@ -107,6 +107,39 @@ class ReconciliationStore {
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
+    boolean claimQueuedRecovery(UUID runId) {
+        var run = findRunForUpdate(runId);
+        if (run.status() != RunStatus.QUEUED || run.batchJobExecutionId() != null) {
+            return false;
+        }
+        var batch = findEntity(run.batchId());
+        var now = Instant.now();
+        run.start(null, null, now);
+        batch.start(now);
+        return true;
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    boolean claimStaleRunningRecovery(
+            UUID runId,
+            Long expectedExecutionId,
+            int expectedRestartCount,
+            boolean clearExecution,
+            String message) {
+        var run = findRunForUpdate(runId);
+        if (run.status() != RunStatus.RUNNING
+                || !java.util.Objects.equals(run.batchJobExecutionId(), expectedExecutionId)
+                || run.restartCount() != expectedRestartCount) {
+            return false;
+        }
+        if (clearExecution) {
+            run.clearExecution();
+        }
+        failLockedRun(run, message);
+        return true;
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     ReconciliationRunView markRunRunning(UUID runId) {
         return beginRun(runId, null, null);
     }
@@ -119,6 +152,9 @@ class ReconciliationStore {
             if (batch.status() != BatchStatus.RUNNING) {
                 throw new IllegalStateException(
                         "Running run requires a RUNNING batch, but was " + batch.status());
+            }
+            if (jobInstanceId != null || jobExecutionId != null) {
+                run.attachExecution(jobInstanceId, jobExecutionId);
             }
             return run.toView();
         }
@@ -222,6 +258,10 @@ class ReconciliationStore {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     void failRun(UUID runId, String message) {
         var run = findRunForUpdate(runId);
+        failLockedRun(run, message);
+    }
+
+    private void failLockedRun(ReconciliationRunEntity run, String message) {
         if (!run.fail(message, Instant.now())) {
             return;
         }

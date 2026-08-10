@@ -12,6 +12,10 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -45,6 +49,39 @@ class ReconciliationWorkStoreTest {
     @Autowired ReconciliationStore store;
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired AuditApi auditApi;
+
+    @Test
+    void atomicallyClaimsAQueuedRunForRecoveryOnce() throws Exception {
+        insertBatch("IMPORTED", 1);
+        var queued = store.queueRun(BATCH_ID, "operator").run();
+
+        assertThat(race(() -> store.claimQueuedRecovery(queued.id())))
+                .containsExactlyInAnyOrder(true, false);
+        assertThat(store.getRun(queued.id()).status())
+                .isEqualTo(io.github.user32694.ledgerplatform.reconciliation.RunStatus.RUNNING);
+    }
+
+    @Test
+    void atomicallyClaimsAStaleRunningExecutionOnceAndCanClearItsMissingExecutionId() throws Exception {
+        insertBatch("RUNNING", 1);
+        insertRun(SECOND_RUN_ID, 2, "RUNNING");
+        jdbcTemplate.update("""
+                UPDATE reconciliation.reconciliation_run
+                SET batch_job_execution_id = 123, batch_job_instance_id = 12
+                WHERE id = ?
+                """, SECOND_RUN_ID);
+
+        assertThat(race(() -> store.claimStaleRunningRecovery(
+                        SECOND_RUN_ID, 123L, 0, true, "missing execution")))
+                .containsExactlyInAnyOrder(true, false);
+        assertThat(store.getRun(SECOND_RUN_ID))
+                .satisfies(failed -> {
+                    assertThat(failed.status())
+                            .isEqualTo(io.github.user32694.ledgerplatform.reconciliation.RunStatus.FAILED);
+                    assertThat(failed.batchJobExecutionId()).isNull();
+                    assertThat(failed.errorMessage()).isEqualTo("missing execution");
+                });
+    }
 
     @Test
     void keepsAnAlreadyRunningRunAndBatchStartTimeUnchanged() {
@@ -192,5 +229,25 @@ class ReconciliationWorkStoreTest {
 
     private int count(String table) {
         return jdbcTemplate.queryForObject("SELECT count(*) FROM " + table, Integer.class);
+    }
+
+    private static List<Boolean> race(Callable<Boolean> action) throws Exception {
+        var ready = new CountDownLatch(2);
+        var start = new CountDownLatch(1);
+        Callable<Boolean> contender = () -> {
+            ready.countDown();
+            start.await(5, TimeUnit.SECONDS);
+            return action.call();
+        };
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            var first = executor.submit(contender);
+            var second = executor.submit(contender);
+            assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            return List.of(first.get(10, TimeUnit.SECONDS), second.get(10, TimeUnit.SECONDS));
+        } finally {
+            executor.shutdownNow();
+        }
     }
 }
