@@ -107,16 +107,27 @@ class ReconciliationStore {
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    boolean claimQueuedRecovery(UUID runId) {
+    boolean claimQueuedRecovery(UUID runId, Long jobInstanceId, Long jobExecutionId) {
         var run = findRunForUpdate(runId);
-        if (run.status() != RunStatus.QUEUED || run.batchJobExecutionId() != null) {
+        if (run.status() != RunStatus.QUEUED
+                || (run.batchJobExecutionId() != null
+                        && !java.util.Objects.equals(run.batchJobExecutionId(), jobExecutionId))) {
             return false;
         }
         var batch = findEntity(run.batchId());
         var now = Instant.now();
-        run.start(null, null, now);
+        run.start(jobInstanceId, jobExecutionId, now);
         batch.start(now);
         return true;
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    void recordSubmittedExecution(UUID runId, Long jobInstanceId, Long jobExecutionId) {
+        var run = findRunForUpdate(runId);
+        if (run.batchJobExecutionId() == null
+                || java.util.Objects.equals(run.batchJobExecutionId(), jobExecutionId)) {
+            run.attachExecution(jobInstanceId, jobExecutionId);
+        }
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -131,6 +142,10 @@ class ReconciliationStore {
                 || !java.util.Objects.equals(run.batchJobExecutionId(), expectedExecutionId)
                 || run.restartCount() != expectedRestartCount) {
             return false;
+        }
+        if (!clearExecution && expectedRestartCount == 0) {
+            run.reserveRestart();
+            return true;
         }
         if (clearExecution) {
             run.clearExecution();

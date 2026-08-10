@@ -55,10 +55,15 @@ class ReconciliationWorkStoreTest {
         insertBatch("IMPORTED", 1);
         var queued = store.queueRun(BATCH_ID, "operator").run();
 
-        assertThat(race(() -> store.claimQueuedRecovery(queued.id())))
+        assertThat(race(() -> store.claimQueuedRecovery(queued.id(), 41L, 51L)))
                 .containsExactlyInAnyOrder(true, false);
-        assertThat(store.getRun(queued.id()).status())
-                .isEqualTo(io.github.user32694.ledgerplatform.reconciliation.RunStatus.RUNNING);
+        assertThat(store.getRun(queued.id()))
+                .satisfies(claimed -> {
+                    assertThat(claimed.status())
+                            .isEqualTo(io.github.user32694.ledgerplatform.reconciliation.RunStatus.RUNNING);
+                    assertThat(claimed.batchJobInstanceId()).isEqualTo(41L);
+                    assertThat(claimed.batchJobExecutionId()).isEqualTo(51L);
+                });
     }
 
     @Test
@@ -80,6 +85,38 @@ class ReconciliationWorkStoreTest {
                             .isEqualTo(io.github.user32694.ledgerplatform.reconciliation.RunStatus.FAILED);
                     assertThat(failed.batchJobExecutionId()).isNull();
                     assertThat(failed.errorMessage()).isEqualTo("missing execution");
+                });
+    }
+
+    @Test
+    void reservesOneAutomaticRestartThenFailsAfterARecoveryCrash() throws Exception {
+        insertBatch("RUNNING", 1);
+        insertRun(SECOND_RUN_ID, 2, "RUNNING");
+        jdbcTemplate.update("""
+                UPDATE reconciliation.reconciliation_run
+                SET batch_job_execution_id = 123, batch_job_instance_id = 12
+                WHERE id = ?
+                """, SECOND_RUN_ID);
+
+        assertThat(race(() -> store.claimStaleRunningRecovery(
+                        SECOND_RUN_ID, 123L, 0, false, "interrupted")))
+                .containsExactlyInAnyOrder(true, false);
+        assertThat(store.getRun(SECOND_RUN_ID))
+                .satisfies(reserved -> {
+                    assertThat(reserved.status())
+                            .isEqualTo(io.github.user32694.ledgerplatform.reconciliation.RunStatus.RUNNING);
+                    assertThat(reserved.restartCount()).isOne();
+                });
+
+        assertThat(store.claimStaleRunningRecovery(
+                SECOND_RUN_ID, 123L, 1, false, "manual restart required"))
+                .isTrue();
+        assertThat(store.getRun(SECOND_RUN_ID))
+                .satisfies(failed -> {
+                    assertThat(failed.status())
+                            .isEqualTo(io.github.user32694.ledgerplatform.reconciliation.RunStatus.FAILED);
+                    assertThat(failed.restartCount()).isOne();
+                    assertThat(failed.errorMessage()).isEqualTo("manual restart required");
                 });
     }
 

@@ -23,6 +23,9 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.batch.core.JobParametersBuilder;
+import org.springframework.batch.core.explore.JobExplorer;
+import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -84,6 +87,8 @@ class ReconciliationModuleTest {
     @Autowired JdbcTemplate jdbcTemplate;
     @Autowired ApplicationEventPublisher eventPublisher;
     @Autowired ConfigurableApplicationContext applicationContext;
+    @Autowired JobExplorer jobExplorer;
+    @Autowired JobRepository jobRepository;
 
     @BeforeEach
     void resetReconciliationRuleFixtureBeforeTest() {
@@ -584,6 +589,35 @@ class ReconciliationModuleTest {
                 .satisfies(run -> assertThat(run.status()).isEqualTo(RunStatus.QUEUED));
         assertThat(reconciliationApi.getBatch(currentProcessBatch.id()).status())
                 .isEqualTo(BatchStatus.IMPORTED);
+    }
+
+    @Test
+    void startupRecoveryReusesAnExecutionAcceptedBeforeBeforeJob() throws Exception {
+        var batch = reconciliationApi.importStatement(new StatementUpload(
+                "ALIPAY", "accepted-before-listener.csv",
+                csv("CH-ACCEPTED-BEFORE-LISTENER,1,2026-01-15T09:30:00Z\n"), "admin"));
+        var runId = UUID.randomUUID();
+        jdbcTemplate.update(
+                """
+                INSERT INTO reconciliation.reconciliation_run
+                    (id, batch_id, attempt_number, status, requested_by, requested_at)
+                VALUES (?, ?, 1, 'QUEUED', 'operator-recovery', ?)
+                """,
+                runId,
+                batch.id(),
+                Timestamp.from(Instant.parse("2026-01-15T10:00:00Z")));
+        var parameters = new JobParametersBuilder()
+                .addString("runId", runId.toString(), true)
+                .toJobParameters();
+        var accepted = jobRepository.createJobExecution("reconciliationJob", parameters);
+
+        eventPublisher.publishEvent(new ApplicationReadyEvent(
+                new SpringApplication(), new String[0], applicationContext, Duration.ZERO));
+
+        var recovered = awaitRunStatus(batch.id(), RunStatus.SUCCEEDED);
+        assertThat(recovered.batchJobInstanceId())
+                .isEqualTo(accepted.getJobInstance().getInstanceId());
+        assertThat(jobExplorer.getJobExecutions(accepted.getJobInstance())).hasSize(2);
     }
 
     @Test

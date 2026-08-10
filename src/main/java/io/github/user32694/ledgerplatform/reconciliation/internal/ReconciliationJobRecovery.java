@@ -2,6 +2,7 @@ package io.github.user32694.ledgerplatform.reconciliation.internal;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.UUID;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.springframework.batch.core.BatchStatus;
@@ -79,8 +80,25 @@ class ReconciliationJobRecovery {
     }
 
     private void recover(ReconciliationRunView run) throws Exception {
-        if (run.status() == RunStatus.QUEUED && run.batchJobExecutionId() == null) {
-            if (store.claimQueuedRecovery(run.id())) {
+        if (run.status() == RunStatus.QUEUED) {
+            var existingExecution = run.batchJobExecutionId() == null
+                    ? findExistingExecution(run.id())
+                    : jobExplorer.getJobExecution(run.batchJobExecutionId());
+            if (existingExecution != null) {
+                boolean claimed = store.claimQueuedRecovery(
+                        run.id(),
+                        existingExecution.getJobInstance().getInstanceId(),
+                        existingExecution.getId());
+                if (claimed) {
+                    recoverStaleRunning(store.getRun(run.id()));
+                }
+            } else if (run.batchJobExecutionId() != null) {
+                boolean claimed = store.claimQueuedRecovery(
+                        run.id(), run.batchJobInstanceId(), run.batchJobExecutionId());
+                if (claimed) {
+                    recoverStaleRunning(store.getRun(run.id()));
+                }
+            } else if (store.claimQueuedRecovery(run.id(), null, null)) {
                 jobLauncher.submit(run.id());
             }
             return;
@@ -90,6 +108,12 @@ class ReconciliationJobRecovery {
             return;
         }
         store.failRun(run.id(), ABANDONED_MESSAGE);
+    }
+
+    private org.springframework.batch.core.JobExecution findExistingExecution(UUID runId) {
+        var jobInstance = jobExplorer.getJobInstance(
+                jobLauncher.jobName(), ReconciliationJobLauncher.parameters(runId));
+        return jobInstance == null ? null : jobExplorer.getLastJobExecution(jobInstance);
     }
 
     private void recoverStaleRunning(ReconciliationRunView run) throws Exception {

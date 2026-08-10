@@ -166,6 +166,13 @@ class ReconciliationRunEntity {
         batchJobExecutionId = null;
     }
 
+    void reserveRestart() {
+        if (status != RunStatus.RUNNING || restartCount != 0) {
+            throw new IllegalStateException("Run cannot reserve restart from " + status);
+        }
+        restartCount = 1;
+    }
+
     int restartCount() {
         return restartCount;
     }

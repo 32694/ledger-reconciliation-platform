@@ -12,8 +12,14 @@ import org.springframework.stereotype.Component;
 
 @Component
 class ReconciliationJobLauncher {
+    @FunctionalInterface
+    interface ExecutionRecorder {
+        void accept(UUID runId, Long jobInstanceId, Long jobExecutionId);
+    }
+
     private final Job reconciliationJob;
     private final JobLauncher batchJobLauncher;
+    private final ExecutionRecorder executionRecorder;
     private final BiConsumer<UUID, String> failureRecorder;
 
     @Autowired
@@ -21,26 +27,47 @@ class ReconciliationJobLauncher {
             Job reconciliationJob,
             @Qualifier("reconciliationBatchJobLauncher") JobLauncher batchJobLauncher,
             ReconciliationStore store) {
-        this(reconciliationJob, batchJobLauncher, store::failRun);
+        this(reconciliationJob, batchJobLauncher, store::recordSubmittedExecution, store::failRun);
     }
 
     ReconciliationJobLauncher(
             Job reconciliationJob, JobLauncher batchJobLauncher, BiConsumer<UUID, String> failureRecorder) {
+        this(reconciliationJob, batchJobLauncher, (runId, instanceId, executionId) -> {}, failureRecorder);
+    }
+
+    ReconciliationJobLauncher(
+            Job reconciliationJob,
+            JobLauncher batchJobLauncher,
+            ExecutionRecorder executionRecorder,
+            BiConsumer<UUID, String> failureRecorder) {
         this.reconciliationJob = reconciliationJob;
         this.batchJobLauncher = batchJobLauncher;
+        this.executionRecorder = executionRecorder;
         this.failureRecorder = failureRecorder;
     }
 
     void submit(UUID runId) {
         try {
-            batchJobLauncher.run(reconciliationJob, new JobParametersBuilder()
-                    .addString("runId", runId.toString(), true)
-                    .toJobParameters());
+            var execution = batchJobLauncher.run(reconciliationJob, parameters(runId));
+            if (execution != null && execution.getJobInstance() != null && execution.getId() != null) {
+                executionRecorder.accept(
+                        runId, execution.getJobInstance().getInstanceId(), execution.getId());
+            }
         } catch (TaskRejectedException exception) {
             failureRecorder.accept(runId, "TaskRejectedException: reconciliation batch launcher rejected the task");
         } catch (Exception exception) {
             failureRecorder.accept(runId, stableMessage(exception));
         }
+    }
+
+    String jobName() {
+        return reconciliationJob.getName();
+    }
+
+    static org.springframework.batch.core.JobParameters parameters(UUID runId) {
+        return new JobParametersBuilder()
+                .addString("runId", runId.toString(), true)
+                .toJobParameters();
     }
 
     private static String stableMessage(Exception exception) {

@@ -1,13 +1,14 @@
 package io.github.user32694.ledgerplatform.reconciliation.internal;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
+import org.springframework.batch.core.JobInstance;
 import org.junit.jupiter.api.Test;
 import org.springframework.batch.core.Job;
 import org.springframework.batch.core.JobExecution;
 import org.springframework.batch.core.JobParameters;
-import org.springframework.batch.core.JobExecution;
 import org.springframework.batch.core.BatchStatus;
 import org.springframework.batch.core.launch.JobLauncher;
 import org.springframework.core.task.TaskRejectedException;
@@ -54,6 +55,29 @@ class ReconciliationJobLauncherTest {
         }).submit(runId);
 
         assertThat(failure.get()).isEqualTo("TaskRejectedException: reconciliation batch launcher rejected the task");
+    }
+
+    @Test
+    void recordsTheExecutionReturnedBeforeTheJobListenerRuns() {
+        UUID runId = UUID.randomUUID();
+        var execution = new JobExecution(
+                new JobInstance(41L, "reconciliationJob"),
+                51L,
+                ReconciliationJobLauncher.parameters(runId));
+        JobLauncher batchLauncher = (job, parameters) -> execution;
+        AtomicReference<List<Long>> recorded = new AtomicReference<>();
+
+        new ReconciliationJobLauncher(
+                        job(),
+                        batchLauncher,
+                        (id, instanceId, executionId) -> {
+                            assertThat(id).isEqualTo(runId);
+                            recorded.set(List.of(instanceId, executionId));
+                        },
+                        (id, message) -> {})
+                .submit(runId);
+
+        assertThat(recorded.get()).containsExactly(41L, 51L);
     }
 
     private static Job job() {
