@@ -247,7 +247,12 @@ class ReconciliationWorkStoreTest {
             start.countDown();
             return List.of(first.get(10, TimeUnit.SECONDS), second.get(10, TimeUnit.SECONDS));
         } finally {
-            executor.shutdownNow();
+            start.countDown();
+            executor.shutdown();
+            if (!executor.awaitTermination(10, TimeUnit.SECONDS)) {
+                executor.shutdownNow();
+                assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
+            }
         }
     }
 }
