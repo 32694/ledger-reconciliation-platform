@@ -131,6 +131,17 @@ class ReconciliationStore {
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
+    boolean clearMissingFailedExecution(UUID runId, Long expectedExecutionId) {
+        var run = findRunForUpdate(runId);
+        if (run.status() != RunStatus.FAILED
+                || !java.util.Objects.equals(run.batchJobExecutionId(), expectedExecutionId)) {
+            return false;
+        }
+        run.clearExecution();
+        return true;
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     boolean claimStaleRunningRecovery(
             UUID runId,
             Long expectedExecutionId,
@@ -308,6 +319,14 @@ class ReconciliationStore {
     List<ReconciliationRunView> findRecoverableRuns(Instant recoveryCutoff) {
         return runRepository.findAllRecoverableBefore(
                         List.of(RunStatus.QUEUED, RunStatus.RUNNING), recoveryCutoff)
+                .stream()
+                .map(ReconciliationRunEntity::toView)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    List<ReconciliationRunView> findFailedRunsWithExecution(Instant recoveryCutoff) {
+        return runRepository.findAllFailedWithExecutionBefore(RunStatus.FAILED, recoveryCutoff)
                 .stream()
                 .map(ReconciliationRunEntity::toView)
                 .toList();

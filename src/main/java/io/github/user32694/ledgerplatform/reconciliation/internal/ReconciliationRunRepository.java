@@ -28,6 +28,17 @@ interface ReconciliationRunRepository extends JpaRepository<ReconciliationRunEnt
             @Param("statuses") Collection<RunStatus> statuses,
             @Param("recoveryCutoff") java.time.Instant recoveryCutoff);
 
+    @Query("""
+            SELECT run FROM ReconciliationRunEntity run
+            WHERE run.status = :status
+              AND run.batchJobExecutionId IS NOT NULL
+              AND run.requestedAt < :recoveryCutoff
+            ORDER BY run.requestedAt ASC, run.id ASC
+            """)
+    List<ReconciliationRunEntity> findAllFailedWithExecutionBefore(
+            @Param("status") RunStatus status,
+            @Param("recoveryCutoff") java.time.Instant recoveryCutoff);
+
     long countByStatus(RunStatus status);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)

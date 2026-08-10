@@ -2,6 +2,7 @@ package io.github.user32694.ledgerplatform.reconciliation.internal;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.EnumSet;
 import java.util.UUID;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -18,6 +19,11 @@ import io.github.user32694.ledgerplatform.reconciliation.RunStatus;
 @Component
 class ReconciliationJobRecovery {
     private static final String ABANDONED_MESSAGE = "Application restarted before run completion";
+    private static final EnumSet<BatchStatus> ACTIVE_BATCH_STATUSES = EnumSet.of(
+            BatchStatus.STARTING,
+            BatchStatus.STARTED,
+            BatchStatus.STOPPING,
+            BatchStatus.UNKNOWN);
     private static final Log LOGGER = LogFactory.getLog(ReconciliationJobRecovery.class);
 
     private final ReconciliationStore store;
@@ -69,13 +75,24 @@ class ReconciliationJobRecovery {
             try {
                 recover(run);
             } catch (Exception exception) {
-                String message = stableMessage(exception);
-                try {
-                    store.failRun(run.id(), message);
-                } catch (Exception persistenceException) {
-                    LOGGER.error("Failed to persist recovery failure for run " + run.id(), persistenceException);
-                }
+                persistRecoveryFailure(run, exception);
             }
+        }
+        for (var run : store.findFailedRunsWithExecution(recoveryCutoff)) {
+            try {
+                recoverFailedExecution(run);
+            } catch (Exception exception) {
+                persistRecoveryFailure(run, exception);
+            }
+        }
+    }
+
+    private void persistRecoveryFailure(ReconciliationRunView run, Exception exception) {
+        String message = stableMessage(exception);
+        try {
+            store.failRun(run.id(), message);
+        } catch (Exception persistenceException) {
+            LOGGER.error("Failed to persist recovery failure for run " + run.id(), persistenceException);
         }
     }
 
@@ -114,6 +131,22 @@ class ReconciliationJobRecovery {
         var jobInstance = jobExplorer.getJobInstance(
                 jobLauncher.jobName(), ReconciliationJobLauncher.parameters(runId));
         return jobInstance == null ? null : jobExplorer.getLastJobExecution(jobInstance);
+    }
+
+    private void recoverFailedExecution(ReconciliationRunView run) {
+        Long executionId = run.batchJobExecutionId();
+        var execution = jobExplorer.getJobExecution(executionId);
+        if (execution == null) {
+            store.clearMissingFailedExecution(run.id(), executionId);
+            return;
+        }
+        if (!ACTIVE_BATCH_STATUSES.contains(execution.getStatus())) {
+            return;
+        }
+        execution.setStatus(BatchStatus.FAILED);
+        execution.setEndTime(java.time.LocalDateTime.now());
+        execution.setExitStatus(new org.springframework.batch.core.ExitStatus("FAILED", ABANDONED_MESSAGE));
+        jobRepository.update(execution);
     }
 
     private void recoverStaleRunning(ReconciliationRunView run) throws Exception {

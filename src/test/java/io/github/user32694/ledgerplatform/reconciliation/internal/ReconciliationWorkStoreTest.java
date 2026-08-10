@@ -121,6 +121,21 @@ class ReconciliationWorkStoreTest {
     }
 
     @Test
+    void clearsOnlyTheExpectedMissingExecutionFromAFailedRun() {
+        insertBatch("RECONCILIATION_FAILED", 1);
+        insertRun(SECOND_RUN_ID, 2, "FAILED");
+        jdbcTemplate.update("""
+                UPDATE reconciliation.reconciliation_run
+                SET batch_job_execution_id = 123, batch_job_instance_id = 12
+                WHERE id = ?
+                """, SECOND_RUN_ID);
+
+        assertThat(store.clearMissingFailedExecution(SECOND_RUN_ID, 999L)).isFalse();
+        assertThat(store.clearMissingFailedExecution(SECOND_RUN_ID, 123L)).isTrue();
+        assertThat(store.getRun(SECOND_RUN_ID).batchJobExecutionId()).isNull();
+    }
+
+    @Test
     void keepsAnAlreadyRunningRunAndBatchStartTimeUnchanged() {
         var startedAt = Instant.parse("2026-08-10T01:02:03Z");
         insertBatch("RUNNING", 2);

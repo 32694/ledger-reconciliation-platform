@@ -621,6 +621,54 @@ class ReconciliationModuleTest {
     }
 
     @Test
+    void startupRecoveryTerminatesAnActiveExecutionForAnAlreadyFailedRun() throws Exception {
+        var batch = reconciliationApi.importStatement(new StatementUpload(
+                "ALIPAY", "failed-domain-active-execution.csv",
+                csv("CH-FAILED-DOMAIN-ACTIVE,1,2026-01-15T09:30:00Z\n"), "admin"));
+        var runId = UUID.randomUUID();
+        var parameters = new JobParametersBuilder()
+                .addString("runId", runId.toString(), true)
+                .toJobParameters();
+        var activeExecution = jobRepository.createJobExecution("reconciliationJob", parameters);
+        var staleAt = Timestamp.from(Instant.parse("2026-01-15T10:00:00Z"));
+        jdbcTemplate.update("""
+                UPDATE reconciliation.reconciliation_batch
+                SET status = 'RECONCILIATION_FAILED', started_at = ?, completed_at = ?,
+                    error_message = 'recovery interrupted'
+                WHERE id = ?
+                """, staleAt, staleAt, batch.id());
+        jdbcTemplate.update("""
+                INSERT INTO reconciliation.reconciliation_run
+                    (id, batch_id, attempt_number, status, requested_by, requested_at,
+                     started_at, completed_at, error_message, batch_job_instance_id,
+                     batch_job_execution_id, restart_count)
+                VALUES (?, ?, 1, 'FAILED', 'operator-recovery', ?, ?, ?,
+                        'recovery interrupted', ?, ?, 1)
+                """,
+                runId,
+                batch.id(),
+                staleAt,
+                staleAt,
+                staleAt,
+                activeExecution.getJobInstance().getInstanceId(),
+                activeExecution.getId());
+
+        eventPublisher.publishEvent(new ApplicationReadyEvent(
+                new SpringApplication(), new String[0], applicationContext, Duration.ZERO));
+
+        assertThat(jobExplorer.getJobExecution(activeExecution.getId()).getStatus())
+                .isEqualTo(org.springframework.batch.core.BatchStatus.FAILED);
+        assertThat(reconciliationApi.findRuns(batch.id()))
+                .singleElement()
+                .satisfies(run -> {
+                    assertThat(run.status()).isEqualTo(RunStatus.FAILED);
+                    assertThat(run.batchJobExecutionId()).isEqualTo(activeExecution.getId());
+                    assertThat(run.restartCount()).isOne();
+                });
+        assertThat(jobExplorer.getJobExecutions(activeExecution.getJobInstance())).hasSize(1);
+    }
+
+    @Test
     void managesClaimReleaseAndResolutionWithOrderedEvidence() {
         var difference = createChannelOnlyDifference("lifecycle");
 
