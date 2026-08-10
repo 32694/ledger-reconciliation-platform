@@ -80,6 +80,9 @@ class ReconciliationBatchJobTest {
                         mismatch.channelReference(), 110, statementAt.plus(1, ChronoUnit.MINUTES),
                         "batch-channel-only", 90, statementAt.plus(2, ChronoUnit.MINUTES)),
                 "importer"));
+        assertThat(batch.status())
+                .withFailMessage("对账单导入失败: %s", batch.errorMessage())
+                .isEqualTo(io.github.user32694.ledgerplatform.reconciliation.BatchStatus.IMPORTED);
         assertThat(batch.amountToleranceCents()).isEqualTo(rule.amountToleranceCents());
         assertThat(batch.queryWindowHours()).isEqualTo(rule.queryWindowHours());
         var run = store.queueRun(batch.id(), "batch-operator").run();
@@ -123,7 +126,7 @@ class ReconciliationBatchJobTest {
     }
 
     private static byte[] csv(Object... values) {
-        return ("transaction_id,amount_cents,occurred_at\n"
+        return ("channel_transaction_id,amount_cents,occurred_at\n"
                 + "%s,%s,%s\n".formatted(values[0], values[1], values[2])
                 + "%s,%s,%s\n".formatted(values[3], values[4], values[5])
                 + "%s,%s,%s\n".formatted(values[6], values[7], values[8]))
