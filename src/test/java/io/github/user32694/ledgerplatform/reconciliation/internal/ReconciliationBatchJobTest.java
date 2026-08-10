@@ -3,6 +3,9 @@ package io.github.user32694.ledgerplatform.reconciliation.internal;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.user32694.ledgerplatform.accounts.AccountsApi;
+import io.github.user32694.ledgerplatform.audit.AuditAction;
+import io.github.user32694.ledgerplatform.audit.AuditApi;
+import io.github.user32694.ledgerplatform.audit.AuditOutcome;
 import io.github.user32694.ledgerplatform.payments.PaymentsApi;
 import io.github.user32694.ledgerplatform.payments.TopUpCommand;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationApi;
@@ -48,6 +51,7 @@ class ReconciliationBatchJobTest {
             UUID.fromString("00000000-0000-0000-0000-000000000102");
 
     @Autowired ReconciliationApi reconciliationApi;
+    @Autowired AuditApi auditApi;
     @Autowired ReconciliationRulesApi rulesApi;
     @Autowired AccountsApi accountsApi;
     @Autowired PaymentsApi paymentsApi;
@@ -133,6 +137,39 @@ class ReconciliationBatchJobTest {
     }
 
     @Test
+    void clearsStaleWorkBeforeTheFirstExecution() throws Exception {
+        var account = accountsApi.create("Stale Work Customer");
+        var payment = paymentsApi.topUp(new TopUpCommand("stale-work-match", account.id(), 100));
+        var batch = reconciliationApi.importStatement(new StatementUpload(
+                "ALIPAY",
+                "stale-work.csv",
+                csv(
+                        payment.channelReference(), 100, payment.occurredAt(),
+                        "stale-work-channel-only-1", 200, payment.occurredAt(),
+                        "stale-work-channel-only-2", 300, payment.occurredAt()),
+                "importer"));
+        var run = store.queueRun(batch.id(), "batch-operator").run();
+        UUID matchedStatementId = jdbcTemplate.queryForObject("""
+                SELECT id FROM reconciliation.channel_statement_entry
+                WHERE batch_id = ? AND channel_transaction_id = ?
+                """, UUID.class, batch.id(), payment.channelReference());
+        store.writeWorkResults(run.id(), batch.id(), java.util.List.of(new ReconciliationWorkResult(
+                matchedStatementId, null, ResultType.CHANNEL_ONLY, ResolutionStatus.OPEN)));
+
+        JobExecution execution = jobLauncher.run(reconciliationJob, new JobParametersBuilder()
+                .addString("runId", run.id().toString(), true)
+                .toJobParameters());
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);
+        assertThat(reconciliationApi.findResults(batch.id(), null, null))
+                .extracting(result -> result.resultType())
+                .containsExactlyInAnyOrder(
+                        ResultType.MATCHED,
+                        ResultType.CHANNEL_ONLY,
+                        ResultType.CHANNEL_ONLY);
+    }
+
+    @Test
     void processesTheFirstStatementBeyondTheFiveHundredRowPageBoundary() throws Exception {
         var batch = reconciliationApi.importStatement(new StatementUpload(
                 "ALIPAY", "batch-job-501.csv", channelOnlyCsv(501), "importer"));
@@ -204,6 +241,11 @@ class ReconciliationBatchJobTest {
                     assertThat(failedExecution.getStatus()).isEqualTo(BatchStatus.FAILED);
                     assertThat(failedExecution.getEndTime()).isNotNull();
                 });
+        assertThat(auditApi.findRecent(
+                        AuditAction.RECONCILIATION_RUN, AuditOutcome.SUCCEEDED, 100))
+                .extracting(event -> event.actor(), event -> event.summary())
+                .contains(org.assertj.core.groups.Tuple.tuple(
+                        "system-recovery", "对账运行由系统自动恢复"));
 
         jdbcTemplate.update("""
                 UPDATE reconciliation.reconciliation_run
@@ -237,6 +279,11 @@ class ReconciliationBatchJobTest {
         assertThat(completed.attemptNumber()).isEqualTo(queued.attemptNumber());
         assertThat(completed.batchJobInstanceId()).isEqualTo(firstExecution.getJobInstance().getInstanceId());
         assertThat(completed.processedItems()).isLessThanOrEqualTo(completed.totalItems());
+        assertThat(auditApi.findRecent(
+                        AuditAction.RECONCILIATION_RUN, AuditOutcome.SUCCEEDED, 100))
+                .extracting(event -> event.actor(), event -> event.summary())
+                .contains(org.assertj.core.groups.Tuple.tuple(
+                        "manual-operator", "对账运行由管理员恢复"));
     }
 
     @Test

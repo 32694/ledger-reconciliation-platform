@@ -88,12 +88,18 @@ public class ReconciliationFacade implements ReconciliationApi {
         if (operator == null || operator.isBlank()) {
             throw new IllegalArgumentException("Operator is required");
         }
+        String normalizedOperator = operator.strip();
         try {
             var executionId = store.restartableExecutionId(runId);
+            boolean submitted;
             if (executionId.isPresent()) {
                 jobOperator.restart(executionId.get());
+                submitted = true;
             } else {
-                jobLauncher.submit(runId);
+                submitted = jobLauncher.submit(runId);
+            }
+            if (submitted) {
+                store.recordRunRecovery(runId, normalizedOperator, "对账运行由管理员恢复");
             }
         } catch (Exception exception) {
             throw new IllegalStateException("Run cannot restart: " + runId, exception);

@@ -46,6 +46,7 @@ class ReconciliationJobConfiguration {
         return new StepBuilder("prepareReconciliationStep", jobRepository)
                 .tasklet((contribution, chunkContext) -> {
                     UUID runId = runId(chunkContext.getStepContext().getJobParameters().get("runId"));
+                    store.clearWorkResults(runId);
                     var batch = store.getBatchForRun(runId);
                     store.initializeRunTotal(runId, Math.toIntExact(
                             Math.min(Integer.MAX_VALUE, (long) batch.totalRows()

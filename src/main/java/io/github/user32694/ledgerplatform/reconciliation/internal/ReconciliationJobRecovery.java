@@ -19,6 +19,7 @@ import io.github.user32694.ledgerplatform.reconciliation.RunStatus;
 @Component
 class ReconciliationJobRecovery {
     private static final String ABANDONED_MESSAGE = "Application restarted before run completion";
+    private static final String SYSTEM_RECOVERY_ACTOR = "system-recovery";
     private static final EnumSet<BatchStatus> ACTIVE_BATCH_STATUSES = EnumSet.of(
             BatchStatus.STARTING,
             BatchStatus.STARTED,
@@ -32,12 +33,6 @@ class ReconciliationJobRecovery {
     private final JobRepository jobRepository;
     private final JobOperator jobOperator;
     private final Instant recoveryCutoff;
-
-    enum RecoveryAction {
-        SUBMIT,
-        RESTART,
-        FAIL
-    }
 
     ReconciliationJobRecovery(
             ReconciliationStore store,
@@ -55,18 +50,6 @@ class ReconciliationJobRecovery {
 
     static Instant toDatabasePrecision(Instant instant) {
         return instant.truncatedTo(ChronoUnit.MICROS);
-    }
-
-    static RecoveryAction actionFor(ReconciliationRunView run) {
-        if (run.status() == RunStatus.QUEUED && run.batchJobExecutionId() == null) {
-            return RecoveryAction.SUBMIT;
-        }
-        if (run.status() == RunStatus.RUNNING
-                && run.batchJobExecutionId() != null
-                && run.restartCount() == 0) {
-            return RecoveryAction.RESTART;
-        }
-        return RecoveryAction.FAIL;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -115,8 +98,10 @@ class ReconciliationJobRecovery {
                 if (claimed) {
                     recoverStaleRunning(store.getRun(run.id()));
                 }
-            } else if (store.claimQueuedRecovery(run.id(), null, null)) {
-                jobLauncher.submit(run.id());
+            } else if (store.claimQueuedRecovery(run.id(), null, null)
+                    && jobLauncher.submit(run.id())) {
+                store.recordRunRecovery(
+                        run.id(), SYSTEM_RECOVERY_ACTOR, "对账运行由系统自动恢复");
             }
             return;
         }
@@ -173,6 +158,8 @@ class ReconciliationJobRecovery {
         jobRepository.update(execution);
         if (run.restartCount() == 0) {
             jobOperator.restart(executionId);
+            store.recordRunRecovery(
+                    run.id(), SYSTEM_RECOVERY_ACTOR, "对账运行由系统自动恢复");
         }
     }
 

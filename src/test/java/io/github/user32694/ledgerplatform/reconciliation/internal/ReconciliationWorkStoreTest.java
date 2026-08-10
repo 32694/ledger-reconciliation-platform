@@ -198,12 +198,31 @@ class ReconciliationWorkStoreTest {
     }
 
     @Test
+    void rejectsPromotionWhenStatementWorkIsIncomplete() {
+        insertBatch("RUNNING", 2);
+        insertStatement(FIRST_STATEMENT_ID, 2, "CHANNEL-1");
+        insertStatement(SECOND_STATEMENT_ID, 3, "CHANNEL-2");
+        insertRun(SECOND_RUN_ID, 2, "RUNNING");
+        store.initializeRunTotal(SECOND_RUN_ID, 2);
+        store.writeWorkResults(SECOND_RUN_ID, BATCH_ID, List.of(new ReconciliationWorkResult(
+                FIRST_STATEMENT_ID, null, ResultType.CHANNEL_ONLY, ResolutionStatus.OPEN)));
+
+        assertThatThrownBy(() -> store.promoteWorkResults(SECOND_RUN_ID))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Incomplete reconciliation work");
+        assertThat(store.findResults(BATCH_ID)).isEmpty();
+        assertThat(store.getBatch(BATCH_ID).status())
+                .isEqualTo(io.github.user32694.ledgerplatform.reconciliation.BatchStatus.RUNNING);
+    }
+
+    @Test
     void promotesOnlyTheSelectedRunAndClearsAllBatchWork() {
         insertBatch("RUNNING", 2);
         insertStatement(FIRST_STATEMENT_ID, 2, "CHANNEL-1");
         insertStatement(SECOND_STATEMENT_ID, 3, "CHANNEL-2");
         insertRun(FIRST_RUN_ID, 1, "FAILED");
         insertRun(SECOND_RUN_ID, 2, "RUNNING");
+        store.initializeRunTotal(SECOND_RUN_ID, 3);
         UUID staleCanonicalId = UUID.fromString("50000000-0000-0000-0000-000000000001");
         jdbcTemplate.update("""
                 INSERT INTO reconciliation.reconciliation_result
@@ -213,17 +232,28 @@ class ReconciliationWorkStoreTest {
                 """, staleCanonicalId, BATCH_ID, SECOND_STATEMENT_ID);
         store.writeWorkResults(FIRST_RUN_ID, BATCH_ID, List.of(new ReconciliationWorkResult(
                 SECOND_STATEMENT_ID, null, ResultType.CHANNEL_ONLY, ResolutionStatus.OPEN)));
-        store.writeWorkResults(SECOND_RUN_ID, BATCH_ID, List.of(new ReconciliationWorkResult(
-                FIRST_STATEMENT_ID, PAYMENT_ID, ResultType.MATCHED, ResolutionStatus.NOT_REQUIRED)));
-        UUID selectedWorkId = jdbcTemplate.queryForObject("""
-                SELECT id FROM reconciliation.reconciliation_result_work WHERE run_id = ?
+        store.writeWorkResults(SECOND_RUN_ID, BATCH_ID, List.of(
+                new ReconciliationWorkResult(
+                        FIRST_STATEMENT_ID,
+                        PAYMENT_ID,
+                        ResultType.MATCHED,
+                        ResolutionStatus.NOT_REQUIRED),
+                new ReconciliationWorkResult(
+                        SECOND_STATEMENT_ID,
+                        null,
+                        ResultType.CHANNEL_ONLY,
+                        ResolutionStatus.OPEN)));
+        var selectedWorkIds = jdbcTemplate.queryForList("""
+                SELECT id FROM reconciliation.reconciliation_result_work
+                WHERE run_id = ? ORDER BY id
                 """, UUID.class, SECOND_RUN_ID);
 
         store.promoteWorkResults(SECOND_RUN_ID);
 
         assertThat(jdbcTemplate.queryForList("""
-                SELECT id FROM reconciliation.reconciliation_result WHERE batch_id = ?
-                """, UUID.class, BATCH_ID)).containsExactly(selectedWorkId);
+                SELECT id FROM reconciliation.reconciliation_result
+                WHERE batch_id = ? ORDER BY id
+                """, UUID.class, BATCH_ID)).containsExactlyElementsOf(selectedWorkIds);
         assertThat(count("reconciliation.reconciliation_result_work")).isZero();
         assertThat(jdbcTemplate.queryForMap("""
                 SELECT status, matched_rows, difference_rows
@@ -231,14 +261,14 @@ class ReconciliationWorkStoreTest {
                 """, BATCH_ID))
                 .containsEntry("status", "COMPLETED")
                 .containsEntry("matched_rows", 1)
-                .containsEntry("difference_rows", 0);
+                .containsEntry("difference_rows", 1);
         assertThat(jdbcTemplate.queryForMap("""
                 SELECT status, matched_rows, difference_rows
                 FROM reconciliation.reconciliation_run WHERE id = ?
                 """, SECOND_RUN_ID))
                 .containsEntry("status", "SUCCEEDED")
                 .containsEntry("matched_rows", 1)
-                .containsEntry("difference_rows", 0);
+                .containsEntry("difference_rows", 1);
         assertThat(auditApi.findRecent(
                         AuditAction.RECONCILIATION_RUN, AuditOutcome.SUCCEEDED, 10))
                 .singleElement()

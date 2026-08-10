@@ -46,17 +46,20 @@ class ReconciliationJobLauncher {
         this.failureRecorder = failureRecorder;
     }
 
-    void submit(UUID runId) {
+    boolean submit(UUID runId) {
         try {
             var execution = batchJobLauncher.run(reconciliationJob, parameters(runId));
             if (execution != null && execution.getJobInstance() != null && execution.getId() != null) {
                 executionRecorder.accept(
                         runId, execution.getJobInstance().getInstanceId(), execution.getId());
             }
+            return true;
         } catch (TaskRejectedException exception) {
             failureRecorder.accept(runId, "TaskRejectedException: reconciliation batch launcher rejected the task");
+            return false;
         } catch (Exception exception) {
             failureRecorder.accept(runId, stableMessage(exception));
+            return false;
         }
     }
 

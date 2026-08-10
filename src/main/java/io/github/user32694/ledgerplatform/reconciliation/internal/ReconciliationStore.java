@@ -184,9 +184,20 @@ class ReconciliationStore {
             }
             return run.toView();
         }
+        boolean initialStart = run.status() == RunStatus.QUEUED;
         var startedAt = Instant.now();
         run.start(jobInstanceId, jobExecutionId, startedAt);
         batch.start(startedAt);
+        if (initialStart) {
+            auditApi.record(reconciliationAudit(
+                    run.requestedBy(),
+                    AuditAction.RECONCILIATION_RUN,
+                    "RECONCILIATION_BATCH",
+                    batch.id(),
+                    AuditOutcome.SUCCEEDED,
+                    "对账运行已启动",
+                    run.id().toString()));
+        }
         return run.toView();
     }
 
@@ -231,6 +242,13 @@ class ReconciliationStore {
                 });
     }
 
+    @Transactional
+    void clearWorkResults(UUID runId) {
+        jdbcTemplate.update("""
+                DELETE FROM reconciliation.reconciliation_result_work WHERE run_id = ?
+                """, runId);
+    }
+
     @Transactional(readOnly = true)
     Set<UUID> findConsumedPaymentIds(UUID runId, Collection<UUID> paymentIds) {
         if (paymentIds.isEmpty()) {
@@ -245,6 +263,21 @@ class ReconciliationStore {
         var batch = batchRepository.findByIdForUpdate(run.batchId())
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Batch does not exist: " + run.batchId()));
+        int expectedStatementRows = batch.totalRows();
+        int expectedPaymentRows = run.toView().totalItems() - expectedStatementRows;
+        int actualStatementRows = jdbcTemplate.queryForObject("""
+                SELECT count(statement_entry_id)
+                FROM reconciliation.reconciliation_result_work WHERE run_id = ?
+                """, Integer.class, runId);
+        int actualPaymentRows = jdbcTemplate.queryForObject("""
+                SELECT count(payment_id)
+                FROM reconciliation.reconciliation_result_work WHERE run_id = ?
+                """, Integer.class, runId);
+        if (expectedPaymentRows < 0
+                || actualStatementRows != expectedStatementRows
+                || actualPaymentRows != expectedPaymentRows) {
+            throw new IllegalStateException("Incomplete reconciliation work for run " + runId);
+        }
         resultRepository.deleteAllByBatchId(batch.id());
         resultRepository.flush();
         jdbcTemplate.update("""
@@ -285,6 +318,20 @@ class ReconciliationStore {
     void failRun(UUID runId, String message) {
         var run = findRunForUpdate(runId);
         failLockedRun(run, message);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    void recordRunRecovery(UUID runId, String actor, String summary) {
+        var run = runRepository.findById(runId)
+                .orElseThrow(() -> new IllegalArgumentException("Run does not exist: " + runId));
+        auditApi.record(reconciliationAudit(
+                actor,
+                AuditAction.RECONCILIATION_RUN,
+                "RECONCILIATION_BATCH",
+                run.batchId(),
+                AuditOutcome.SUCCEEDED,
+                summary,
+                run.id().toString()));
     }
 
     private void failLockedRun(ReconciliationRunEntity run, String message) {

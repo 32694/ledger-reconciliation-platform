@@ -35,24 +35,6 @@ class ReconciliationRunRecoveryTest {
     }
 
     @Test
-    void classifiesEveryStaleRunningRunForRestartOrFailure() {
-        var restartable = runningRun(61L, 71L);
-        var missingExecution = runningRun(62L, null);
-        var alreadyRestarted = ReconciliationRunEntity.queued(
-                UUID.randomUUID(), 1, "operator", Instant.parse("2026-01-15T10:00:00Z"));
-        alreadyRestarted.start(63L, 73L, Instant.parse("2026-01-15T10:01:00Z"));
-        alreadyRestarted.fail("first interruption", Instant.parse("2026-01-15T10:02:00Z"));
-        alreadyRestarted.start(63L, 74L, Instant.parse("2026-01-15T10:03:00Z"));
-
-        assertThat(ReconciliationJobRecovery.actionFor(restartable.toView()))
-                .isEqualTo(ReconciliationJobRecovery.RecoveryAction.RESTART);
-        assertThat(ReconciliationJobRecovery.actionFor(missingExecution.toView()))
-                .isEqualTo(ReconciliationJobRecovery.RecoveryAction.FAIL);
-        assertThat(ReconciliationJobRecovery.actionFor(alreadyRestarted.toView()))
-                .isEqualTo(ReconciliationJobRecovery.RecoveryAction.FAIL);
-    }
-
-    @Test
     void keepsCommittedProgressMonotonicAndWithinTheDeclaredTotal() {
         var run = runningRun(81L, 91L);
         run.setTotalItems(1_000);

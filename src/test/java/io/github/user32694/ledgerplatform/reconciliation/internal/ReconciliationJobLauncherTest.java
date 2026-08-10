@@ -33,7 +33,8 @@ class ReconciliationJobLauncherTest {
             return null;
         };
 
-        new ReconciliationJobLauncher(job, batchLauncher, (id, message) -> {}).submit(runId);
+        assertThat(new ReconciliationJobLauncher(job, batchLauncher, (id, message) -> {}).submit(runId))
+                .isTrue();
 
         assertThat(captured.get().getParameters()).containsOnlyKeys("runId");
         var runIdParameter = captured.get().getParameters().get("runId");
@@ -49,10 +50,10 @@ class ReconciliationJobLauncherTest {
         };
         AtomicReference<String> failure = new AtomicReference<>();
 
-        new ReconciliationJobLauncher(job(), batchLauncher, (id, message) -> {
+        assertThat(new ReconciliationJobLauncher(job(), batchLauncher, (id, message) -> {
             assertThat(id).isEqualTo(runId);
             failure.set(message);
-        }).submit(runId);
+        }).submit(runId)).isFalse();
 
         assertThat(failure.get()).isEqualTo("TaskRejectedException: reconciliation batch launcher rejected the task");
     }

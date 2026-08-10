@@ -125,7 +125,8 @@ class ReconciliationModuleTest {
                 batch.id())).isOne();
         awaitRunStatus(batch.id(), RunStatus.SUCCEEDED);
         assertThat(auditApi.findRecent(AuditAction.RECONCILIATION_RUN, AuditOutcome.SUCCEEDED, 100))
-                .hasSize(1);
+                .extracting(event -> event.summary())
+                .containsExactly("对账运行成功", "对账运行已启动");
     }
 
     @Test
@@ -142,8 +143,12 @@ class ReconciliationModuleTest {
         assertThat(reconciliationApi.findResults(batch.id(), ResultType.CHANNEL_ONLY, ResolutionStatus.OPEN))
                 .hasSize(1);
         assertThat(auditApi.findRecent(AuditAction.RECONCILIATION_RUN, AuditOutcome.SUCCEEDED, 100))
-                .singleElement()
-                .satisfies(event -> assertThat(event.actor()).isEqualTo("operator-async"));
+                .extracting(event -> event.actor(), event -> event.summary(), event -> event.correlationReference())
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple(
+                                "operator-async", "对账运行成功", completed.id().toString()),
+                        org.assertj.core.groups.Tuple.tuple(
+                                "operator-async", "对账运行已启动", completed.id().toString()));
     }
 
     @Test
@@ -403,6 +408,7 @@ class ReconciliationModuleTest {
                         ResultType.INTERNAL_ONLY,
                         ResultType.MATCHED);
         assertThat(auditApi.findRecent(AuditAction.RECONCILIATION_RUN, null, 100))
+                .filteredOn(event -> event.summary().equals("对账运行成功"))
                 .singleElement()
                 .satisfies(event -> {
                     assertThat(event.actor()).isEqualTo("operator-match");
@@ -429,7 +435,8 @@ class ReconciliationModuleTest {
                 .map(ReconciliationResultView::id)
                 .toList()).containsExactlyElementsOf(firstResultIds);
         assertThat(auditApi.findRecent(AuditAction.RECONCILIATION_RUN, null, 100))
-                .hasSize(1);
+                .extracting(event -> event.summary())
+                .containsExactly("对账运行成功", "对账运行已启动");
     }
 
     @Test
