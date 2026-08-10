@@ -91,6 +91,43 @@ class MigrationIntegrationTest {
 
     @Test
     @Transactional
+    void createsOutboxAndNotificationTablesWithConstraints() {
+        assertThat(jdbcTemplate.queryForList("""
+                SELECT table_schema || '.' || table_name
+                FROM information_schema.tables
+                WHERE table_schema IN ('messaging', 'notification')
+                ORDER BY table_schema, table_name
+                """, String.class)).containsExactly(
+                        "messaging.outbox_event",
+                        "notification.consumed_message",
+                        "notification.notification");
+
+        assertThatThrownBy(() -> jdbcTemplate.update("""
+                INSERT INTO messaging.outbox_event
+                    (id, aggregate_type, aggregate_id, event_type, schema_version, payload, status,
+                     next_attempt_at, occurred_at, created_at)
+                VALUES (?, 'payment', 'payment-1', 'payment.created', 1, '{}'::jsonb, 'INVALID',
+                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """, UUID.randomUUID())).isInstanceOf(DataIntegrityViolationException.class);
+
+        var eventId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO notification.notification
+                    (id, event_id, notification_type, title, content, aggregate_type, aggregate_id, created_at)
+                VALUES (?, ?, 'PAYMENT', 'Payment created', 'Payment payment-1 was created',
+                        'payment', 'payment-1', CURRENT_TIMESTAMP)
+                """, UUID.randomUUID(), eventId);
+
+        assertThatThrownBy(() -> jdbcTemplate.update("""
+                INSERT INTO notification.notification
+                    (id, event_id, notification_type, title, content, aggregate_type, aggregate_id, created_at)
+                VALUES (?, ?, 'PAYMENT', 'Payment created', 'Payment payment-1 was created',
+                        'payment', 'payment-1', CURRENT_TIMESTAMP)
+                """, UUID.randomUUID(), eventId)).isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    @Transactional
     void createsVersionedReconciliationRulesAndWorkResultConstraints() {
         assertThat(jdbcTemplate.queryForList("""
                 SELECT code
