@@ -28,6 +28,7 @@ import org.springframework.test.context.ActiveProfiles;
 @ActiveProfiles("test")
 class ReconciliationPerformanceIT {
     private static final int ROW_COUNT = 100_000;
+    private static final int EXPECTED_RESULT_COUNT = 110_000;
     private static final Instant OCCURRED_AT = Instant.parse("2026-01-01T12:00:00Z");
 
     @Autowired ReconciliationApi reconciliationApi;
@@ -83,14 +84,14 @@ class ReconciliationPerformanceIT {
         assertThat(resultCount("AMOUNT_MISMATCH")).isEqualTo(10_000);
         assertThat(resultCount("CHANNEL_ONLY")).isEqualTo(80_000);
         assertThat(resultCount("INTERNAL_ONLY")).isEqualTo(10_000);
-        assertThat(totalResults()).isEqualTo(ROW_COUNT);
+        assertThat(totalResults()).isEqualTo(EXPECTED_RESULT_COUNT);
         assertThat(duplicateResultStatementRows()).isZero();
         assertThat(duplicateResultPaymentRows()).isZero();
         assertThat(workRowsForRun(completed.id())).isZero();
 
         System.out.printf(
                 "reconciliation-performance elapsedMs=%d throughputRowsPerSecond=%d total=%d restartCount=%d%n",
-                elapsedMillis, throughput, ROW_COUNT, completed.restartCount());
+                elapsedMillis, throughput, EXPECTED_RESULT_COUNT, completed.restartCount());
     }
 
     private void insertPayments(UUID payeeAccountId) {
