@@ -179,7 +179,7 @@ class ReconciliationBatchJobTest {
 
         jdbcTemplate.update("""
                 UPDATE reconciliation.reconciliation_run
-                SET status = 'RUNNING', requested_at = ?, completed_at = NULL
+                SET status = 'RUNNING', requested_at = ?, completed_at = NULL, error_message = NULL
                 WHERE id = ?
                 """, java.sql.Timestamp.from(Instant.parse("2026-01-15T10:00:00Z")), queued.id());
         jdbcTemplate.update("""
@@ -204,7 +204,7 @@ class ReconciliationBatchJobTest {
 
         jdbcTemplate.update("""
                 UPDATE reconciliation.reconciliation_run
-                SET status = 'RUNNING', requested_at = ?, completed_at = NULL
+                SET status = 'RUNNING', requested_at = ?, completed_at = NULL, error_message = NULL
                 WHERE id = ?
                 """, java.sql.Timestamp.from(Instant.parse("2026-01-15T10:00:00Z")), queued.id());
         jdbcTemplate.update("""
