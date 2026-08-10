@@ -29,12 +29,17 @@ class DocumentationTest {
     @org.junit.jupiter.api.Test
     void composeDefinesPortableApplicationDatabaseAndRabbitMqServices() throws IOException {
         String compose = Files.readString(Path.of("compose.yaml"));
+        String application = Files.readString(Path.of("src/main/resources/application.yml"));
+        String environment = Files.readString(Path.of(".env.example"));
 
         assertThat(compose)
                 .contains("app:", "db:", "rabbitmq:", "15672:15672")
                 .contains("condition: service_healthy")
+                .contains("OUTBOX_PUBLISH_INTERVAL: ${OUTBOX_PUBLISH_INTERVAL:-PT1S}")
                 .contains("DB_PASSWORD:?", "RABBITMQ_PASSWORD:?", "APP_ADMIN_PASSWORD:?")
                 .doesNotContain("demo-password-2026");
+        assertThat(application).contains("publish-interval: ${OUTBOX_PUBLISH_INTERVAL:PT1S}");
+        assertThat(environment).contains("OUTBOX_PUBLISH_INTERVAL=PT1S");
     }
 
     @org.junit.jupiter.api.Test

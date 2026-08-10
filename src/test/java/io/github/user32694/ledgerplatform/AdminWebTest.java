@@ -325,6 +325,7 @@ class AdminWebTest {
                 .andExpect(content().string(containsString("待投递")))
                 .andExpect(content().string(containsString("失败事件")))
                 .andExpect(content().string(containsString("死信队列")))
+                .andExpect(content().string(containsString("消息服务不可用")))
                 .andExpect(content().string(containsString("客户通知")));
 
         mockMvc.perform(get("/admin/notifications"))

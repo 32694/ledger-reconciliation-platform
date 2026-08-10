@@ -42,7 +42,7 @@ app:
     password: ${APP_ADMIN_PASSWORD:}
   messaging:
     publisher-enabled: true
-    publish-interval: PT1S
+    publish-interval: ${OUTBOX_PUBLISH_INTERVAL:PT1S}
     batch-size: 50
     confirm-timeout: PT5S
     stale-lock-timeout: PT60S
