@@ -17,6 +17,7 @@ class DocumentationTest {
         ".dockerignore",
         "Dockerfile",
         "compose.yaml",
+        "LICENSE",
         "docs/USER_GUIDE.md",
         "docs/MIGRATION.md"
     })

@@ -1,6 +1,7 @@
 .worktrees/
 .env
 target/
+.DS_Store
 .idea/
 .vscode/
 *.iml
