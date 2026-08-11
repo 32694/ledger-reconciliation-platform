@@ -8,9 +8,9 @@
 
 | 经营概览 | 交易详情与冲正 |
 | --- | --- |
-| ![经营概览与近期资金操作](docs/images/operations-overview.png) | ![交易详情、双重记账分录与冲正结果](docs/images/payment-detail-reversal.png) |
+| ![经营概览与近期资金操作](docs/images/operations-overview.png) | ![交易详情、全额冲正状态与关联反向交易](docs/images/payment-detail-reversal.png) |
 | 对账异常案件 | 消息运维 |
-| ![对账异常案件与不可变处理时间线](docs/images/reconciliation-case.png) | ![Outbox 状态与 RabbitMQ 队列监控](docs/images/messaging-operations.png) |
+| ![对账异常差异、解决信息与处理时间线](docs/images/reconciliation-case.png) | ![Outbox 状态与 RabbitMQ 队列监控](docs/images/messaging-operations.png) |
 
 ## 核心能力
 
