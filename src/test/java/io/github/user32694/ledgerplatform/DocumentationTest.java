@@ -28,6 +28,36 @@ class DocumentationTest {
     }
 
     @org.junit.jupiter.api.Test
+    void documentsPortfolioShowcase() throws IOException {
+        String readme = Files.readString(Path.of("README.md"));
+        var screenshots = java.util.List.of(
+                "docs/images/operations-overview.png",
+                "docs/images/payment-detail-reversal.png",
+                "docs/images/reconciliation-case.png",
+                "docs/images/messaging-operations.png");
+
+        for (String screenshot : screenshots) {
+            Path screenshotPath = Path.of(screenshot);
+            assertThat(Files.isRegularFile(screenshotPath))
+                    .as("%s should be a regular file", screenshot)
+                    .isTrue();
+            assertThat(Files.size(screenshotPath))
+                    .as("%s should not be empty", screenshot)
+                    .isGreaterThan(0L);
+            assertThat(readme).contains("(" + screenshot + ")");
+        }
+
+        assertThat(readme)
+                .contains("https://github.com/32694/ledger-reconciliation-platform/actions/workflows/build.yml")
+                .contains("## 界面预览", "## 系统架构", "## 三分钟演示")
+                .contains("```mermaid")
+                .contains("Transactional Outbox", "RabbitMQ", "Spring Batch", "at-least-once", "eventId")
+                .contains("[用户手册](docs/USER_GUIDE.md)")
+                .contains("[迁移手册](docs/MIGRATION.md)")
+                .contains("[MIT License](LICENSE)");
+    }
+
+    @org.junit.jupiter.api.Test
     void composeDefinesPortableApplicationDatabaseAndRabbitMqServices() throws IOException {
         String compose = Files.readString(Path.of("compose.yaml"));
         String application = Files.readString(Path.of("src/main/resources/application.yml"));

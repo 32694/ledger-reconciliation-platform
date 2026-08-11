@@ -1,8 +1,24 @@
 # Ledger Reconciliation Platform
 
-一个用于学习和演示的 Java 交易账本与自动对账平台。系统只处理模拟资金和合成数据，不用于真实资金、客户数据或受监管生产场景。
+[![Build](https://github.com/32694/ledger-reconciliation-platform/actions/workflows/build.yml/badge.svg)](https://github.com/32694/ledger-reconciliation-platform/actions/workflows/build.yml)
 
-## 当前能力
+一个面向学习、简历和面试展示的 Java 交易账本与自动对账平台，重点演示资金一致性、可靠消息和对账运营闭环。系统只处理模拟资金和合成数据，不用于真实资金、客户数据或受监管生产场景。
+
+## 界面预览
+
+| 经营概览 | 交易详情与冲正 |
+| --- | --- |
+| ![经营概览与近期资金操作](docs/images/operations-overview.png) | ![交易详情、双重记账分录与冲正结果](docs/images/payment-detail-reversal.png) |
+| 对账异常案件 | 消息运维 |
+| ![对账异常案件与不可变处理时间线](docs/images/reconciliation-case.png) | ![Outbox 状态与 RabbitMQ 队列监控](docs/images/messaging-operations.png) |
+
+## 核心能力
+
+- **资金一致性**：双重记账 journal 不可变，一笔业务的一借一贷必须同时提交并保持平衡。
+- **支付可靠性**：充值、转账、退款和冲正使用幂等键、显式状态机及 PostgreSQL 行锁处理重复请求与并发扣款。
+- **可恢复对账**：Spring Batch 分块处理合成渠道账单，保存规则版本、检查点、差异案件和处理时间线。
+- **可靠消息**：Transactional Outbox 配合 RabbitMQ publisher confirm 实现 at-least-once 投递，消费者按 `eventId` 幂等去重。
+- **审计闭环**：关键运营动作只追加记录结果，支付、账本、对账案件、通知和审计日志可相互核验。
 
 这是一个 Spring Boot 模块化单体，包含以下模块：
 
@@ -37,6 +53,61 @@
 对账差异在**异常工作台**中按待处理、处理中和已解决流转，认领、取消认领和解决操作形成不可变时间线，并同步写入审计日志。解决差异只记录运营结论，不会自动修改账本、支付或渠道账单事实。完整格式和操作步骤见[用户手册](docs/USER_GUIDE.md)。管理员业务动作会通过应用接口只追加地写入审计事件，应用不提供修改或删除入口；可在审计日志页按 action 和 outcome 筛选。
 
 支付或对账事务在同一 PostgreSQL 事务中写入 Transactional Outbox，后台 Publisher 通过 RabbitMQ publisher confirm 确认投递。该链路采用 **at-least-once** 语义，消费者以 `eventId` 做幂等消费；短暂故障会自动重试，永久失败消息进入 DLQ。RabbitMQ 只承担业务事件通知，不替代 Spring Batch 对账任务。
+
+## 系统架构
+
+```mermaid
+flowchart LR
+    ADMIN["管理员<br/>Thymeleaf + HTMX"]
+    CHANNEL["合成渠道账单"]
+
+    subgraph APP["Spring Boot 模块化单体"]
+        PAYMENT["支付模块<br/>幂等与状态机"]
+        LEDGER["账本模块<br/>双重记账"]
+        RECON["对账模块<br/>Spring Batch"]
+        AUDIT["审计模块"]
+        OUTBOX["Transactional Outbox"]
+        PUBLISHER["Outbox Publisher"]
+        CONSUMER["通知消费者<br/>eventId 去重"]
+        NOTICE["站内通知"]
+    end
+
+    DB[("PostgreSQL 17")]
+    MQ["RabbitMQ 4<br/>业务事件通知"]
+    DLQ["DLQ"]
+
+    ADMIN --> PAYMENT
+    PAYMENT --> LEDGER
+    PAYMENT --> AUDIT
+    PAYMENT --> OUTBOX
+    CHANNEL --> RECON
+    RECON --> AUDIT
+    RECON --> OUTBOX
+    LEDGER --> DB
+    RECON --> DB
+    AUDIT --> DB
+    OUTBOX --> DB
+    OUTBOX --> PUBLISHER
+    PUBLISHER -->|publisher confirm| MQ
+    MQ --> CONSUMER
+    MQ -->|永久失败| DLQ
+    CONSUMER --> NOTICE
+    NOTICE --> DB
+```
+
+支付和对账在各自业务事务中同时写入事实数据、审计记录和 Outbox 事件。RabbitMQ 只传递业务通知事件，不调度 Spring Batch 对账任务；链路采用 at-least-once 投递，通知消费者通过 `eventId` 去重。
+
+## 三分钟演示
+
+先按 [快速启动](#快速启动) 运行全部服务并登录管理端。
+
+1. 创建两个合成账户并充值，幂等键 `demo-topup-001`。
+2. 转账、检查金额相等的一借一贷分录、用 `demo-reversal-001` 全额冲正并确认原/反向互链；重复时更换序号。
+3. 查看站内通知和消息运维，确认同一 `eventId` 只生成一条通知。
+4. 按 [用户手册](docs/USER_GUIDE.md) 导入合成渠道账单并等待 Spring Batch 对账。
+5. 在异常工作台认领和解决差异，核对案件时间线和审计日志。
+
+100,000 行与故障恢复见下方性能章节和用户手册。
 
 ## 技术栈
 
@@ -106,3 +177,7 @@ SPRING_DATASOURCE_PASSWORD="$DB_PASSWORD" \
 ```
 
 该验证会演示 100,000 行分块处理、一次确定性失败后的同一运行恢复，并打印 `elapsedMs`、`channelRowsPerSecond`、`channelRows`、`resultRows` 和 `restartCount`；不以固定耗时阈值判定结果。
+
+## 许可证
+
+本项目采用 [MIT License](LICENSE)。
