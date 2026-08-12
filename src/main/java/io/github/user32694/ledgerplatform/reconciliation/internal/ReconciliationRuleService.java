@@ -86,6 +86,7 @@ class ReconciliationRuleService implements ReconciliationRulesApi {
     @Transactional
     public ReconciliationRuleVersionView saveDraft(
             UUID ruleId, ReconciliationRuleDraftCommand command) {
+        // 草稿保存不会改变当前生效版本；发布动作单独完成，便于审阅和回滚。
         requireRuleId(ruleId);
         validate(command);
         String operator = requireOperator(command.operator());
@@ -124,6 +125,7 @@ class ReconciliationRuleService implements ReconciliationRulesApi {
             Optional<ReconciliationRuleVersionEntity> currentDraft,
             ReconciliationRuleDraftCommand command,
             String operator) {
+        // 新草稿从当前生效版本继承参数，并递增版本号，形成可追溯的版本链。
         Instant now = Instant.now();
         var draft = currentDraft.orElseGet(() -> {
             var base = findDraftBase(rule);
@@ -181,6 +183,7 @@ class ReconciliationRuleService implements ReconciliationRulesApi {
     @Override
     @Transactional
     public ReconciliationRuleVersionView publish(UUID ruleId, String operator) {
+        // 发布前锁定规则行，避免两个管理员同时发布覆盖彼此的草稿。
         requireRuleId(ruleId);
         String normalizedOperator = requireOperator(operator);
         var rule = findRuleForUpdate(ruleId);
@@ -214,6 +217,7 @@ class ReconciliationRuleService implements ReconciliationRulesApi {
             ReconciliationRuleEntity rule,
             ReconciliationRuleVersionEntity draft,
             String normalizedOperator) {
+        // 规则版本与规则主表在同一事务中更新，并记录审计事件，保证生效指针一致。
         draft.publish(normalizedOperator, Instant.now());
         versionRepository.flush();
         rule.activate(draft.id());
@@ -241,6 +245,7 @@ class ReconciliationRuleService implements ReconciliationRulesApi {
     @Override
     @Transactional(readOnly = true)
     public ReconciliationRuleVersionView resolvePublishedVersion(String channelCode) {
+        // 解析优先级：渠道专属已发布版本 > 默认已发布版本；案件导入时会把结果锁定到批次。
         var channel = findSelectableChannel(requireChannelCode(channelCode));
         if (!channel.active()) {
             throw new IllegalStateException("对账渠道未启用: " + channel.code());

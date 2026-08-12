@@ -32,6 +32,7 @@ class AccountsService implements AccountsApi {
     @Override
     @Transactional
     public CustomerAccountView create(String ownerName) {
+        // 账户和钱包账务账户在同一事务内创建，避免出现“有业务账户但没有账务账户”的半成品。
         String normalizedOwnerName = requireOwnerName(ownerName);
         UUID accountId = UUID.randomUUID();
         String accountNumber = ACCOUNT_NUMBER_PREFIX
@@ -54,12 +55,14 @@ class AccountsService implements AccountsApi {
     @Override
     @Transactional(readOnly = true)
     public CustomerAccountView get(UUID accountId) {
+        // 对外只返回 View，避免把 JPA Entity 的持久化细节泄露到模块边界之外。
         return toView(findAccount(accountId));
     }
 
     @Override
     @Transactional(readOnly = true)
     public List<CustomerAccountView> findAll() {
+        // 统一按账户号排序，让管理页面和接口返回稳定、可比较的结果。
         return accountRepository.findAllByOrderByAccountNumberAsc().stream()
                 .map(this::toView)
                 .toList();
@@ -68,6 +71,7 @@ class AccountsService implements AccountsApi {
     @Override
     @Transactional(readOnly = true)
     public AccountBalance balance(UUID accountId) {
+        // 余额以账本实时计算结果为准，账户表只保存业务账户与账务账户的映射。
         var account = findAccount(accountId);
         return new AccountBalance(ledgerApi.walletBalance(account.ledgerAccountId()), "CNY");
     }

@@ -33,6 +33,7 @@ class NotificationService implements NotificationsApi {
 
     @Transactional
     void consume(EventEnvelope event) {
+        // 先校验事件契约，再用 eventId 原子去重；重复投递直接返回，不重复创建通知。
         ValidatedEvent validated = validate(event);
         Instant consumedAt = Instant.now();
         if (!consumedMessageStore.claim(event, consumedAt)) {

@@ -26,6 +26,10 @@ class ReconciliationImportService {
     }
 
     ReconciliationBatchView importStatement(StatementUpload upload) {
+        /*
+         * 导入先校验并解析规则，再用文件 SHA-256 做幂等去重。
+         * 同一文件重复上传直接返回已有批次；并发上传发生唯一键竞争时也读取胜出的批次。
+         */
         validateUpload(upload);
         var resolvedRule = ruleService.resolveImportRule(upload.channelCode());
         byte[] content = upload.content();
@@ -35,6 +39,7 @@ class ReconciliationImportService {
             return existing.get().toView();
         }
         try {
+            // 解析失败会保留 IMPORT_FAILED 批次，便于运营人员看到失败原因并重试。
             ParsedStatement parsed = parser.parse(content);
             return store.persistImported(
                             upload.fileName(),

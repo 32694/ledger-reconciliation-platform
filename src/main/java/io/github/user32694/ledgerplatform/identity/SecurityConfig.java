@@ -14,6 +14,7 @@ import org.springframework.security.web.SecurityFilterChain;
 public class SecurityConfig {
     @Bean
     SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        // 管理页面统一要求 ADMIN；登录、健康检查、OpenAPI 文档和静态资源保持匿名可访问。
         return http.authorizeHttpRequests(authorize -> authorize
                         .requestMatchers(
                                 "/login",

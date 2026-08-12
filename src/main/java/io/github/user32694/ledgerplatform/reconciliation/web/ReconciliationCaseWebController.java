@@ -67,6 +67,7 @@ public class ReconciliationCaseWebController {
 
     @GetMapping("/{caseId}")
     String detail(@PathVariable UUID caseId, Authentication authentication, Model model) {
+        // 案件页集中展示渠道、支付、账本和审计证据；处理动作必须绑定当前登录人。
         var details = reconciliationApi.getResult(caseId);
         var caseView = details.caseView();
         boolean isOwner = caseView.resolutionStatus() == ResolutionStatus.CLAIMED
@@ -125,6 +126,7 @@ public class ReconciliationCaseWebController {
             @RequestParam String note,
             Authentication authentication,
             RedirectAttributes redirectAttributes) {
+        // 解决动作只记录人工决定和备注，不自动修改原始支付或账本证据。
         try {
             reconciliationApi.resolve(caseId, resolutionCode, note, authentication.getName());
         } catch (IllegalArgumentException | IllegalStateException exception) {

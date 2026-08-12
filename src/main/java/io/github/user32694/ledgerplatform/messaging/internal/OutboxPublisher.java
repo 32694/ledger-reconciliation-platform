@@ -35,6 +35,7 @@ class OutboxPublisher {
 
     @Scheduled(fixedDelayString = "${app.messaging.publish-interval:PT1S}")
     void publishDueEvents() {
+        // 先回收超时锁，再逐条 claim；逐条发布可以把 Rabbit confirm 结果准确映射回 Outbox 状态。
         Instant now = clock.instant();
         store.recoverStale(now.minus(properties.getStaleLockTimeout()));
         for (int processed = 0; processed < properties.getBatchSize(); processed++) {
@@ -49,6 +50,7 @@ class OutboxPublisher {
     }
 
     private boolean publish(ClaimedOutboxEvent event) {
+        // RabbitMQ 只确认消息是否接收；数据库状态更新失败时，事件会被 stale-lock 机制重新投递。
         try {
             gateway.publish(event);
         } catch (InterruptedException failure) {

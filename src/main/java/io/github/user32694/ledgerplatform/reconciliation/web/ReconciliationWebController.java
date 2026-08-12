@@ -47,6 +47,7 @@ public class ReconciliationWebController {
 
     @GetMapping
     String list(@RequestParam(required = false) RunStatus runStatus, Model model) {
+        // 列表页同时展示批次和最近一次运行；HTMX 后续只刷新运行状态片段。
         var batches = new ArrayList<BatchRow>();
         Map<UUID, ReconciliationCaseProgress> progressByBatch = reconciliationApi
                 .findCaseProgresses().stream()
@@ -78,6 +79,7 @@ public class ReconciliationWebController {
 
     @GetMapping("/import/rule-preview")
     String rulePreview(@RequestParam String channelCode, Model model) {
+        // 选择渠道时预览当前已发布规则，帮助操作员在上传前确认容差和查询窗口。
         try {
             var rule = reconciliationRulesApi.resolvePublishedVersion(channelCode);
             model.addAttribute("rule", rule);
@@ -97,6 +99,7 @@ public class ReconciliationWebController {
             @RequestParam("channelCode") String channelCode,
             Authentication authentication,
             Model model) {
+        // 控制器只负责表单校验和错误回显，实际导入由领域 API 处理。
         if (file == null || file.isEmpty()) {
             model.addAttribute("importError", "请选择要导入的 CSV 文件");
             populateImportForm(model, channelCode);
@@ -122,6 +125,7 @@ public class ReconciliationWebController {
             @RequestParam(required = false) ResultType resultType,
             @RequestParam(required = false) ResolutionStatus resolutionStatus,
             Model model) {
+        // 详情页把批次、运行历史和差异结果放在同一视图，筛选条件通过查询参数传入。
         ReconciliationBatchView batch = reconciliationApi.getBatch(batchId);
         List<RunRow> runs = reconciliationApi.findRuns(batchId).stream()
                 .map(ReconciliationWebController::toRunRow)
@@ -156,6 +160,7 @@ public class ReconciliationWebController {
             @PathVariable UUID batchId,
             Authentication authentication,
             RedirectAttributes redirectAttributes) {
+        // 启动作业是异步操作，提交后回到详情页由前端轮询状态。
         try {
             reconciliationApi.startRun(batchId, authentication.getName());
         } catch (RuntimeException exception) {
@@ -169,6 +174,7 @@ public class ReconciliationWebController {
             @PathVariable UUID runId,
             Authentication authentication,
             RedirectAttributes redirectAttributes) {
+        // 重启沿用 Batch checkpoint，用户无需重新上传文件或从头计算。
         try {
             var run = reconciliationApi.restartRun(runId, authentication.getName());
             return "redirect:/admin/reconciliation/" + run.batchId();

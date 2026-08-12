@@ -54,6 +54,7 @@ class ReconciliationJobRecovery {
 
     @EventListener(ApplicationReadyEvent.class)
     void recover() {
+        // 应用启动后扫描上次异常退出留下的运行记录，保证“进程重启”不会让对账永久卡住。
         for (var run : store.findRecoverableRuns(recoveryCutoff)) {
             try {
                 recover(run);
@@ -80,6 +81,7 @@ class ReconciliationJobRecovery {
     }
 
     private void recover(ReconciliationRunView run) throws Exception {
+        // QUEUED 可能已经创建了 Batch execution；先认领已有 execution，避免重复提交作业。
         if (run.status() == RunStatus.QUEUED) {
             var existingExecution = run.batchJobExecutionId() == null
                     ? findExistingExecution(run.id())
@@ -128,6 +130,7 @@ class ReconciliationJobRecovery {
         if (!ACTIVE_BATCH_STATUSES.contains(execution.getStatus())) {
             return;
         }
+        // Spring Batch 认为仍在运行但应用已不在的 execution 需要被标记为 FAILED，才能 restart。
         execution.setStatus(BatchStatus.FAILED);
         execution.setEndTime(java.time.LocalDateTime.now());
         execution.setExitStatus(new org.springframework.batch.core.ExitStatus("FAILED", ABANDONED_MESSAGE));
@@ -152,6 +155,7 @@ class ReconciliationJobRecovery {
         if (!claimed) {
             return;
         }
+        // 数据库条件更新负责抢占恢复权，只有抢到的实例可以修改 execution 并触发重启。
         execution.setStatus(BatchStatus.FAILED);
         execution.setEndTime(java.time.LocalDateTime.now());
         execution.setExitStatus(new org.springframework.batch.core.ExitStatus("FAILED", ABANDONED_MESSAGE));

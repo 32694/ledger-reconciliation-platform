@@ -49,6 +49,7 @@ public class ReconciliationFacade implements ReconciliationApi {
 
     @Override
     public ReconciliationBatchView importStatement(StatementUpload upload) {
+        // Facade 只编排用例；文件解析、SHA-256 幂等和批次落库由 ImportService 负责。
         return importService.importStatement(upload);
     }
 
@@ -67,6 +68,7 @@ public class ReconciliationFacade implements ReconciliationApi {
 
     @Override
     public ReconciliationRunView startRun(UUID batchId, String operator) {
+        // queueRun 负责保证同一批次不会重复排队；只有真正创建新运行时才提交 Batch Job。
         if (batchId == null) {
             throw new IllegalArgumentException("Batch id is required");
         }
@@ -82,6 +84,7 @@ public class ReconciliationFacade implements ReconciliationApi {
 
     @Override
     public ReconciliationRunView restartRun(UUID runId, String operator) {
+        // 优先沿用 Spring Batch 原 execution 做 restart，只有没有可恢复 execution 时才新建提交。
         if (runId == null) {
             throw new IllegalArgumentException("Run id is required");
         }
@@ -118,6 +121,7 @@ public class ReconciliationFacade implements ReconciliationApi {
     @Override
     public List<ReconciliationResultView> findResults(
             UUID batchId, ResultType resultType, ResolutionStatus resolutionStatus) {
+        // 结果查询需要把批次、渠道流水和支付快照拼成页面模型，因此在这里做跨模块组装。
         if (batchId == null) {
             throw new IllegalArgumentException("Batch id is required");
         }
@@ -144,6 +148,7 @@ public class ReconciliationFacade implements ReconciliationApi {
 
     @Override
     public ReconciliationResultView claim(UUID resultId, String operator) {
+        // 认领、释放、解决都委托给 Store 的条件更新，避免并发操作覆盖状态。
         requireResultId(resultId);
         return toResultView(store.claimResult(resultId, operator));
     }

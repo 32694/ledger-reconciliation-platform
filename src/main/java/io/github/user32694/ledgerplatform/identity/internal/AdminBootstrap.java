@@ -30,6 +30,7 @@ public class AdminBootstrap implements ApplicationRunner {
     @Override
     @Transactional
     public void run(ApplicationArguments args) {
+        // 启动时只在管理员不存在时插入，重复重启不会覆盖现有密码或创建重复用户。
         if (configuredUsername == null || configuredUsername.isBlank()) {
             throw new IllegalStateException("app.admin.username is required");
         }

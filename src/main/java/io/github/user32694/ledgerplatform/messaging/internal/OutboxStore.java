@@ -14,6 +14,12 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
+/**
+ * Outbox 状态机的数据库适配器。
+ *
+ * <p>claim 使用行锁把 PENDING/FAILED 事件变成 PUBLISHING；发布成功或失败后再由同一事件 ID
+ * 更新终态。所有更新都带上 attempt 和 lockedAt，避免旧 publisher 覆盖新尝试的结果。
+ */
 class OutboxStore {
     private static final int MAX_ATTEMPTS = 10;
     private static final int MAX_ERROR_CODE_POINTS = 2_000;

@@ -28,6 +28,7 @@ public class InternalOnlyPaymentItemReader implements ItemStreamReader<Reconcili
 
     @Override
     public void open(ExecutionContext executionContext) {
+        // 内部单边扫描使用 (occurredAt, id) 组成稳定游标，避免相同时间戳导致重复或漏读。
         pageCursor = executionContext.containsKey(CURSOR_TIME)
                 ? new PaymentPageCursor(
                         Instant.parse(executionContext.getString(CURSOR_TIME)),
@@ -52,6 +53,7 @@ public class InternalOnlyPaymentItemReader implements ItemStreamReader<Reconcili
 
     @Override
     public void update(ExecutionContext executionContext) {
+        // 保存最后一个已返回且已提交的支付游标，失败恢复时从该位置之后继续。
         if (lastReturnedCursor == null) {
             return;
         }
@@ -73,6 +75,7 @@ public class InternalOnlyPaymentItemReader implements ItemStreamReader<Reconcili
         }
         var consumed = store.findConsumedPaymentIds(
                 runId, page.payments().stream().map(payment -> payment.id()).collect(java.util.stream.Collectors.toSet()));
+        // 已在渠道侧匹配过的支付不能再次生成 INTERNAL_ONLY，消费集合由 run 维度隔离。
         for (var payment : page.payments()) {
             bufferedPayments.addLast(new Candidate(
                     new ReconciliationWorkItem.Payment(

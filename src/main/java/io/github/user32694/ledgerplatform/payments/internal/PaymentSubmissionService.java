@@ -27,6 +27,7 @@ class PaymentSubmissionService {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     UUID submit(TopUpCommand command) {
+        // 提交阶段只创建或复用支付指令，不入账；资金变化由 PaymentProcessor 负责。
         validate(command);
         return submit(
                 "TOP_UP",
@@ -116,9 +117,11 @@ class PaymentSubmissionService {
             UUID payeeAccountId,
             long amountCents,
             String fingerprint) {
+        // 先锁定幂等键对应的数据库行，避免并发请求同时创建两笔支付。
         repository.acquireIdempotencyLock(idempotencyKey);
         var existing = repository.findByIdempotencyKey(idempotencyKey);
         if (existing.isPresent()) {
+            // 同 key 重试必须使用完全相同的请求参数；金额或账户变化会触发冲突。
             return resolve(existing.orElseThrow(), fingerprint);
         }
 
@@ -143,6 +146,7 @@ class PaymentSubmissionService {
             throw exception;
         }
         UUID paymentId = UUID.randomUUID();
+        // PENDING 是状态机的起点，后续状态只能由处理阶段在事务中推进。
         repository.insertPending(
                 paymentId,
                 idempotencyKey,

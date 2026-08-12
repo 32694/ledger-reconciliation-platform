@@ -27,6 +27,7 @@ class RabbitEventPublisher {
     }
 
     void publish(ClaimedOutboxEvent event) throws Exception {
+        // 持久化消息 + publisher confirm + returned message 检查，保证至少一次投递语义。
         byte[] body;
         try {
             body = objectMapper.writeValueAsBytes(event.toEnvelope());

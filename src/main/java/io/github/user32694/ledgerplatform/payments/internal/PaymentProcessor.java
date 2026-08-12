@@ -49,6 +49,10 @@ class PaymentProcessor {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     PaymentInstructionEntity process(UUID paymentId) {
+        /*
+         * 处理阶段与提交阶段分离：锁定 PENDING 指令，执行账本 journal，
+         * 只有 journal 成功后才把支付改为 SUCCEEDED 并追加审计和 Outbox 事件。
+         */
         var payment = repository.findByIdForUpdate(paymentId)
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Payment instruction does not exist: " + paymentId));
@@ -58,6 +62,7 @@ class PaymentProcessor {
 
         try {
             var amount = Money.cny(payment.amountCents());
+            // 不同支付类型只是 journal 方向不同，所有类型都复用同一个不可变账本入口。
             switch (payment.paymentType()) {
                 case "TOP_UP" -> {
                     var customerWalletId =
@@ -96,6 +101,7 @@ class PaymentProcessor {
                 default -> throw new IllegalStateException(
                         "Unsupported payment type: " + payment.paymentType());
             }
+            // 这三步仍在同一事务中：数据库回滚时，支付状态、审计和 Outbox 都一起回滚。
             payment.succeed(Instant.now());
             auditApi.record(paymentAudit(payment, AuditOutcome.SUCCEEDED));
             outboxApi.append(new OutboxCommand(

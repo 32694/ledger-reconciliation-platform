@@ -40,6 +40,8 @@ class OutboxService implements OutboxApi, MessagingOperationsApi {
     @Override
     @Transactional
     public UUID append(OutboxCommand command) {
+        // 业务事务调用此方法时，事件和业务事实共享同一个数据库事务。
+        // 因此即使应用在提交前宕机，也不会出现“业务成功但没有消息记录”的情况。
         if (command == null) {
             throw new IllegalArgumentException("Outbox command is required");
         }

@@ -32,6 +32,7 @@ public class StatementMatchItemReader implements ItemStreamReader<Reconciliation
 
     @Override
     public void open(ExecutionContext executionContext) {
+        // ExecutionContext 是 Spring Batch 的断点：重启时从上次成功提交的行号继续。
         pageAfterLineNumber = executionContext.getInt(LAST_COMMITTED_LINE_NUMBER, 0);
         lastReturnedLineNumber = pageAfterLineNumber;
         bufferedEntries.clear();
@@ -39,6 +40,7 @@ public class StatementMatchItemReader implements ItemStreamReader<Reconciliation
 
     @Override
     public ReconciliationWorkItem read() {
+        // 先按渠道账单行号分页，再用交易号批量查询内部支付，避免每行一次数据库查询（N+1）。
         if (bufferedEntries.isEmpty()) {
             loadPage();
         }
@@ -57,6 +59,7 @@ public class StatementMatchItemReader implements ItemStreamReader<Reconciliation
 
     @Override
     public void update(ExecutionContext executionContext) {
+        // 只有 chunk 成功提交后才会调用 update，因此记录的行号不会越过未提交数据。
         executionContext.putInt(LAST_COMMITTED_LINE_NUMBER, lastReturnedLineNumber);
     }
 
@@ -80,6 +83,7 @@ public class StatementMatchItemReader implements ItemStreamReader<Reconciliation
                 page.stream().map(ChannelStatementEntryEntity::channelTransactionId)
                         .collect(java.util.stream.Collectors.toSet()),
                 batch.queryStart(), batch.queryEnd());
+        // 当前页的支付快照只在内存中使用；下一页重新查询，控制单次作业的内存占用。
         bufferedEntries.addAll(page);
         pageAfterLineNumber = page.get(page.size() - 1).lineNumber();
     }

@@ -34,6 +34,7 @@ class PaymentsFacade implements PaymentsApi {
 
     @Override
     public PaymentView topUp(TopUpCommand command) {
+        // Facade 统一编排“提交指令 -> 处理入账 -> 将可预期资金失败落为 FAILED”。
         var paymentId = submission.submit(command);
         try {
             return toView(processor.process(paymentId));

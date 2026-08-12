@@ -17,6 +17,8 @@ public class ReconciliationWorkItemWriter implements ItemWriter<ReconciliationWo
 
     @Override
     public void write(Chunk<? extends ReconciliationWorkResult> chunk) {
+        // Spring Batch 会在一个 chunk 事务中调用 Writer；批量落库可以减少逐条提交的开销。
+        // work 表先保存中间结果，最终由 finalize 步骤一次性提升为正式结果，避免半批次可见。
         store.writeWorkResults(runId, batchId, java.util.List.copyOf(chunk.getItems()));
     }
 }

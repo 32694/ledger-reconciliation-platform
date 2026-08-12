@@ -3,6 +3,7 @@ package io.github.user32694.ledgerplatform.payments;
 import java.time.Instant;
 import java.util.UUID;
 
+/** 面向页面和对账模块的支付只读视图。金额单位为分，status 为状态机当前状态。 */
 public record PaymentView(
         UUID id,
         String channelReference,

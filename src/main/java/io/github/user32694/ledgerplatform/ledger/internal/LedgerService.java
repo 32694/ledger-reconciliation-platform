@@ -66,11 +66,16 @@ class LedgerService implements LedgerApi {
     @Override
     @Transactional
     public PostedJournal post(Journal journal) {
+        /*
+         * 入账顺序：先检查业务幂等，再按稳定 UUID 顺序锁定所有账户，
+         * 计算余额变化，最后一次性保存 transaction 和 entries。
+         */
         Objects.requireNonNull(journal, "Journal is required");
         if (transactionRepository.existsByBusinessReference(journal.businessReference())) {
             throw new DuplicateBusinessReferenceException(journal.businessReference());
         }
 
+        // 同一账户可能在一个 journal 中出现多次，因此先去重再加锁。
         List<UUID> accountIds = journal.entries().stream()
                 .map(entry -> entry.ledgerAccountId())
                 .distinct()
@@ -85,6 +90,7 @@ class LedgerService implements LedgerApi {
             accountsById.put(account.id(), account);
         }
 
+        // 把会计方向转换为统一的“可用余额变化”，之后才能检查是否透支。
         Map<UUID, Long> deltas = new HashMap<>();
         for (var entry : journal.entries()) {
             var account = accountsById.get(entry.ledgerAccountId());
@@ -95,6 +101,7 @@ class LedgerService implements LedgerApi {
                 throw new LedgerBalanceLimitExceededException(exception);
             }
         }
+        // 余额检查发生在写入前，并且使用同一事务内已锁定的账户快照。
         for (var account : lockedAccounts) {
             try {
                 long resultingBalance = Math.addExact(
