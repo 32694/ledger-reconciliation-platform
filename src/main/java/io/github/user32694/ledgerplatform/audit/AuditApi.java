@@ -9,4 +9,7 @@ public interface AuditApi {
 
     /** 按动作、结果和数量筛选最近审计事件。 */
     List<AuditEventView> findRecent(AuditAction action, AuditOutcome outcome, int limit);
+
+    /** 按聚合根 ID 查询完整审计轨迹，供只读证据 API 使用。 */
+    List<AuditEventView> findByAggregateId(String aggregateId);
 }

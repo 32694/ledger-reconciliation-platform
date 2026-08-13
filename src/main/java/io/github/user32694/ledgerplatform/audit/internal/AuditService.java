@@ -80,6 +80,18 @@ class AuditService implements AuditApi {
         return events.stream().map(AuditEventEntity::toView).toList();
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public List<AuditEventView> findByAggregateId(String aggregateId) {
+        if (aggregateId == null || aggregateId.isBlank()) {
+            throw new IllegalArgumentException("Aggregate id is required");
+        }
+        return repository.findAllByAggregateIdOrderByOccurredAtAscIdAsc(aggregateId.strip())
+                .stream()
+                .map(AuditEventEntity::toView)
+                .toList();
+    }
+
     private static String resolveActor(String explicitActor) {
         if (explicitActor != null && !explicitActor.isBlank()) {
             return requireText(explicitActor, "Actor", 128);

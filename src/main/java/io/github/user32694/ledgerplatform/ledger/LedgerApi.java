@@ -1,6 +1,7 @@
 package io.github.user32694.ledgerplatform.ledger;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /** 账本模块的公开端口；调用方只能提交完整 journal，不能直接改余额。 */
@@ -15,4 +16,8 @@ public interface LedgerApi {
     long walletBalance(UUID ledgerAccountId);
     /** 查询最近已过账的 ledger transaction。 */
     List<LedgerTransactionView> findRecentTransactions(int limit);
+
+    /** 按业务引用读取完整不可变分录，供只读对账 API 提供证据。 */
+    Optional<LedgerTransactionDetailsView> findTransactionByBusinessReference(
+            String businessReference);
 }

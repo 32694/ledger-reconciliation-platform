@@ -54,6 +54,20 @@
 
 支付或对账事务在同一 PostgreSQL 事务中写入 Transactional Outbox，后台 Publisher 通过 RabbitMQ publisher confirm 确认投递。该链路采用 **at-least-once** 语义，消费者以 `eventId` 做幂等消费；短暂故障会自动重试，永久失败消息进入 DLQ。RabbitMQ 只承担业务事件通知，不替代 Spring Batch 对账任务。
 
+## 只读集成 API
+
+Java 平台保留自己的 PostgreSQL 数据库，向 Agent 暴露只读证据接口。Agent 不直接连接 Java 的数据库，也不能通过这些接口修改支付、账本或案件。
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `GET` | `/api/v1/reconciliation/cases` | 查询案件，可按 `resultType`、`resolutionStatus`、`assignee` 筛选 |
+| `GET` | `/api/v1/reconciliation/results/{resultId}/evidence` | 查询一条案件的支付、账本、时间线和审计证据包 |
+| `GET` | `/api/v1/reconciliation/payments/{paymentId}` | 查询支付状态和金额 |
+| `GET` | `/api/v1/reconciliation/ledger/transactions/{businessReference}` | 按业务引用查询不可变账本分录 |
+| `GET` | `/api/v1/reconciliation/audit/{aggregateId}` | 查询业务聚合的审计事件 |
+
+配置 `APP_READ_API_KEY` 后，外部消费者使用 `X-Read-Api-Key` 请求头访问；未提供或不匹配时返回 `401`。`resultId` 是 Java 平台内部的 UUID，Agent 后续接入时应先查询案件列表或建立稳定的外部案件编号映射，不应把 `CASE-1001` 直接当作 UUID 使用。
+
 ## 系统架构
 
 ```mermaid

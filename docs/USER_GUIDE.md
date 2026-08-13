@@ -90,6 +90,26 @@ java -jar target/ledger-reconciliation-platform-0.1.0-SNAPSHOT.jar
 
 Flyway 会在应用启动时自动执行待执行迁移。启动后打开 <http://localhost:8080/login>，使用 `.env` 中的 `APP_ADMIN_USERNAME` 和 `APP_ADMIN_PASSWORD` 登录。可用 `curl --fail http://localhost:8080/actuator/health` 检查 PostgreSQL 和 RabbitMQ 均可用。
 
+### 1.5 只读集成 API
+
+只读 API 用于给 Agent 或其他运营工具读取已落库证据。它们只使用 `GET`，不会创建充值、转账、解决案件或修改账本。先在 `.env` 设置 `APP_READ_API_KEY`，然后重新启动应用：
+
+```sh
+curl -sS \
+  -H "X-Read-Api-Key: $APP_READ_API_KEY" \
+  http://localhost:8080/api/v1/reconciliation/cases
+```
+
+从案件列表中取出 Java 返回的 `id`（UUID）后，可以读取完整证据包：
+
+```sh
+curl -sS \
+  -H "X-Read-Api-Key: $APP_READ_API_KEY" \
+  "http://localhost:8080/api/v1/reconciliation/results/<resultId>/evidence"
+```
+
+可用的只读路径还有 `/payments/<paymentId>`、`/ledger/transactions/<businessReference>` 和 `/audit/<aggregateId>`。未提供或不匹配 API Key 时，接口返回 HTTP `401`。Agent 当前演示数据中的 `CASE-1001` 是它自己的外部编号，不是 Java 接口的 UUID；真正联调时应先建立案件编号到 UUID 的映射，不能直接拼接到 `{resultId}`。
+
 ## 2. 账户、充值和转账
 
 1. 进入**客户账户**（`/admin/accounts`），点击**新建账户**，输入合成的持有人名称并提交。

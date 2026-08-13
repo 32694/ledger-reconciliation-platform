@@ -3,6 +3,7 @@ package io.github.user32694.ledgerplatform.ledger.internal;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
+import java.util.Optional;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -12,6 +13,8 @@ interface LedgerTransactionRepository extends JpaRepository<LedgerTransactionEnt
     boolean existsByBusinessReference(String businessReference);
 
     List<LedgerTransactionEntity> findAllByOrderByOccurredAtDescIdDesc(Pageable pageable);
+
+    Optional<LedgerTransactionEntity> findByBusinessReference(String businessReference);
 
     @Query(value = """
             SELECT COALESCE(SUM(CASE side WHEN 'CREDIT' THEN amount_cents ELSE -amount_cents END), 0)

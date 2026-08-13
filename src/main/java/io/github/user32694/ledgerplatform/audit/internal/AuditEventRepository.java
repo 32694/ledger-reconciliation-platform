@@ -18,4 +18,6 @@ interface AuditEventRepository extends JpaRepository<AuditEventEntity, UUID> {
             AuditOutcome outcome, Pageable pageable);
 
     List<AuditEventEntity> findAllByOrderByOccurredAtDescIdDesc(Pageable pageable);
+
+    List<AuditEventEntity> findAllByAggregateIdOrderByOccurredAtAscIdAsc(String aggregateId);
 }

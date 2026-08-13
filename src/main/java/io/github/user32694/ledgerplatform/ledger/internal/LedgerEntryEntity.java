@@ -58,7 +58,19 @@ class LedgerEntryEntity {
         return side;
     }
 
+    UUID id() {
+        return id;
+    }
+
+    LedgerAccountEntity ledgerAccount() {
+        return ledgerAccount;
+    }
+
     long amountCents() {
         return amountCents;
+    }
+
+    Instant createdAt() {
+        return createdAt;
     }
 }

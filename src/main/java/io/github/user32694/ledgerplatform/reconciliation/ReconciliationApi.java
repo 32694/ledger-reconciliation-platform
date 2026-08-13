@@ -41,5 +41,8 @@ public interface ReconciliationApi {
 
     ReconciliationCaseDetailsView getResult(UUID resultId);
 
+    /** 组装案件、支付、账本和审计证据，供外部只读 API 使用。 */
+    ReconciliationEvidenceView getEvidence(UUID resultId);
+
     ReconciliationOperationsSummary getOperationsSummary();
 }

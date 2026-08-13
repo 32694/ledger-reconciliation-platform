@@ -9,6 +9,8 @@ import io.github.user32694.ledgerplatform.ledger.LedgerApi;
 import io.github.user32694.ledgerplatform.ledger.LedgerBalanceLimitExceededException;
 import io.github.user32694.ledgerplatform.ledger.LedgerInsufficientFundsException;
 import io.github.user32694.ledgerplatform.ledger.LedgerTransactionView;
+import io.github.user32694.ledgerplatform.ledger.LedgerEntryView;
+import io.github.user32694.ledgerplatform.ledger.LedgerTransactionDetailsView;
 import io.github.user32694.ledgerplatform.ledger.PostedJournal;
 import java.math.BigDecimal;
 import java.sql.SQLException;
@@ -18,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.Optional;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -166,6 +169,31 @@ class LedgerService implements LedgerApi {
                                 .mapToLong(LedgerEntryEntity::amountCents)
                                 .sum()))
                 .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<LedgerTransactionDetailsView> findTransactionByBusinessReference(
+            String businessReference) {
+        if (businessReference == null || businessReference.isBlank()) {
+            throw new IllegalArgumentException("Business reference is required");
+        }
+        return transactionRepository.findByBusinessReference(businessReference.strip())
+                .map(transaction -> new LedgerTransactionDetailsView(
+                        transaction.id(),
+                        transaction.businessReference(),
+                        transaction.transactionType(),
+                        transaction.occurredAt(),
+                        transaction.entries().stream()
+                                .map(entry -> new LedgerEntryView(
+                                        entry.id(),
+                                        entry.ledgerAccount().id(),
+                                        entry.ledgerAccount().ownerReference(),
+                                        entry.ledgerAccount().accountType(),
+                                        entry.side(),
+                                        entry.amountCents(),
+                                        entry.createdAt()))
+                                .toList()));
     }
 
     private LedgerAccountView toView(LedgerAccountEntity account) {

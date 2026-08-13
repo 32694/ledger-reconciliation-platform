@@ -40,6 +40,7 @@ app:
   admin:
     username: ${APP_ADMIN_USERNAME:}
     password: ${APP_ADMIN_PASSWORD:}
+  read-api-key: ${APP_READ_API_KEY:}
   messaging:
     publisher-enabled: true
     publish-interval: ${OUTBOX_PUBLISH_INTERVAL:PT1S}

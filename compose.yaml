@@ -13,6 +13,7 @@ services:
       OUTBOX_PUBLISH_INTERVAL: ${OUTBOX_PUBLISH_INTERVAL:-PT1S}
       APP_ADMIN_USERNAME: ${APP_ADMIN_USERNAME:-admin}
       APP_ADMIN_PASSWORD: ${APP_ADMIN_PASSWORD:?Set APP_ADMIN_PASSWORD in .env}
+      APP_READ_API_KEY: ${APP_READ_API_KEY:-}
     depends_on:
       db:
         condition: service_healthy

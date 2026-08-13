@@ -8,6 +8,7 @@ import io.github.user32694.ledgerplatform.reconciliation.ReconciliationCaseProgr
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationCaseView;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationOperationsSummary;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationResultView;
+import io.github.user32694.ledgerplatform.reconciliation.ReconciliationEvidenceView;
 import io.github.user32694.ledgerplatform.reconciliation.ReconciliationRunView;
 import io.github.user32694.ledgerplatform.reconciliation.ResolutionCode;
 import io.github.user32694.ledgerplatform.reconciliation.ResolutionStatus;
@@ -15,6 +16,8 @@ import io.github.user32694.ledgerplatform.reconciliation.StatementUpload;
 import io.github.user32694.ledgerplatform.reconciliation.ResultType;
 import io.github.user32694.ledgerplatform.payments.PaymentView;
 import io.github.user32694.ledgerplatform.payments.PaymentsApi;
+import io.github.user32694.ledgerplatform.ledger.LedgerApi;
+import io.github.user32694.ledgerplatform.audit.AuditApi;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -33,18 +36,24 @@ public class ReconciliationFacade implements ReconciliationApi {
     private final ReconciliationJobLauncher jobLauncher;
     private final JobOperator jobOperator;
     private final PaymentsApi paymentsApi;
+    private final LedgerApi ledgerApi;
+    private final AuditApi auditApi;
 
     public ReconciliationFacade(
             ReconciliationImportService importService,
             ReconciliationStore store,
             ReconciliationJobLauncher jobLauncher,
             JobOperator jobOperator,
-            PaymentsApi paymentsApi) {
+            PaymentsApi paymentsApi,
+            LedgerApi ledgerApi,
+            AuditApi auditApi) {
         this.importService = importService;
         this.store = store;
         this.jobLauncher = jobLauncher;
         this.jobOperator = jobOperator;
         this.paymentsApi = paymentsApi;
+        this.ledgerApi = ledgerApi;
+        this.auditApi = auditApi;
     }
 
     @Override
@@ -199,6 +208,25 @@ public class ReconciliationFacade implements ReconciliationApi {
         var timeline = new ArrayList<>(store.findCaseEvents(resultId));
         Collections.reverse(timeline);
         return new ReconciliationCaseDetailsView(toCaseView(result, lookup), timeline);
+    }
+
+    @Override
+    public ReconciliationEvidenceView getEvidence(UUID resultId) {
+        var details = getResult(resultId);
+        var caseView = details.caseView();
+        var payment = caseView.paymentId() == null ? null : paymentsApi.get(caseView.paymentId());
+        var ledger = payment == null || payment.channelReference() == null
+                ? null
+                : ledgerApi.findTransactionByBusinessReference(payment.channelReference()).orElse(null);
+        var auditEvents = new ArrayList<>(auditApi.findByAggregateId(resultId.toString()));
+        if (payment != null) {
+            auditEvents.addAll(auditApi.findByAggregateId(payment.id().toString()));
+        }
+        auditEvents.sort(Comparator.comparing(
+                io.github.user32694.ledgerplatform.audit.AuditEventView::occurredAt)
+                .thenComparing(io.github.user32694.ledgerplatform.audit.AuditEventView::id));
+        return new ReconciliationEvidenceView(
+                caseView, payment, ledger, details.timeline(), auditEvents);
     }
 
     @Override
