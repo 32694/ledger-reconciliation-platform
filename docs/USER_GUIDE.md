@@ -1,8 +1,22 @@
 # 用户手册
 
-本手册说明如何运行模拟交易账本与自动对账平台。只使用合成数据。推荐使用 Docker Compose；宿主机开发模式需要 Git、JDK 17、Maven Wrapper、PostgreSQL 17 和 RabbitMQ 4。应用端口为 `8080`，数据库端口为 `5432`，RabbitMQ 端口为 `5672`，管理页面端口为 `15672`。
+本手册说明如何在一台新电脑上运行模拟交易账本与自动对账平台。只使用合成数据。推荐使用 Docker Compose；如果 Docker Hub 无法拉取镜像，也提供 macOS Homebrew 本机运行方式。应用端口为 `8080`，数据库端口为 `5432`，RabbitMQ 端口为 `5672`，管理页面端口为 `15672`。
 
 ## 1. 本地启动
+
+### 1.0 克隆项目并检查环境
+
+推荐方式只要求 Git 和已启动的 Docker Desktop（包含 Compose 插件）：
+
+```sh
+git clone https://github.com/32694/ledger-reconciliation-platform.git
+cd ledger-reconciliation-platform
+git --version
+docker info
+docker compose version
+```
+
+`docker info` 必须同时显示 Client 和 Server 信息。若出现 daemon unavailable，先启动 Docker Desktop；若拉取镜像时出现 `auth.docker.io` 或 `registry-1.docker.io` timeout，这是 Docker 网络问题，不是项目账号、数据库密码或 `.env` 配置错误。可以稍后重试，或改用第 1.4 节的 Homebrew 方式。
 
 ### 1.1 准备配置
 
@@ -13,7 +27,21 @@ cp .env.example .env
 chmod 600 .env
 ```
 
-编辑 `.env`，设置 `DB_USERNAME`、`DB_PASSWORD`、`RABBITMQ_USERNAME`、`RABBITMQ_PASSWORD`、`APP_ADMIN_USERNAME` 和 `APP_ADMIN_PASSWORD`。密码使用单行单引号值，且不要包含单引号。
+编辑 `.env`，设置 `DB_USERNAME`、`DB_PASSWORD`、`RABBITMQ_USERNAME`、`RABBITMQ_PASSWORD`、`APP_ADMIN_USERNAME`、`APP_ADMIN_PASSWORD` 和 `APP_READ_API_KEY`。这些值都是为本地项目自行设置的，不是 Docker Hub 账号密码。`APP_ADMIN_*` 用于登录 Java 管理页面，`APP_READ_API_KEY` 用于 Agent 调用只读 API，三类凭据用途不同。
+
+可以保留示例用户名，并把每个 `change-this-*` 替换为自己选定的本地值：
+
+```dotenv
+DB_USERNAME=ledger_app
+DB_PASSWORD='your-local-database-password'
+RABBITMQ_USERNAME=ledger_app
+RABBITMQ_PASSWORD='your-local-rabbitmq-password'
+APP_ADMIN_USERNAME=admin
+APP_ADMIN_PASSWORD='your-local-admin-password'
+APP_READ_API_KEY='your-local-read-api-key'
+```
+
+值必须是单行内容。若包含 shell 特殊字符，用单引号包住，且值本身不要包含单引号。`.env` 已被 Git 忽略；不要提交它，也不要把真实密码或 API Key 粘贴到 issue、截图或聊天中。
 
 ### 1.2 三服务一键启动（推荐）
 
@@ -23,6 +51,14 @@ docker compose ps
 ```
 
 等待 `app`、`db`、`rabbitmq` 均显示 `healthy`。登录地址为 <http://localhost:8080/login>，RabbitMQ 管理页面为 <http://localhost:15672>。两处分别使用 `.env` 中的管理员账号和 RabbitMQ 账号。Compose 自动读取仓库根目录的 `.env`，不需要手工导出。
+
+再执行健康检查：
+
+```sh
+curl --fail http://localhost:8080/actuator/health
+```
+
+返回包含 `"status":"UP"` 即表示应用、PostgreSQL 和 RabbitMQ 已连通。首次构建可能需要数分钟；终端回到提示符且 `docker compose ps` 显示 healthy 后才算启动完成。
 
 停止服务但保留 PostgreSQL 和 RabbitMQ named volume：
 
@@ -55,7 +91,59 @@ docker compose exec db psql -U "$DB_USERNAME" -d ledger_platform \
 
 若使用已有实例，按所在环境的管理方式创建 `.env` 指向的主库和 `ledger_platform_test` 测试库，并确保 RabbitMQ 用户有 `/` vhost 的读写配置权限；不要把本机路径、用户名或凭据写入文档或提交。
 
-### 1.4 测试、校验和启动
+### 1.4 macOS 完全本机运行（Docker Hub 不可用时）
+
+此方式不使用 Docker 镜像。先安装并启动依赖：
+
+```sh
+brew install openjdk@17 postgresql@17 rabbitmq
+brew services start postgresql@17
+brew services start rabbitmq
+```
+
+Apple Silicon Mac 在当前终端设置工具路径；Intel Mac 将 `/opt/homebrew` 改为 `/usr/local`：
+
+```sh
+export PATH="/opt/homebrew/opt/openjdk@17/bin:/opt/homebrew/opt/postgresql@17/bin:/opt/homebrew/opt/rabbitmq/sbin:$PATH"
+java -version
+psql --version
+rabbitmq-diagnostics -q ping
+```
+
+`java` 和 `psql` 应显示 17，RabbitMQ 应返回 `Ping succeeded`。按第 1.1 节创建 `.env`，导出配置，并在本机 PostgreSQL 中创建角色和两个数据库：
+
+```sh
+set -a
+. ./.env
+set +a
+
+psql postgres --set=db_user="$DB_USERNAME" --set=db_password="$DB_PASSWORD" <<'SQL'
+SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'db_user', :'db_password')
+WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = :'db_user') \gexec
+SELECT format('CREATE DATABASE %I OWNER %I', 'ledger_platform', :'db_user')
+WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'ledger_platform') \gexec
+SELECT format('CREATE DATABASE %I OWNER %I', 'ledger_platform_test', :'db_user')
+WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'ledger_platform_test') \gexec
+SQL
+```
+
+在 RabbitMQ 中创建应用用户并授予默认 vhost 权限（用户已存在时跳过 `add_user`）：
+
+```sh
+rabbitmqctl add_user "$RABBITMQ_USERNAME" "$RABBITMQ_PASSWORD"
+rabbitmqctl set_permissions -p / "$RABBITMQ_USERNAME" '.*' '.*' '.*'
+rabbitmqctl set_user_tags "$RABBITMQ_USERNAME" administrator
+```
+
+最后在同一终端启动应用：
+
+```sh
+./mvnw spring-boot:run
+```
+
+打开 <http://localhost:8080/login>。停止 Java 按 `Ctrl-C`；停止后台依赖使用 `brew services stop rabbitmq` 和 `brew services stop postgresql@17`。不要同时启动 Compose 和 Homebrew 的 PostgreSQL/RabbitMQ，否则端口会冲突。
+
+### 1.5 测试、校验和启动
 
 使用本地数据库凭据运行测试：
 
@@ -90,14 +178,18 @@ java -jar target/ledger-reconciliation-platform-0.1.0-SNAPSHOT.jar
 
 Flyway 会在应用启动时自动执行待执行迁移。启动后打开 <http://localhost:8080/login>，使用 `.env` 中的 `APP_ADMIN_USERNAME` 和 `APP_ADMIN_PASSWORD` 登录。可用 `curl --fail http://localhost:8080/actuator/health` 检查 PostgreSQL 和 RabbitMQ 均可用。
 
-### 1.5 只读集成 API
+### 1.6 只读集成 API
 
-只读 API 用于给 Agent 或其他运营工具读取已落库证据。它们只使用 `GET`，不会创建充值、转账、解决案件或修改账本。先在 `.env` 设置 `APP_READ_API_KEY`，然后重新启动应用：
+只读 API 用于给 Agent 或其他运营工具读取已落库证据。它们只使用 `GET`，不会创建充值、转账、解决案件或修改账本。先在 `.env` 设置 `APP_READ_API_KEY`，然后重新启动应用；Compose 模式执行 `docker compose up -d --force-recreate app`，宿主机模式重启 `./mvnw spring-boot:run`。
 
 ```sh
+set -a
+. ./.env
+set +a
+
 curl -sS \
   -H "X-Read-Api-Key: $APP_READ_API_KEY" \
-  http://localhost:8080/api/v1/reconciliation/cases
+  http://localhost:8080/api/v1/reconciliation/cases | python3 -m json.tool
 ```
 
 从案件列表中取出 Java 返回的 `id`（UUID）后，可以读取完整证据包：
@@ -105,8 +197,10 @@ curl -sS \
 ```sh
 curl -sS \
   -H "X-Read-Api-Key: $APP_READ_API_KEY" \
-  "http://localhost:8080/api/v1/reconciliation/results/<resultId>/evidence"
+  "http://localhost:8080/api/v1/reconciliation/results/<resultId>/evidence" | python3 -m json.tool
 ```
+
+把 `<resultId>` 替换为案件列表中真实的 `id` UUID。若列表为空，先按第 2 节创建充值，再按第 6 节导入账单并运行对账。
 
 可用的只读路径还有 `/payments/<paymentId>`、`/ledger/transactions/<businessReference>` 和 `/audit/<aggregateId>`。未提供或不匹配 API Key 时，接口返回 HTTP `401`。Agent 当前演示数据中的 `CASE-1001` 是它自己的外部编号，不是 Java 接口的 UUID；真正联调时应先建立案件编号到 UUID 的映射，不能直接拼接到 `{resultId}`。
 
@@ -285,6 +379,7 @@ docker compose down
 
 ## 9. 常见错误
 
+- **Docker 拉取镜像超时**：`auth.docker.io`、`registry-1.docker.io` 的 `context deadline exceeded` 表示 Docker 到 Docker Hub 的网络超时，和 `.env` 密码无关。检查网络或代理后重试，或使用第 1.4 节的 Homebrew 方式。
 - **Connection refused**：确认 PostgreSQL 17 正在运行、`5432` 未被其他实例占用，并检查 `DB_URL`。
 - **RabbitMQ connection refused**：确认 RabbitMQ 4 正在运行、`5672` 可访问，并检查 `RABBITMQ_HOST`、用户名和密码。
 - **消息运维页显示队列不可用**：应用仍可从 PostgreSQL 读取 Outbox；恢复 RabbitMQ 后刷新页面，Publisher 会继续重试待投递事件。
@@ -295,3 +390,4 @@ docker compose down
 - **反向操作 `INSUFFICIENT_FUNDS`**：补足源钱包后，用新幂等键重试全额退款或全额冲正。
 - **幂等键冲突**：同一 key 的请求参数不能变化；更换唯一 key 后再提交。
 - **端口已占用**：确认本机服务与 Docker Compose 没有同时使用 `5432`、`5672`、`8080` 或 `15672`，停止冲突实例后重试。
+- **只读 API 返回 `401`**：确认请求头是 `X-Read-Api-Key`，且值与 Java 启动时读取的 `APP_READ_API_KEY` 完全一致；修改 `.env` 后必须重启 Java 应用。

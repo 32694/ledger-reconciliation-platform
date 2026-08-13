@@ -141,8 +141,10 @@ flowchart LR
 ## 快速启动
 
 ```sh
+git clone https://github.com/32694/ledger-reconciliation-platform.git
+cd ledger-reconciliation-platform
 cp .env.example .env
-# 修改 .env 中的数据库、RabbitMQ 和管理员密码。
+# 修改 .env 中的数据库、RabbitMQ、管理员密码和 APP_READ_API_KEY。
 docker compose up --build
 ```
 
@@ -157,7 +159,7 @@ set +a
 ./mvnw spring-boot:run
 ```
 
-完整的本地启动、业务操作、失败重试和常见错误处理见[用户手册](docs/USER_GUIDE.md)；迁移到另一台电脑或迁移 PostgreSQL 数据见[迁移手册](docs/MIGRATION.md)。
+完整的 Docker 启动、macOS Homebrew 备用启动、业务操作、只读 API 和常见错误处理见[用户手册](docs/USER_GUIDE.md)；迁移到另一台电脑或迁移 PostgreSQL 数据见[迁移手册](docs/MIGRATION.md)。
 
 ## 验证
 
